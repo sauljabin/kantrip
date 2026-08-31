@@ -1,5 +1,5 @@
 <p align="center">
-<a href="https://github.com/sauljabin/kantrip"><img alt="Kantrip" width="520" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/banner.svg"></a>
+<a href="https://github.com/sauljabin/kantrip"><img alt="Kantrip" width="400" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/banner.svg"></a>
 </p>
 
 <p align="center">
