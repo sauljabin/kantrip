@@ -1,0 +1,100 @@
+[project]
+name = "kantrip"
+dynamic = ["version"]
+description = "Kantrip securely manages local Kafka profiles for command-line tools and compatible applications."
+authors = [{ name = "Saúl Piña", email = "sauljabin@gmail.com" }]
+license = "MIT"
+readme = "README.md"
+keywords = ["kafka", "credentials", "profiles", "cli", "kantrip"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "cloup>=3.1,<4",
+    "rich>=14.2,<16",
+]
+
+[project.scripts]
+kantrip = "kantrip.cli:cli"
+
+[project.urls]
+homepage = "https://github.com/sauljabin/kantrip"
+repository = "https://github.com/sauljabin/kantrip"
+documentation = "https://github.com/sauljabin/kantrip"
+changelog = "https://github.com/sauljabin/kantrip/releases"
+issues = "https://github.com/sauljabin/kantrip/issues"
+funding = "https://github.com/sponsors/sauljabin"
+
+[dependency-groups]
+dev = [
+    "actionlint-py",
+    "black",
+    "jsonschema>=4.25",
+    "mypy",
+    "pre-commit",
+    "pyyaml>=6.0",
+    "ruff",
+    "testcontainers>=4.13",
+    "types-pyyaml",
+    "typos",
+]
+
+[build-system]
+requires = ["hatchling>=1.27,<2", "hatch-vcs>=0.5,<1"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+)$"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+fallback_version = "0.0.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["kantrip"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "kantrip/schemas"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/AGENT.md",
+    "/ARCHITECTURE.md",
+    "/DEVELOPMENT.md",
+    "/LICENSE",
+    "/README.md",
+    "/SECURITY.md",
+    "/THREAT_MODEL.md",
+    "/USAGE.md",
+    "/examples",
+    "/kantrip",
+    "/schemas",
+    "/scripts",
+    "/tests",
+]
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.typos]
+type.lock.extend-glob = ["*.lock"]
+type.lock.check-file = true
+files.extend-exclude = ["uv.lock", "images/banner.svg"]

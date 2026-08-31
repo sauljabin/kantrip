@@ -1,0 +1,109 @@
+<p align="center">
+<a href="https://github.com/sauljabin/kantrip"><img alt="Kantrip" width="520" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/banner.svg"></a>
+</p>
+
+<p align="center">
+<a href="https://github.com/sauljabin/kantrip/actions/workflows/main.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/sauljabin/kantrip/main.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=ci"></a>
+<a href="https://github.com/sauljabin/kantrip/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/sauljabin/kantrip?style=flat-square&logo=opensourceinitiative&logoColor=white&label=license"></a>
+<a href="https://github.com/sponsors/sauljabin"><img alt="Sponsor on GitHub" src="https://img.shields.io/badge/sponsor-GitHub-EA4AAA?style=flat-square&logo=githubsponsors&logoColor=white"></a>
+</p>
+
+<p align="center">
+<a href="https://pypi.org/project/kantrip"><img alt="PyPI version" src="https://img.shields.io/pypi/v/kantrip?style=flat-square&logo=pypi&logoColor=white&label=pypi"></a>
+</p>
+
+Kantrip securely manages local Kafka profiles for command-line tools and compatible applications.
+
+Kantrip is in active pre-release development. The current CLI provides help,
+version information, presentation behavior, a profile schema, and a documented
+application environment. Profile and session commands are not implemented yet.
+
+## Features
+
+### Secure profile model
+
+- Versioned, non-secret Kafka profile schema
+- Operating-system credential-store references instead of plaintext secrets
+- Explicit TLS, SASL, OAuth, Schema Registry, Strimzi, and MSK IAM models
+- Classified values and safe diagnostic redaction
+
+### Application environment
+
+- Child-process `KAFKA_*` and `SCHEMA_REGISTRY_*` variables
+- Java, librdkafka, and Schema Registry configuration paths
+- Child-only credential exposure with no parent-shell export
+- Explicit opt-in for compatible applications
+
+### Terminal experience
+
+- Rich-based Arcana theme with semantic colors
+- Clean stdout/stderr separation
+- `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY behavior
+
+## Current limitations
+
+- Profile creation and secure-store integration are not implemented yet
+- `kantrip exec`, `kantrip ping`, adapters, and temporary-session cleanup are not
+  available yet
+- Linux and macOS are the only planned MVP platforms
+- No Docker distribution or hosted service is planned
+
+## Quick start
+
+### pipx
+
+```bash
+pipx install kantrip
+```
+
+### Planned MVP workflow
+
+These commands describe the intended workflow and are not all available yet:
+
+```bash
+kantrip add local
+kantrip use local
+kantrip current
+kantrip ping local
+kantrip exec local -- kaskade admin
+```
+
+## Usage
+
+For configuration and usage examples, see the [Kantrip usage guide](https://github.com/sauljabin/kantrip/blob/main/USAGE.md).
+
+## Development
+
+For development instructions, see the [Kantrip development guide](https://github.com/sauljabin/kantrip/blob/main/DEVELOPMENT.md).
+
+## Releases
+
+See [GitHub Releases](https://github.com/sauljabin/kantrip/releases) for release
+notes and downloadable artifacts.
+
+## Questions
+
+For Q&A, go to [GitHub Discussions](https://github.com/sauljabin/kantrip/discussions/categories/q-a).
+
+## Security
+
+Report suspected vulnerabilities privately by following the
+[Kantrip security policy](https://github.com/sauljabin/kantrip/blob/main/SECURITY.md).
+
+## Donations
+
+If Kantrip is useful to you, consider
+[supporting its development on GitHub Sponsors](https://github.com/sponsors/sauljabin).
+
+## AI Assistance
+
+This project uses AI-assisted development tools. Some code and documentation
+may be generated or revised with AI assistance. All AI-assisted changes are
+reviewed and tested by the maintainer before they are included.
+
+## Acknowledgements
+
+<p>
+<a href="https://github.com/littlehorse-enterprises/littlehorse"><img alt="Sponsored by LittleHorse" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/littlehorse-badge.svg"></a>
+<a href="https://github.com/Textualize/rich"><img alt="Built with Rich" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/rich-badge.svg"></a>
+</p>

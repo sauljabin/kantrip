@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible problem with Kantrip
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Kantrip. Search existing issues first and remove credentials, profile contents, generated files, environment variables, and private infrastructure details from everything you submit.
+  - type: input
+    id: version
+    attributes:
+      label: Kantrip version
+      description: Run `kantrip --version` to obtain the installed version.
+      placeholder: "Paste the command output"
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - Homebrew
+        - pipx or pip
+        - Source checkout
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.6 or Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.14.1"
+    validations:
+      required: true
+  - type: input
+    id: kafka
+    attributes:
+      label: Kafka distribution and version
+      placeholder: "Apache Kafka 4.1 or Confluent Platform 8.1"
+  - type: input
+    id: authentication
+    attributes:
+      label: Authentication type
+      description: Name only the mechanism; never include usernames, tokens, certificates, or other credential material.
+      placeholder: "SCRAM-SHA-512"
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest command and synthetic configuration that reproduces the problem. Redact sensitive values.
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happened and include a sanitized error message where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Never include resolved profiles, environment dumps, generated property files, passwords, tokens, certificates, private keys, or broker addresses.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I replaced credentials and private infrastructure details with synthetic values.
+          required: true

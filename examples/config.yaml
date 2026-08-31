@@ -1,0 +1,50 @@
+version: 1
+
+defaults:
+  staleSessionTtl: 15m
+
+profiles:
+  local:
+    id: 018f8f13-7c21-7cee-8000-000000000001
+    description: Local development
+    labels:
+      environment: local
+    kafka:
+      bootstrapServers:
+        - localhost:9092
+      transport: plaintext
+      auth:
+        type: none
+
+  production:
+    id: 018f8f13-7c21-7cee-8000-000000000002
+    description: Synthetic production example
+    labels:
+      environment: production
+      team: orders
+    kafka:
+      bootstrapServers:
+        - kafka-1.example.com:9093
+        - kafka-2.example.com:9093
+      transport: tls
+      auth:
+        type: scram
+        mechanism: SCRAM-SHA-512
+        username: developer
+        passwordRef: keyring://profile/018f8f13-7c21-7cee-8000-000000000002/kafka/password
+      tls:
+        caRef: keyring://profile/018f8f13-7c21-7cee-8000-000000000002/tls/ca
+        serverName: kafka.example.com
+      properties:
+        common:
+          client.id: kantrip
+        java: {}
+        librdkafka: {}
+    schemaRegistry:
+      url: https://schema.example.com
+      auth:
+        type: basic
+        username: developer
+        passwordRef: keyring://profile/018f8f13-7c21-7cee-8000-000000000002/schema-registry/password
+      tls:
+        caRef: keyring://profile/018f8f13-7c21-7cee-8000-000000000002/schema-registry/ca

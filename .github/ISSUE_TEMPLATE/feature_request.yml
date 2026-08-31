@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose an improvement to Kantrip
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for suggesting an improvement. Focus on the problem and desired behavior so security-preserving alternatives remain open.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What environment, profile, credential, or client workflow problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe how Kantrip should behave from a user's perspective.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Describe any effect on credentials, process arguments, environment variables, generated files, or cleanup.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Use synthetic examples and remove private infrastructure details.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and discussions for this request.
+          required: true
