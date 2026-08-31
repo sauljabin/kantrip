@@ -6,7 +6,12 @@ from xml.etree import ElementTree
 from kantrip import APP_BANNER
 from kantrip.console import ARCANA_COLORS
 from scripts import normalize_svg
-from scripts.banner import BANNER_SLOGAN, generate_banner, render_banner_svg
+from scripts.banner import (
+    BANNER_SLOGAN,
+    WAND_HANDLE_COLOR,
+    generate_banner,
+    render_banner_svg,
+)
 
 
 class TestScripts(unittest.TestCase):
@@ -36,12 +41,22 @@ class TestScripts(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertIn(ARCANA_COLORS["primary"].lower(), first.lower())
         self.assertIn(ARCANA_COLORS["accent"].lower(), first.lower())
+        self.assertIn(WAND_HANDLE_COLOR.lower(), first.lower())
+        self.assertIn(ARCANA_COLORS["warning"].lower(), first.lower())
         root = ElementTree.fromstring(first)
         _, _, view_width, view_height = root.attrib["viewBox"].split()
         self.assertEqual(view_width, root.attrib["width"])
         self.assertEqual(view_height, root.attrib["height"])
         rendered_text = " ".join("".join(root.itertext()).split())
         self.assertIn(" ".join(BANNER_SLOGAN.split()), rendered_text)
+        wand_handle = next(element for element in root.iter() if element.text == "-")
+        wand_handle_class = wand_handle.attrib["class"]
+        handle_fill = f".{wand_handle_class} {{ fill: {WAND_HANDLE_COLOR}"
+        self.assertIn(handle_fill.lower(), first.lower())
+        wand_tip = next(element for element in root.iter() if element.text == "*")
+        wand_tip_class = wand_tip.attrib["class"]
+        tip_fill = f".{wand_tip_class} {{ fill: {ARCANA_COLORS['warning']}"
+        self.assertIn(tip_fill.lower(), first.lower())
         descender = next(element for element in root.iter() if element.text == "|_|")
         descender_class = descender.attrib["class"]
         primary_fill = f".{descender_class} {{ fill: {ARCANA_COLORS['primary']}"
