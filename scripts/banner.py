@@ -20,6 +20,7 @@ BANNER_PATH = IMAGES_DIRECTORY / "banner.svg"
 BANNER_WIDTH = 44
 BANNER_FONT_ASPECT_RATIO = 0.61
 BANNER_SLOGAN = " -* switch kafka profiles like |_| magic"
+WAND_HANDLE_COLOR = "#A16207"
 
 ARCANA_TERMINAL_THEME = TerminalTheme(
     background=(7, 20, 38),
@@ -63,6 +64,9 @@ def render_banner_svg() -> str:
         justify="left",
         no_wrap=True,
     )
+    wand_start = BANNER_SLOGAN.index("-*")
+    slogan.stylize(WAND_HANDLE_COLOR, wand_start, wand_start + 1)
+    slogan.stylize("warning", wand_start + 1, wand_start + 2)
     descender_start = BANNER_SLOGAN.index("|_|")
     slogan.stylize("heading", descender_start, descender_start + 3)
     console.print(
