@@ -79,6 +79,8 @@
 - The manual environment lives entirely in `sandbox`, including Compose files,
   versions, generated synthetic material, and population tools. Tests must not
   import sandbox code or assets, and sandbox code must not import test fixtures.
+- Keep the sandbox's Apicurio Registry on KafkaSQL storage. Its journal and
+  snapshot topics must be created with three replicas before the registry starts.
 - Reusable repository-script helpers belong in `scripts/__init__.py`; individual
   script modules remain focused on executable workflows.
 

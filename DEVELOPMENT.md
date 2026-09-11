@@ -94,8 +94,8 @@ or exported pre-release checkout can bootstrap before the first commit.
 The sandbox is a manual environment, not a test-fixture provider. Automated tests
 must not import it.
 
-Start its three-node Kafka cluster, Apicurio Registry, and Confluent Schema
-Registry:
+Start its three-node Kafka cluster, Kafka-backed Apicurio Registry, and Confluent
+Schema Registry:
 
 ```bash
 docker compose --project-directory sandbox up -d
@@ -110,7 +110,12 @@ docker compose --project-directory sandbox down -v
 Kafka is available at `localhost:19092`, `localhost:29092`, and
 `localhost:39092`. Confluent Schema Registry is at `http://localhost:18081` and
 Apicurio's compatibility API is at `http://localhost:18082/apis/ccompat/v7`.
-Pinned image versions live in `sandbox/.env`.
+Its native v3 API is at `http://localhost:18082/apis/registry/v3`. Pinned image
+versions live in `sandbox/.env`.
+
+Apicurio uses its KafkaSQL storage backend. The one-shot `apicurio-topics`
+service creates its journal and snapshot topics with three replicas before the
+registry starts, so `docker compose up -d` is the complete startup sequence.
 
 The initial topology is plaintext infrastructure only. Authentication work
 extends this one authoritative topology with synthetic TLS, SASL, OAuth, and
