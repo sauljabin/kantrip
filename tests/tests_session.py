@@ -94,8 +94,24 @@ class TestProfileSession(unittest.TestCase):
         which.assert_not_called()
         run.assert_not_called()
 
-    def test_adapts_both_kafka_topics_executable_names(self) -> None:
-        for executable in ("kafka-topics", "kafka-topics.sh"):
+    def test_adapts_official_kafka_executable_names(self) -> None:
+        adapters = {
+            "kafka-console-consumer": "--consumer.config",
+            "kafka-console-consumer.sh": "--consumer.config",
+            "kafka-console-producer": "--producer.config",
+            "kafka-console-producer.sh": "--producer.config",
+            "kafka-topics": "--command-config",
+            "kafka-topics.sh": "--command-config",
+            "kafka-consumer-groups": "--command-config",
+            "kafka-consumer-groups.sh": "--command-config",
+            "kafka-configs": "--command-config",
+            "kafka-configs.sh": "--command-config",
+            "kafka-acls": "--command-config",
+            "kafka-acls.sh": "--command-config",
+            "kafka-broker-api-versions": "--command-config",
+            "kafka-broker-api-versions.sh": "--command-config",
+        }
+        for executable, config_option in adapters.items():
             with self.subTest(executable=executable):
                 observed: dict[str, object] = {}
 
@@ -128,7 +144,7 @@ class TestProfileSession(unittest.TestCase):
                         executable,
                         "--bootstrap-server",
                         "localhost:9092,localhost:9093",
-                        "--command-config",
+                        config_option,
                     ],
                     arguments[:4],
                 )
@@ -143,19 +159,29 @@ class TestProfileSession(unittest.TestCase):
                 )
                 self.assertEqual(0o600, observed["mode"])
 
-    def test_kafka_topics_cannot_override_profile_connection_options(self) -> None:
-        for option in (
-            "--bootstrap-server",
-            "--bootstrap-server=other:9092",
-            "--command-config",
-            "--command-config=other.properties",
-        ):
+    def test_official_kafka_commands_cannot_override_profile_connection_options(self) -> None:
+        cases = (
+            ("kafka-console-consumer", "--consumer.config=other.properties"),
+            ("kafka-console-producer", "--producer.config=other.properties"),
+            ("kafka-console-producer", "--broker-list=other:9092"),
+            ("kafka-topics", "--bootstrap-server=other:9092"),
+            ("kafka-topics", "--command-config=other.properties"),
+            ("kafka-topics", "--zookeeper=other:2181"),
+            ("kafka-consumer-groups", "--zookeeper=other:2181"),
+            ("kafka-configs", "--zookeeper=other:2181"),
+            ("kafka-configs", "--bootstrap-controller=other:9093"),
+            ("kafka-acls", "--authorizer=example.Authorizer"),
+            ("kafka-acls", "--authorizer-properties=zookeeper.connect=other:2181"),
+            ("kafka-acls", "--bootstrap-controller=other:9093"),
+            ("kafka-broker-api-versions", "--command-config=other.properties"),
+        )
+        for executable, option in cases:
             with (
-                self.subTest(option=option),
-                patch("kantrip.session.shutil.which", return_value="/opt/kafka/kafka-topics"),
+                self.subTest(executable=executable, option=option),
+                patch("kantrip.session.shutil.which", return_value=f"/opt/kafka/{executable}"),
                 self.assertRaisesRegex(SessionError, "cannot override"),
             ):
-                run_profile_session("local", self.profile, ["kafka-topics", option], environment={})
+                run_profile_session("local", self.profile, [executable, option], environment={})
 
     def test_adapts_kaskade_admin_and_consumer_with_a_private_ini_file(self) -> None:
         for command, command_arguments in (
@@ -237,13 +263,23 @@ class TestProfileSession(unittest.TestCase):
 
         self.assertEqual(["kaskade", "--help"], run.call_args.args[0])
 
-    def test_interactive_shell_contains_kafka_topics_shims(self) -> None:
+    def test_interactive_shell_contains_official_kafka_shims(self) -> None:
         observed: dict[str, object] = {}
+
+        adapters = {
+            "kafka-console-consumer": "--consumer.config",
+            "kafka-console-producer.sh": "--producer.config",
+            "kafka-topics": "--command-config",
+            "kafka-consumer-groups.sh": "--command-config",
+            "kafka-configs": "--command-config",
+            "kafka-acls.sh": "--command-config",
+            "kafka-broker-api-versions": "--command-config",
+        }
 
         def find_executable(executable: str, **options: object) -> str | None:
             if executable == sys.executable:
                 return sys.executable
-            if executable in {"kafka-topics", "kafka-topics.sh"}:
+            if executable in adapters:
                 return f"/opt/kafka/bin/{executable}"
             return None
 
@@ -271,12 +307,12 @@ class TestProfileSession(unittest.TestCase):
 
         shims = observed["shims"]
         assert isinstance(shims, dict)
-        self.assertEqual({"kafka-topics", "kafka-topics.sh"}, set(shims))
+        self.assertEqual(set(adapters), set(shims))
         for name, contents in shims.items():
             self.assertIn(f"exec /opt/kafka/bin/{name}", contents)
             self.assertIn("--bootstrap-server localhost:9092,localhost:9093", contents)
-            self.assertIn("--command-config", contents)
-        self.assertEqual({"kafka-topics": 0o700, "kafka-topics.sh": 0o700}, observed["modes"])
+            self.assertIn(adapters[name], contents)
+        self.assertEqual({name: 0o700 for name in adapters}, observed["modes"])
         directory = observed["directory"]
         assert isinstance(directory, Path)
         self.assertFalse(directory.exists())

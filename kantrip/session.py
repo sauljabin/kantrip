@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from kantrip.adapters import (
-    KAFKA_TOPICS_EXECUTABLES,
+    KAFKA_EXECUTABLES,
     KASKADE_EXECUTABLES,
     AdapterError,
     create_subshell_shims,
@@ -120,7 +120,7 @@ def _validate_executable(executable: str, environment: Mapping[str, str]) -> Non
                 "command 'kcat' was not found; install it with 'brew install kcat' "
                 "on macOS or your Linux package manager"
             )
-        if executable_name in KAFKA_TOPICS_EXECUTABLES:
+        if executable_name in KAFKA_EXECUTABLES:
             raise SessionError(
                 f"command '{executable_name}' was not found; install the Apache Kafka CLI "
                 "and ensure its bin directory is on PATH"

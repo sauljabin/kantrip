@@ -42,9 +42,11 @@
 - kcat is the first supported external CLI. Sessions provide its generated
   librdkafka properties through `KCAT_CONFIG`; do not create aliases or place
   configuration values in command arguments.
-- `kafka-topics` and `kafka-topics.sh` inject `--bootstrap-server` and a generated
-  Java `--command-config`. Interactive subshells expose session-owned executable
-  shims for installed variants; never create persistent aliases.
+- Official Kafka CLI adapters recognize executable names with and without `.sh`.
+  Consumer and producer commands receive their client-specific config flags;
+  administrative commands receive `--command-config`. All receive
+  `--bootstrap-server` and use the generated Java properties file. Interactive
+  subshells expose session-owned executable shims; never create persistent aliases.
 - Kaskade currently receives a private INI file through its command-level
   `--config-file` option for `admin` and `consumer`. Do not set or assume a
   Kaskade-specific environment variable until Kaskade implements that contract.

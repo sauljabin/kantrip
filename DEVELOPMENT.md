@@ -130,33 +130,60 @@ uv run --locked python -m sandbox.smoke my-topic \
   --profile sandbox --bootstrap-server localhost:19092 --keep-topic
 ```
 
-By default, the script creates a randomized topic through the Kafka topics
-adapter, lists it with every installed `kafka-topics` executable variant and
-with kcat, validates the Kaskade adapter, and deletes the topic. Missing
-`kafka-topics`/`kafka-topics.sh` variants are reported and skipped when the other
-name is installed. The check uses styled emoji output in a terminal and disables
-color automatically in CI or when `--no-color` is passed.
+By default, the script creates and lists a randomized topic, produces and
+consumes a record, and exercises the groups, configs, ACLs, and broker API
+adapters. It also lists the topic with kcat, validates the Kaskade adapter, and
+deletes the topic. At least one executable variant for every official Kafka
+command must be installed. The check uses styled emoji output in a terminal and
+disables color automatically in CI or when `--no-color` is passed.
 
 The smoke script is also a pre-commit hook. Keep the sandbox running when making
 commits; this remains a local integration check rather than part of the offline
 unit-test suite.
 
-Create a profile for the sandbox and try the supported Kafka clients:
+### End-to-end adapter workflow
+
+Create an isolated profile for the running sandbox, then create a topic, produce
+two records, and consume exactly those records:
 
 ```bash
 uv run kantrip add sandbox --bootstrap-server localhost:19092
 
-uv run kantrip exec sandbox -- kcat -L
-uv run kantrip exec sandbox -- kafka-topics --list
-uv run kantrip exec sandbox -- kafka-topics.sh --list
-uv run kantrip exec sandbox -- kaskade admin
-uv run kantrip exec sandbox -- kaskade consumer --topic orders
+uv run kantrip exec sandbox -- kafka-topics --create \
+  --topic kantrip-development --partitions 1 --replication-factor 1
+
+printf 'first record\nsecond record\n' | \
+  uv run kantrip exec sandbox -- kafka-console-producer \
+    --topic kantrip-development
+
+uv run kantrip exec sandbox -- kafka-console-consumer \
+  --topic kantrip-development --from-beginning --max-messages 2
 ```
 
-The `kafka-topics.sh` form is useful with Apache Kafka distributions that retain
-the executable suffix. Kantrip supplies the selected bootstrap servers and
-temporary client configuration, so do not repeat `--bootstrap-server`, `-F`,
-`--command-config`, or Kaskade connection options in these commands.
+Replace any official Kafka command with its `.sh` form when using an Apache Kafka
+distribution that retains the suffix. Kantrip supplies the selected bootstrap
+servers and temporary client configuration, so do not repeat
+`--bootstrap-server`, `--consumer.config`, `--producer.config`,
+`--command-config`, or a legacy connection option.
+
+Additional quick checks for the other adapters are:
+
+```bash
+uv run kantrip exec sandbox -- kafka-consumer-groups --list
+uv run kantrip exec sandbox -- kafka-configs \
+  --describe --entity-type topics --entity-name kantrip-development
+uv run kantrip exec sandbox -- kafka-acls --version
+uv run kantrip exec sandbox -- kafka-broker-api-versions
+uv run kantrip exec sandbox -- kcat -L
+uv run kantrip exec sandbox -- kaskade admin
+
+uv run kantrip exec sandbox -- kafka-topics --delete \
+  --topic kantrip-development
+```
+
+The sandbox does not configure a Kafka authorizer, so use `--version` to validate
+the ACL adapter there. Listing or changing ACLs requires a cluster with an
+authorizer and a suitably authorized principal.
 
 ## Architecture and security
 
