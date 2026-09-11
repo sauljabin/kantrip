@@ -135,7 +135,8 @@ consumes a record, and exercises the groups, configs, ACLs, and broker API
 adapters. It also lists the topic with kcat, validates the Kaskade adapter, and
 deletes the topic. At least one executable variant for every official Kafka
 command must be installed. The check uses styled emoji output in a terminal and
-disables color automatically in CI or when `--no-color` is passed.
+text status labels when styling is disabled, including in CI or when `--no-color`
+is passed.
 
 The smoke script is also a pre-commit hook. Keep the sandbox running when making
 commits; this remains a local integration check rather than part of the offline

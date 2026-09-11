@@ -7,6 +7,7 @@ from kantrip.console import (
     colors_enabled,
     create_console,
     create_profile_table,
+    create_status_text,
     create_yaml_syntax,
 )
 
@@ -33,6 +34,11 @@ class TestConsole(unittest.TestCase):
         stream = TerminalBuffer()
 
         self.assertFalse(colors_enabled(stream, environment={"NO_COLOR": ""}))
+
+    def test_dumb_terminal_disables_terminal_color(self) -> None:
+        stream = TerminalBuffer()
+
+        self.assertFalse(colors_enabled(stream, environment={"TERM": "dumb"}))
 
     def test_non_terminal_output_has_no_escape_sequences(self) -> None:
         stream = io.StringIO()
@@ -95,6 +101,27 @@ class TestConsole(unittest.TestCase):
 
         self.assertIn("\x1b[", stream.getvalue())
         self.assertIn("transport", stream.getvalue())
+
+    def test_status_text_uses_text_markers_for_plain_output(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+
+        for status in ("progress", "success", "cleanup", "warning"):
+            console.print(create_status_text(console, status, "example"))
+
+        self.assertEqual(
+            "[running] example\n" "[passed] example\n" "[cleanup] example\n" "[warning] example\n",
+            stream.getvalue(),
+        )
+
+    def test_status_text_uses_emoji_for_colored_terminal_output(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        console.print(create_status_text(console, "success", "example"))
+
+        self.assertIn("✅ example", stream.getvalue())
+        self.assertIn("\x1b[", stream.getvalue())
 
 
 if __name__ == "__main__":

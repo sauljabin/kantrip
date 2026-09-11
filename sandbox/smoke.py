@@ -15,7 +15,7 @@ import click
 import cloup
 from rich.console import Console
 
-from kantrip.console import create_console
+from kantrip.console import create_console, create_status_text
 
 DEFAULT_BOOTSTRAP_SERVERS = ("localhost:19092",)
 KAFKA_COMMANDS = {
@@ -194,7 +194,11 @@ def smoke(
                 _kantrip(profile, "kaskade", "admin", "--help"),
                 smoke_environment,
             )
-            console.print(f"[success]✅ Sandbox adapters passed with topic {topic}[/]")
+            console.print(
+                create_status_text(
+                    console, "success", f"Sandbox adapters passed with topic {topic}"
+                )
+            )
         finally:
             if created and not keep_topic:
                 _delete_topic(console, profile, creator, topic, smoke_environment)
@@ -247,7 +251,7 @@ def _check(
     *,
     input_text: str | None = None,
 ) -> str:
-    console.print(f"[primary]🧪 {label}[/]")
+    console.print(create_status_text(console, "progress", label))
     result = subprocess.run(
         command,
         env=environment,
@@ -260,7 +264,7 @@ def _check(
     if result.returncode:
         details = output.strip() or f"command exited with status {result.returncode}"
         raise SmokeFailure(f"{label} failed:\n{details}")
-    console.print(f"[success]✅ {label}[/]")
+    console.print(create_status_text(console, "success", label))
     return output
 
 
@@ -276,7 +280,7 @@ def _delete_topic(
     topic: str,
     environment: Mapping[str, str],
 ) -> None:
-    console.print(f"[muted]🧹 delete topic {topic}[/]")
+    console.print(create_status_text(console, "cleanup", f"delete topic {topic}"))
     result = subprocess.run(
         _kantrip(profile, executable, "--delete", "--topic", topic),
         env=environment,
@@ -285,7 +289,9 @@ def _delete_topic(
         check=False,
     )
     if result.returncode:
-        console.print(f"[warning]⚠️  Could not delete smoke topic {topic}[/]")
+        console.print(
+            create_status_text(console, "warning", f"Could not delete smoke topic {topic}")
+        )
 
 
 if __name__ == "__main__":

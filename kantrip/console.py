@@ -6,11 +6,12 @@ import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import IO, Any
+from typing import IO, Any, Literal
 
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 ARCANA_COLORS = {
@@ -40,6 +41,14 @@ ARCANA_THEME = Theme(
         "muted": "bright_black",
     }
 )
+
+StatusKind = Literal["progress", "success", "cleanup", "warning"]
+STATUS_PRESENTATION: dict[StatusKind, tuple[str, str, str]] = {
+    "progress": ("primary", "🧪", "running"),
+    "success": ("success", "✅", "passed"),
+    "cleanup": ("muted", "🧹", "cleanup"),
+    "warning": ("warning", "⚠️", "warning"),
+}
 
 
 @dataclass(frozen=True)
@@ -110,6 +119,13 @@ def create_yaml_syntax(contents: str) -> Syntax:
     return Syntax(contents, "yaml", theme="ansi_dark", background_color="default")
 
 
+def create_status_text(console: Console, status: StatusKind, message: str) -> Text:
+    """Create a styled status line with a text marker for plain output."""
+    style, emoji, label = STATUS_PRESENTATION[status]
+    marker = emoji if console.color_system is not None else f"[{label}]"
+    return Text(f"{marker} {message}", style=style)
+
+
 __all__ = [
     "ARCANA_COLORS",
     "ARCANA_THEME",
@@ -118,5 +134,6 @@ __all__ = [
     "create_console",
     "create_consoles",
     "create_profile_table",
+    "create_status_text",
     "create_yaml_syntax",
 ]
