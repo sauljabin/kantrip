@@ -99,6 +99,9 @@ If you use MesloLGS NF or another Nerd Font, you can use its magic-wand glyph
 format = '[󱡄 $output]($style) '
 ```
 
+Browse the [Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet) for
+more glyphs you can use in its place.
+
 Starship's default prompt includes custom modules. If you define a custom global
 `format`, add `${custom.kantrip}` where the profile should appear.
 
