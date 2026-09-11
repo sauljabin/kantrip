@@ -16,6 +16,8 @@ import cloup
 from rich.console import Console
 
 from kantrip.console import create_console, create_status_text
+from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
+from scripts.terminal import TerminalTimeout, run_terminal
 
 DEFAULT_BOOTSTRAP_SERVERS = ("localhost:19092",)
 KAFKA_COMMANDS = {
@@ -49,12 +51,20 @@ class SmokeFailure(RuntimeError):
 )
 @cloup.option("--keep-topic", is_flag=True, help="Leave the smoke topic in the cluster.")
 @cloup.option("--no-color", is_flag=True, help="Disable styled terminal output.")
+@cloup.option(
+    "--shell",
+    "shells",
+    multiple=True,
+    type=cloup.Choice(sorted(SUPPORTED_SHELLS)),
+    help="Also exercise an interactive shell; may be repeated.",
+)
 def main(
     topic: str | None,
     profile: str,
     bootstrap_servers: tuple[str, ...],
     keep_topic: bool,
     no_color: bool,
+    shells: tuple[str, ...],
 ) -> None:
     """Create TOPIC and smoke-test installed adapters against the sandbox."""
     environment = dict(os.environ)
@@ -71,6 +81,7 @@ def main(
             topic=smoke_topic,
             keep_topic=keep_topic,
             environment=environment,
+            shells=shells,
         )
     except SmokeFailure as error:
         raise click.ClickException(str(error)) from error
@@ -84,6 +95,7 @@ def smoke(
     topic: str,
     keep_topic: bool,
     environment: Mapping[str, str],
+    shells: Sequence[str] = (),
 ) -> None:
     """Run the adapter smoke checks with an isolated Kantrip configuration."""
     installed = {
@@ -92,8 +104,10 @@ def smoke(
     }
     for adapter, executables in installed.items():
         _require_command(f"Kafka {adapter} CLI", bool(executables))
-    _require_command("kcat", shutil.which("kcat", path=environment.get("PATH")) is not None)
+    kcat_executables = _installed_commands(("kcat", "kafkacat"), environment)
+    _require_command("kcat", "kcat" in kcat_executables)
     _require_command("kaskade", shutil.which("kaskade", path=environment.get("PATH")) is not None)
+    resolved_shells = _resolve_shells(shells, environment)
 
     with tempfile.TemporaryDirectory(prefix="kantrip-smoke-") as directory:
         smoke_environment = dict(environment)
@@ -194,6 +208,17 @@ def smoke(
                 _kantrip(profile, "kaskade", "admin", "--help"),
                 smoke_environment,
             )
+            for shell_name, shell in resolved_shells:
+                _check_shell(
+                    console,
+                    shell_name=shell_name,
+                    shell=shell,
+                    profile=profile,
+                    topic=topic,
+                    installed=installed,
+                    kcat_executables=kcat_executables,
+                    environment=smoke_environment,
+                )
             console.print(
                 create_status_text(
                     console, "success", f"Sandbox adapters passed with topic {topic}"
@@ -216,6 +241,93 @@ def _installed_commands(
 def _require_command(name: str, available: bool) -> None:
     if not available:
         raise SmokeFailure(f"required command '{name}' was not found on PATH")
+
+
+def _resolve_shells(
+    shells: Sequence[str], environment: Mapping[str, str]
+) -> tuple[tuple[str, str], ...]:
+    resolved: list[tuple[str, str]] = []
+    for shell_name in dict.fromkeys(shells):
+        shell = shutil.which(shell_name, path=environment.get("PATH"))
+        _require_command(f"{shell_name} shell", shell is not None)
+        assert shell is not None
+        resolved.append((shell_name, shell))
+    return tuple(resolved)
+
+
+def _check_shell(
+    console: Console,
+    *,
+    shell_name: str,
+    shell: str,
+    profile: str,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    kcat_executables: Sequence[str],
+    environment: Mapping[str, str],
+) -> None:
+    label = f"exercise adapters in {shell_name}"
+    console.print(create_status_text(console, "progress", label))
+    shell_environment = dict(environment)
+    shell_environment["SHELL"] = shell
+    commands = _shell_commands(
+        shell_name,
+        topic=topic,
+        installed=installed,
+        kcat_executables=kcat_executables,
+    )
+    markers = tuple(f"__KANTRIP_SMOKE_{index}__" for index in range(len(commands)))
+    checked = [
+        f"{command} && echo {marker} || exit 70"
+        for command, marker in zip(commands, markers, strict=True)
+    ]
+    checked.append("exit")
+    try:
+        status, output = run_terminal(
+            (sys.executable, "-m", "kantrip.cli", "exec", profile),
+            checked,
+            environment=shell_environment,
+            timeout=120,
+        )
+    except TerminalTimeout as error:
+        raise SmokeFailure(f"{label} failed: {error}") from error
+    if status or any(marker not in output for marker in markers):
+        details = output.strip() or f"shell exited with status {status}"
+        raise SmokeFailure(f"{label} failed:\n{details}")
+    _require_topic(topic, output, shell_name)
+    _require_topic("kantrip smoke record", output, shell_name)
+    console.print(create_status_text(console, "success", label))
+
+
+def _shell_commands(
+    shell_name: str,
+    *,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    kcat_executables: Sequence[str],
+) -> list[str]:
+    quoted_topic = quote_shell_argument(shell_name, topic)
+    quoted_python = quote_shell_argument(shell_name, sys.executable)
+    commands = [f"{quoted_python} -m kantrip.cli current"]
+    commands.extend(f"{executable} --list" for executable in installed["topics"])
+    commands.extend(
+        f"printf 'kantrip smoke record\\n' | {executable} --topic {quoted_topic}"
+        for executable in installed["producer"]
+    )
+    commands.extend(
+        f"{executable} --topic {quoted_topic} --from-beginning --max-messages 1"
+        for executable in installed["consumer"]
+    )
+    commands.extend(f"{executable} --list" for executable in installed["groups"])
+    commands.extend(
+        f"{executable} --describe --entity-type topics --entity-name {quoted_topic}"
+        for executable in installed["configs"]
+    )
+    commands.extend(f"{executable} --version" for executable in installed["acls"])
+    commands.extend(executable for executable in installed["broker API versions"])
+    commands.extend(f"{executable} -L" for executable in kcat_executables)
+    commands.extend(("kaskade admin --help", "kaskade consumer --help"))
+    return commands
 
 
 def _add_profile(

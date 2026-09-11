@@ -126,6 +126,8 @@ adapter smoke checks:
 
 ```bash
 uv run --locked python -m sandbox.smoke
+uv run --locked python -m sandbox.smoke \
+  --shell bash --shell zsh --shell fish
 uv run --locked python -m sandbox.smoke my-topic \
   --profile sandbox --bootstrap-server localhost:19092 --keep-topic
 ```
@@ -138,9 +140,21 @@ command must be installed. The check uses styled emoji output in a terminal and
 text status labels when styling is disabled, including in CI or when `--no-color`
 is passed.
 
+Repeat `--shell` to add real interactive-subshell checks after the explicit
+command pass. A requested shell is required to be installed; the three-shell
+command above verifies Bash, Zsh, and Fish with PTYs, including profile
+visibility, path restoration, and every installed adapter executable.
+
 The smoke script is also a pre-commit hook. Keep the sandbox running when making
 commits; this remains a local integration check rather than part of the offline
 unit-test suite.
+
+GitHub Actions separately runs a lightweight shell contract on Bash, Zsh, and
+Fish, including history persistence. It uses generated fake client executables instead of installing Kafka,
+kcat, Kaskade, Java, or Docker. The Python test owns the assertions and reads a
+temporary JSON-lines event log containing command names, safe arguments, config
+file modes, and session metadata. Logs are deleted with the test directory and
+sanitized output is shown only when a contract fails.
 
 ### End-to-end adapter workflow
 

@@ -52,8 +52,10 @@
   Kaskade-specific environment variable until Kaskade implements that contract.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` already identifies an active
   parent session. Sessions must never be nested.
-- Temporary Zsh startup indirection must preserve and load the user's normal
-  history file; session cleanup must not discard interactive command history.
+- Interactive subshells support Bash, Zsh, and Fish. Load normal user startup
+  configuration, then neutralize aliases, functions, and Fish abbreviations for
+  every registered adapter before restoring the session shim path. Preserve each
+  shell's normal history location; session cleanup must not discard history.
 - Until credential-backed sessions are implemented, execution accepts only
   profiles with `transport: plaintext` and `auth.type: none`.
 
@@ -97,8 +99,10 @@
 - Reusable repository-script helpers belong in `scripts/__init__.py`; individual
   script modules remain focused on executable workflows.
 - The adapter smoke workflow lives in `sandbox.smoke`, requires a running sandbox
-  and locally installed clients, and runs as a pre-commit hook. It is not part of
-  the offline test suite or a packaged E2E suite.
+  and locally installed clients and shells, and runs as a pre-commit hook. It is
+  not part of the offline test suite or a packaged E2E suite. The offline
+  Bash/Zsh/Fish contract uses generated fake clients and PTYs; assertions belong
+  in Python, and temporary event logs must contain no config contents or secrets.
 
 ## Verification
 

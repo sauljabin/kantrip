@@ -54,13 +54,15 @@ creates secret-bearing files with restrictive permissions from the first write,
 and removes them with the session. User-provided source files are never cleanup
 targets.
 
-Interactive Zsh and Bash sessions load the user's normal startup configuration
-through a session-owned startup file. The session restores its executable-shim
-directory at the front of `PATH` after that configuration loads and refreshes
-the shell command cache, preventing startup-time path management from selecting
-an unadapted executable. Zsh history remains attached to the user's normal
-history file; the temporary startup directory is never used as durable command
-history storage.
+Interactive Bash, Zsh, and Fish sessions load the user's normal startup
+configuration before applying session controls. Bash and Zsh use session-owned
+startup files; Fish uses an init command after its normal configuration. The
+session removes child-shell aliases, functions, and abbreviations that shadow
+supported client names, restores its executable-shim directory at the front of
+`PATH`, and refreshes command lookup. This prevents startup-time path management
+or shell definitions from selecting an unadapted executable. Every supported
+shell remains attached to its normal user history location; the temporary
+session directory is never durable history storage.
 
 ## Secret handling and diagnostics
 

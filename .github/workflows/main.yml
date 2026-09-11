@@ -64,6 +64,35 @@ jobs:
       - name: Run unit tests
         run: uv run --locked python -m scripts.tests
 
+  shell-contract:
+    name: Shell contract / Bash, Zsh, Fish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fish zsh
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync --locked
+      - name: Exercise interactive shell contracts with fake clients
+        env:
+          CI: "1"
+          KANTRIP_REQUIRED_SHELLS: bash,zsh,fish
+          NO_COLOR: "1"
+        run: uv run --locked python -m unittest -v tests.tests_shell_contract
+
   build:
     name: Package
     runs-on: ubuntu-latest
@@ -92,15 +121,17 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [quality, unit-tests, build]
+    needs: [quality, unit-tests, shell-contract, build]
     runs-on: ubuntu-latest
     steps:
       - name: Require successful jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
+          SHELL_CONTRACT_RESULT: ${{ needs.shell-contract.result }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
+          test "$SHELL_CONTRACT_RESULT" = success
           test "$BUILD_RESULT" = success

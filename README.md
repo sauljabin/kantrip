@@ -37,7 +37,7 @@ for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
 - Native kcat configuration through a private, temporary `KCAT_CONFIG` file
 - Profile-aware official Apache Kafka commands, with and without `.sh`
 - Private client-file integration for Kaskade admin and consumer modes
-- Interactive subshells and one-off command execution
+- Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Child exit-status preservation and automatic session cleanup
 
 ### Terminal experience
