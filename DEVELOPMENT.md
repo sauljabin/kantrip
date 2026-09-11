@@ -85,7 +85,8 @@ required documentation:
 uv run --locked python -m scripts.verify_release dist
 ```
 
-An exact `vMAJOR.MINOR.PATCH` tag produces a release version. Untagged builds use
+An exact `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCHaN` tag produces a release
+version. Untagged builds use
 hatch-vcs development metadata; the configured fallback exists only so an empty
 or exported pre-release checkout can bootstrap before the first commit.
 
@@ -203,6 +204,8 @@ authorizer and a suitably authorized principal.
 
 Git tags are the only release-version source. GitHub Releases are the canonical
 release history; never edit a static package version or maintained changelog.
+Use the reusable [release checklist](RELEASE_CHECKLIST.md) to record preparation
+and post-release evidence for each candidate.
 
 Before releasing, ensure `main` is current, clean, and passing:
 
@@ -217,7 +220,8 @@ uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
 
-Create and push an annotated semantic-version tag. The protected release
+Create and push an annotated stable (`vMAJOR.MINOR.PATCH`) or alpha
+(`vMAJOR.MINOR.PATCHaN`) tag. The protected release
 workflow validates the tag against `main`, builds once, verifies and installs the
 wheel, generates Conventional Commit notes, attests the distributions, waits for
 approval, publishes through PyPI trusted publishing, and creates the GitHub
