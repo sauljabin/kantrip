@@ -381,7 +381,10 @@ wheels = [
 name = "kantrip"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "cloup" },
+    { name = "jsonschema" },
+    { name = "pyyaml" },
     { name = "rich" },
 ]
 
@@ -389,10 +392,8 @@ dependencies = [
 dev = [
     { name = "actionlint-py" },
     { name = "black" },
-    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pre-commit" },
-    { name = "pyyaml" },
     { name = "ruff" },
     { name = "testcontainers" },
     { name = "types-pyyaml" },
@@ -401,7 +402,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.2,<9" },
     { name = "cloup", specifier = ">=3.1,<4" },
+    { name = "jsonschema", specifier = ">=4.25,<5" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "rich", specifier = ">=14.2,<16" },
 ]
 
@@ -409,10 +413,8 @@ requires-dist = [
 dev = [
     { name = "actionlint-py" },
     { name = "black" },
-    { name = "jsonschema", specifier = ">=4.25" },
     { name = "mypy" },
     { name = "pre-commit" },
-    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff" },
     { name = "testcontainers", specifier = ">=4.13" },
     { name = "types-pyyaml" },

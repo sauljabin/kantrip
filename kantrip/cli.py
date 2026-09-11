@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import click
 import cloup
+import yaml
 
 from kantrip import APP_VERSION
+from kantrip.config import ConfigurationError, load_configuration
 from kantrip.console import Consoles, create_consoles
+from kantrip.redaction import redact_mapping
+from kantrip.session import SessionError, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
 
@@ -37,6 +42,57 @@ def consoles_from_context(context: cloup.Context) -> Consoles:
     if not isinstance(consoles, Consoles):
         raise TypeError("Kantrip consoles have not been initialized")
     return consoles
+
+
+@cli.group("config", no_args_is_help=True)
+def config_group() -> None:
+    """Inspect Kantrip configuration."""
+
+
+@config_group.command("validate")
+def validate_config() -> None:
+    """Validate the resolved configuration file."""
+    try:
+        configuration = load_configuration()
+    except ConfigurationError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Configuration is valid: {configuration.path}")
+
+
+@cli.command("list")
+def list_profiles() -> None:
+    """List configured profiles."""
+    try:
+        configuration = load_configuration()
+    except ConfigurationError as error:
+        raise click.ClickException(str(error)) from error
+    for name, profile in configuration.profiles.items():
+        description = profile.get("description")
+        click.echo(f"{name}\t{description}" if description else name)
+
+
+@cli.command("show")
+@cloup.argument("profile_name", metavar="PROFILE")
+def show_profile(profile_name: str) -> None:
+    """Show a profile without revealing credential references."""
+    try:
+        profile = load_configuration().profile(profile_name)
+    except ConfigurationError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(yaml.safe_dump(redact_mapping(profile), sort_keys=False), nl=False)
+
+
+@cli.command("exec", context_settings={"ignore_unknown_options": True})
+@cloup.argument("profile_name", metavar="PROFILE")
+@cloup.argument("command", nargs=-1, type=click.UNPROCESSED)
+def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
+    """Run a command or interactive subshell with PROFILE."""
+    try:
+        profile = load_configuration().profile(profile_name)
+        exit_code = run_profile_session(profile_name, profile, command)
+    except (ConfigurationError, SessionError) as error:
+        raise click.ClickException(str(error)) from error
+    raise click.exceptions.Exit(exit_code)
 
 
 def main() -> None:

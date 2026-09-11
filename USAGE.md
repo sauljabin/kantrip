@@ -1,31 +1,57 @@
 # Kantrip Usage
 
-Kantrip is in pre-release development. The current CLI exposes help, version,
-and global presentation behavior:
+Kantrip is in pre-release development. The current CLI can validate and inspect
+profiles and run plaintext profile sessions:
 
 ```bash
-kantrip --help
-kantrip --version
-kantrip --no-color --help
+kantrip config validate
+kantrip list
+kantrip show local
+kantrip exec local -- kcat -L
 ```
 
-Profile, connectivity, execution, and cleanup commands documented below define
-the planned workflow but are not implemented yet.
+Profile creation, persistent selection, connectivity checks, and authenticated
+sessions are not implemented yet.
 
-## Planned profile workflow
+## Profile workflow
 
 ```bash
-kantrip add local
 kantrip list
-kantrip use local
-kantrip current
 kantrip show local
-kantrip ping local
-kantrip exec local -- java -jar application.jar
+kantrip exec local -- kcat -L
 ```
 
 Omitting the command after `kantrip exec PROFILE` opens an interactive supervised
-subshell. Kantrip never exports a selected profile into the parent shell.
+subshell using `SHELL`, or `/bin/sh` when `SHELL` is unset:
+
+```bash
+kantrip exec local
+kcat -L
+exit
+```
+
+Kantrip never exports a selected profile into the parent shell. Background or
+detached child processes are not supported because they can outlive the temporary
+session.
+
+### kcat
+
+Kantrip generates a private librdkafka properties file for each session and sets
+`KCAT_CONFIG` to its path. kcat reads this variable natively, so Kantrip does not
+create an alias or rewrite kcat's arguments.
+
+```bash
+kantrip exec local -- kcat -L
+kantrip exec local -- kcat -C -t orders
+kantrip exec local -- kcat -P -t orders
+```
+
+Kantrip reports a command-not-found error when an explicit executable is missing.
+It does not install external tools. The kcat `-F` option is rejected because it
+would override the selected profile.
+
+Only profiles with `transport: plaintext` and `auth.type: none` can currently be
+executed. Other valid profiles can still be listed and displayed safely.
 
 ## Profile configuration
 

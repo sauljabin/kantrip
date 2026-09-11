@@ -18,7 +18,10 @@ classifiers = [
 ]
 requires-python = ">=3.10,<3.15"
 dependencies = [
+    "click>=8.2,<9",
     "cloup>=3.1,<4",
+    "jsonschema>=4.25,<5",
+    "pyyaml>=6.0,<7",
     "rich>=14.2,<16",
 ]
 
@@ -37,10 +40,8 @@ funding = "https://github.com/sponsors/sauljabin"
 dev = [
     "actionlint-py",
     "black",
-    "jsonschema>=4.25",
     "mypy",
     "pre-commit",
-    "pyyaml>=6.0",
     "ruff",
     "testcontainers>=4.13",
     "types-pyyaml",

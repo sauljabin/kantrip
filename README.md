@@ -12,9 +12,9 @@
 
 Kantrip securely manages local Kafka profiles for command-line tools and compatible applications.
 
-Kantrip is in active pre-release development. The current CLI provides help,
-version information, presentation behavior, a profile schema, and a documented
-application environment. Profile and session commands are not implemented yet.
+Kantrip is in active pre-release development. The current CLI loads and validates
+profiles, displays their non-secret metadata, and opens plaintext profile sessions
+for kcat and compatible applications.
 
 ## Features
 
@@ -32,6 +32,12 @@ application environment. Profile and session commands are not implemented yet.
 - Child-only credential exposure with no parent-shell export
 - Explicit opt-in for compatible applications
 
+### kcat sessions
+
+- Native kcat configuration through a private, temporary `KCAT_CONFIG` file
+- Interactive subshells and one-off command execution
+- Child exit-status preservation and automatic session cleanup
+
 ### Terminal experience
 
 - Rich-based Arcana theme with semantic colors
@@ -40,9 +46,9 @@ application environment. Profile and session commands are not implemented yet.
 
 ## Current limitations
 
-- Profile creation and secure-store integration are not implemented yet
-- `kantrip exec`, `kantrip ping`, adapters, and temporary-session cleanup are not
-  available yet
+- Profile creation, selection, and secure-store integration are not implemented yet
+- Execution currently supports only plaintext profiles without authentication
+- `kantrip ping` and credential-backed adapters are not available yet
 - Linux and macOS are the only planned MVP platforms
 - No Docker distribution or hosted service is planned
 
@@ -54,16 +60,22 @@ application environment. Profile and session commands are not implemented yet.
 pipx install kantrip
 ```
 
-### Planned MVP workflow
-
-These commands describe the intended workflow and are not all available yet:
+### First profile session
 
 ```bash
-kantrip add local
-kantrip use local
-kantrip current
-kantrip ping local
-kantrip exec local -- kaskade admin
+export KANTRIP_CONFIG="$PWD/examples/config.yaml"
+kantrip config validate
+kantrip list
+kantrip show local
+kantrip exec local -- kcat -L
+```
+
+Omit the command to work in a profile-scoped interactive subshell:
+
+```bash
+kantrip exec local
+kcat -L
+exit
 ```
 
 ## Usage

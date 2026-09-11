@@ -37,6 +37,14 @@
 - Keep interfaces portable enough for later Windows support without claiming
   Windows compatibility in the MVP.
 
+## Client Support
+
+- kcat is the first supported external CLI. Sessions provide its generated
+  librdkafka properties through `KCAT_CONFIG`; do not create aliases or place
+  configuration values in command arguments.
+- Until credential-backed sessions are implemented, execution accepts only
+  profiles with `transport: plaintext` and `auth.type: none`.
+
 ## Secrets and Diagnostics
 
 - Long-lived secrets belong only in an approved operating-system credential
