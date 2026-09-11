@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  UV_VERSION: "0.12.7"
+  UV_VERSION: "0.12.10"
 
 jobs:
   build:
@@ -71,9 +71,9 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" dist/*.whl
           "$RUNNER_TEMP/release-venv/bin/kantrip" --version | grep -F "$RELEASE_VERSION"
       - name: Generate release notes
-        uses: orhun/git-cliff-action@v4.8.0
+        uses: orhun/git-cliff-action@v4.9.0
         with:
-          version: v2.13.1
+          version: v2.14.1
           config: cliff.toml
           args: --current --strip header --output release-notes.md
           github_token: ${{ secrets.GITHUB_TOKEN }}

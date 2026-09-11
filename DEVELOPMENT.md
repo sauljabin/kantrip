@@ -50,6 +50,11 @@ uv run python -m scripts.tests
 uv run python -m scripts.tests --e2e
 ```
 
+The E2E suite requires Docker and kcat. In CI, Kantrip is built as a wheel,
+installed into an isolated environment, and exposed to the tests through
+`KANTRIP_E2E_EXECUTABLE`. The tests then start a disposable Kafka broker and use
+real kcat producer and consumer processes through the installed Kantrip command.
+
 Generate the deterministic Rich README banner:
 
 ```bash
@@ -120,6 +125,46 @@ registry starts, so `docker compose up -d` is the complete startup sequence.
 The initial topology is plaintext infrastructure only. Authentication work
 extends this one authoritative topology with synthetic TLS, SASL, OAuth, and
 identity-provider material instead of introducing unrelated Compose files.
+
+### Sandbox smoke test
+
+Install kcat before running the smoke test (`brew install kcat` on macOS, or use
+your Linux package manager). Start the sandbox, inspect service state, and verify
+the registry endpoints and replicated Apicurio topics:
+
+```bash
+docker compose --project-directory sandbox up -d
+docker compose --project-directory sandbox ps
+curl --fail http://localhost:18081/subjects
+curl --fail http://localhost:18082/apis/registry/v3/system/info
+docker compose --project-directory sandbox exec kafka1 \
+  kafka-topics --bootstrap-server localhost:9092 \
+  --describe --topic _apicurio-registry-journal
+docker compose --project-directory sandbox exec kafka1 \
+  kafka-topics --bootstrap-server localhost:9092 \
+  --describe --topic _apicurio-registry-snapshots
+```
+
+Use a temporary configuration to exercise Kantrip and kcat without changing your
+normal profiles:
+
+```bash
+kantrip_smoke_directory="$(mktemp -d)"
+export KANTRIP_CONFIG="$kantrip_smoke_directory/config.yaml"
+
+uv run kantrip add sandbox --bootstrap-server localhost:19092
+uv run kantrip exec sandbox -- kcat -L
+printf 'hello from kantrip\n' | \
+  uv run kantrip exec sandbox -- kcat -P -t kantrip-smoke
+uv run kantrip exec sandbox -- \
+  kcat -C -q -t kantrip-smoke -o beginning -c 1
+
+unset KANTRIP_CONFIG
+```
+
+The consumer should print `hello from kantrip`. Stop the sandbox with
+`docker compose --project-directory sandbox down -v`; the temporary directory can
+then be removed.
 
 ## Architecture and security
 

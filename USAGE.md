@@ -66,6 +66,62 @@ session.
 session it reports that no profile is active. This is the command equivalent of
 reading `KANTRIP_PROFILE` directly.
 
+## Displaying the active profile in your prompt
+
+Prompt integrations should read `KANTRIP_PROFILE`. It is available to an
+interactive shell opened by `kantrip exec PROFILE` and disappears when that
+session exits. Prompt code does not need to invoke Kantrip repeatedly.
+
+### Starship
+
+Add a custom module to `~/.config/starship.toml`:
+
+```toml
+[custom.kantrip]
+command = 'printf %s "$KANTRIP_PROFILE"'
+when = 'test -n "$KANTRIP_PROFILE"'
+format = '[kantrip:$output]($style) '
+style = 'bold purple'
+```
+
+Starship's default prompt includes custom modules. If you define a custom global
+`format`, add `${custom.kantrip}` where the profile should appear.
+
+### Oh My Zsh
+
+For an Oh My Zsh theme that uses the standard `PROMPT` variable, add this after
+`source $ZSH/oh-my-zsh.sh` in `~/.zshrc`:
+
+```zsh
+kantrip_prompt_info() {
+  [[ -n ${KANTRIP_PROFILE:-} ]] || return
+  print -P -n '%F{magenta}kantrip:%f%F{cyan}'
+  print -rn -- "$KANTRIP_PROFILE"
+  print -P -n '%f '
+}
+
+setopt prompt_subst
+PROMPT='$(kantrip_prompt_info)'"$PROMPT"
+```
+
+Themes that replace `PROMPT` after this code may need the snippet moved to the
+end of `~/.zshrc`.
+
+### Powerlevel10k
+
+Define a custom segment in `~/.p10k.zsh`:
+
+```zsh
+function prompt_kantrip() {
+  [[ -n ${KANTRIP_PROFILE:-} ]] || return
+  p10k segment -f 5 -t "kantrip:${KANTRIP_PROFILE}"
+}
+```
+
+Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
+`POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file. Start a new shell, run
+`kantrip exec local`, and the segment will be visible until that subshell exits.
+
 ### kcat
 
 Kantrip generates a private librdkafka properties file for each session and sets

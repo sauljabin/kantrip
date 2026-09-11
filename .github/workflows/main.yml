@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UV_VERSION: "0.12.7"
+  UV_VERSION: "0.12.10"
 
 jobs:
   quality:
@@ -107,7 +107,18 @@ jobs:
           enable-cache: true
       - name: Sync dependencies
         run: uv sync --locked
+      - name: Install kcat
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes kcat
+      - name: Build and install Kantrip wheel
+        run: |
+          uv build --clear
+          uv venv "$RUNNER_TEMP/kantrip-e2e" --python 3.10
+          uv pip install --python "$RUNNER_TEMP/kantrip-e2e/bin/python" dist/*.whl
       - name: Run end-to-end tests
+        env:
+          KANTRIP_E2E_EXECUTABLE: ${{ runner.temp }}/kantrip-e2e/bin/kantrip
         run: uv run --locked python -m scripts.tests --e2e
 
   result:

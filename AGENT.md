@@ -75,10 +75,14 @@
 
 - Unit tests and their fixtures live in `tests/unit`. End-to-end tests and any
   E2E-only fixtures live in `tests/e2e` and provision their own disposable
-  services. Keep unit tests offline.
+  services. CI must exercise the built wheel through its installed `kantrip`
+  entry point, including a real kcat produce/consume round trip. Keep unit tests
+  offline.
 - The manual environment lives entirely in `sandbox`, including Compose files,
-  versions, generated synthetic material, and population tools. Tests must not
-  import sandbox code or assets, and sandbox code must not import test fixtures.
+  versions, generated synthetic material, and population tools. Tests may read
+  pinned image versions and assert Compose structure, but must not import sandbox
+  executable code or use sandbox data as test fixtures. Sandbox code must not
+  import test fixtures.
 - Keep the sandbox's Apicurio Registry on KafkaSQL storage. Its journal and
   snapshot topics must be created with three replicas before the registry starts.
 - Reusable repository-script helpers belong in `scripts/__init__.py`; individual
