@@ -26,8 +26,9 @@ documentation together.
 
 - Extend `kantrip ping` to cover authenticated profiles as those transports are
   implemented.
-- Extend the current plain Confluent Schema Registry console-client integration
-  to authenticated connections and Apicurio endpoints.
+- Extend the current plain Schema Registry integration for Confluent console
+  clients, kcat, and Kaskade 5 to authenticated connections and Apicurio
+  endpoints.
 - Add OAuth support, including the generic client-credentials flow and Strimzi
   callback integration.
 

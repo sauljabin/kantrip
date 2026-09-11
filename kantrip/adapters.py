@@ -73,6 +73,7 @@ _KASKADE_CONNECTION_OPTIONS = (
     "--bootstrap-servers",
     "--config-file",
     "--kafka",
+    "--registry",
     "-b",
 )
 _KAFKA_ALTERNATE_CONNECTION_OPTIONS = {
@@ -105,6 +106,7 @@ def prepare_command(
     bootstrap_servers: str,
     java_config_path: Path,
     kaskade_config_path: Path,
+    kaskade_registry_config_path: Path,
     schema_registry_url: str | None = None,
     schema_registry_error: str | None = None,
 ) -> list[str]:
@@ -136,18 +138,54 @@ def prepare_command(
             *registry_arguments,
             *prepared[1:],
         ]
-    if executable in KASKADE_EXECUTABLES and len(prepared) > 1:
-        command = prepared[1]
-        if command in _KASKADE_COMMANDS:
-            _reject_kaskade_overrides(prepared[2:])
-            return [
-                prepared[0],
-                command,
-                "--config-file",
-                str(kaskade_config_path),
-                *prepared[2:],
-            ]
+    if executable in KCAT_EXECUTABLES:
+        return _prepare_kcat(prepared, schema_registry_url, schema_registry_error)
+    if executable in KASKADE_EXECUTABLES:
+        return _prepare_kaskade(
+            prepared,
+            kaskade_config_path,
+            kaskade_registry_config_path,
+            schema_registry_url,
+            schema_registry_error,
+        )
     return prepared
+
+
+def _prepare_kcat(
+    prepared: list[str], schema_registry_url: str | None, schema_registry_error: str | None
+) -> list[str]:
+    executable = Path(prepared[0]).name
+    _reject_kcat_overrides(executable, prepared[1:])
+    if _kcat_uses_schema_registry(prepared[1:]):
+        registry_url = _require_schema_registry(
+            executable, schema_registry_url, schema_registry_error
+        )
+        return [prepared[0], "-r", registry_url, *prepared[1:]]
+    return prepared
+
+
+def _prepare_kaskade(
+    prepared: list[str],
+    config_path: Path,
+    registry_config_path: Path,
+    schema_registry_url: str | None,
+    schema_registry_error: str | None,
+) -> list[str]:
+    if len(prepared) <= 1 or prepared[1] not in _KASKADE_COMMANDS:
+        return prepared
+    command = prepared[1]
+    _reject_kaskade_overrides(prepared[2:])
+    selected_config_path = config_path
+    if command == "consumer" and _kaskade_uses_schema_registry(prepared[2:]):
+        _require_schema_registry("kaskade", schema_registry_url, schema_registry_error)
+        selected_config_path = registry_config_path
+    return [
+        prepared[0],
+        command,
+        "--config-file",
+        str(selected_config_path),
+        *prepared[2:],
+    ]
 
 
 def create_subshell_shims(
@@ -156,6 +194,7 @@ def create_subshell_shims(
     bootstrap_servers: str,
     java_config_path: Path,
     kaskade_config_path: Path,
+    kaskade_registry_config_path: Path,
     environment: Mapping[str, str],
     schema_registry_url: str | None = None,
     schema_registry_error: str | None = None,
@@ -195,10 +234,19 @@ def create_subshell_shims(
     if kaskade_executable is not None:
         _write_executable(
             directory / "kaskade",
-            _render_kaskade_shim(kaskade_executable, kaskade_config_path),
+            _render_kaskade_shim(
+                kaskade_executable,
+                kaskade_config_path,
+                kaskade_registry_config_path,
+                schema_registry_url,
+                schema_registry_error,
+            ),
         )
     for name, executable in kcat_executables.items():
-        _write_executable(directory / name, _render_kcat_shim(name, executable))
+        _write_executable(
+            directory / name,
+            _render_kcat_shim(name, executable, schema_registry_url, schema_registry_error),
+        )
     return directory
 
 
@@ -214,6 +262,61 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
                 raise AdapterError(
                     f"kaskade option '{option}' cannot override the selected Kantrip profile"
                 )
+
+
+def _reject_kcat_overrides(executable: str, arguments: Sequence[str]) -> None:
+    for index, argument in enumerate(arguments):
+        if argument in {"-F", "-r"} or argument.startswith(("-F", "-r")):
+            option = argument[:2]
+            raise AdapterError(
+                f"{executable} option '{option}' cannot override the selected Kantrip profile"
+            )
+        property_value: str | None = None
+        if argument == "-X" and index + 1 < len(arguments):
+            property_value = arguments[index + 1]
+        elif argument.startswith("-X"):
+            property_value = argument[2:]
+        if property_value is not None and property_value.startswith("schema.registry.url="):
+            raise AdapterError(
+                f"{executable} Schema Registry URL cannot override the selected Kantrip profile"
+            )
+
+
+def _kcat_uses_schema_registry(arguments: Sequence[str]) -> bool:
+    return any(
+        value.lower() in {"avro", "key=avro", "value=avro"}
+        for value in _option_values(arguments, "-s")
+    )
+
+
+def _kaskade_uses_schema_registry(arguments: Sequence[str]) -> bool:
+    return any(
+        value.lower() == "registry"
+        for option in ("-k", "--key", "-v", "--value")
+        for value in _option_values(arguments, option)
+    )
+
+
+def _option_values(arguments: Sequence[str], option: str) -> tuple[str, ...]:
+    values: list[str] = []
+    for index, argument in enumerate(arguments):
+        if argument == option and index + 1 < len(arguments):
+            values.append(arguments[index + 1])
+        elif argument.startswith(f"{option}="):
+            values.append(argument[len(option) + 1 :])
+        elif len(option) == 2 and argument.startswith(option) and argument != option:
+            values.append(argument[len(option) :])
+    return tuple(values)
+
+
+def _require_schema_registry(name: str, url: str | None, error: str | None) -> str:
+    if error is not None:
+        raise AdapterError(error)
+    if url is None:
+        raise AdapterError(
+            f"{name} requires a schemaRegistry section in the selected Kantrip profile"
+        )
+    return url
 
 
 def _reject_kafka_overrides(
@@ -327,21 +430,47 @@ def _render_schema_registry_shim_guard(name: str, url: str | None, error: str | 
     return f"printf '%s\\n' {shlex.quote(message)} >&2\nexit 2\n" if url is None else ""
 
 
-def _render_kaskade_shim(executable: str, config_path: Path) -> str:
+def _render_kaskade_shim(
+    executable: str,
+    config_path: Path,
+    registry_config_path: Path,
+    schema_registry_url: str | None,
+    schema_registry_error: str | None,
+) -> str:
+    registry_guard = _render_schema_registry_shim_guard(
+        "kaskade", schema_registry_url, schema_registry_error
+    )
     return f"""#!/bin/sh
 case "${{1-}}" in
   admin|consumer)
     command="$1"
     shift
+    registry_deserializer=
+    previous_argument=
     for argument in "$@"; do
       case "$argument" in
-        -b|-b*|--bootstrap-servers|--bootstrap-servers=*|--config-file|--config-file=*|--kafka|--kafka=*)
+        -b|-b*|--bootstrap-servers|--bootstrap-servers=*|--config-file|--config-file=*|--kafka|--kafka=*|--registry|--registry=*)
           printf '%s\\n' 'kaskade connection options cannot override the selected Kantrip profile' >&2
           exit 2
           ;;
       esac
+      case "$previous_argument:$argument" in
+        -k:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--key:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|-v:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--value:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy])
+          registry_deserializer=1
+          ;;
+      esac
+      case "$argument" in
+        -k[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|-v[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--key=[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--value=[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy])
+          registry_deserializer=1
+          ;;
+      esac
+      previous_argument="$argument"
     done
-    exec {shlex.quote(executable)} "$command" --config-file {shlex.quote(str(config_path))} "$@"
+    selected_config={shlex.quote(str(config_path))}
+    if [ "$command" = consumer ] && [ -n "$registry_deserializer" ]; then
+      {registry_guard}      selected_config={shlex.quote(str(registry_config_path))}
+    fi
+    exec {shlex.quote(executable)} "$command" --config-file "$selected_config" "$@"
     ;;
   *)
     exec {shlex.quote(executable)} "$@"
@@ -350,16 +479,53 @@ esac
 """
 
 
-def _render_kcat_shim(name: str, executable: str) -> str:
+def _render_kcat_shim(
+    name: str,
+    executable: str,
+    schema_registry_url: str | None,
+    schema_registry_error: str | None,
+) -> str:
+    registry_guard = _render_schema_registry_shim_guard(
+        name, schema_registry_url, schema_registry_error
+    )
+    registry_url = shlex.quote(schema_registry_url or "")
     return f"""#!/bin/sh
+schema_deserializer=
+previous_argument=
 for argument in "$@"; do
   case "$argument" in
-    -F|-F*)
+    -F|-F*|-r|-r*)
       printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2
       exit 2
       ;;
   esac
+  case "$previous_argument:$argument" in
+    -X:schema.registry.url=*)
+      printf '%s\\n' '{name} Schema Registry URL cannot override the selected Kantrip profile' >&2
+      exit 2
+      ;;
+  esac
+  case "$argument" in
+    -Xschema.registry.url=*)
+      printf '%s\\n' '{name} Schema Registry URL cannot override the selected Kantrip profile' >&2
+      exit 2
+      ;;
+  esac
+  case "$previous_argument:$argument" in
+    -s:avro|-s:key=avro|-s:value=avro)
+      schema_deserializer=1
+      ;;
+  esac
+  case "$argument" in
+    -savro|-skey=avro|-svalue=avro)
+      schema_deserializer=1
+      ;;
+  esac
+  previous_argument="$argument"
 done
+if [ -n "$schema_deserializer" ]; then
+  {registry_guard}  exec {shlex.quote(executable)} -r {registry_url} "$@"
+fi
 exec {shlex.quote(executable)} "$@"
 """
 

@@ -29,10 +29,12 @@ child also receives the documented plaintext `KAFKA_*` and `KCAT_CONFIG` values.
 ## Client adapters
 
 Supported adapters inject the selected bootstrap servers and generated client
-configuration using each tool's native interface. kcat reads `KCAT_CONFIG`,
-official Kafka commands receive connection and properties-file arguments, and
-Kaskade `admin` and `consumer` receive a generated INI file. Options that would
-override the selected profile are rejected.
+configuration using each tool's native interface. kcat reads `KCAT_CONFIG` and
+receives the plain registry URL only when an Avro deserializer requires `-r`.
+Official Kafka commands receive connection and properties-file arguments.
+Kaskade 5 `admin` and `consumer` receive a generated INI file, with registry
+deserializers selecting a second file containing `[registry]`. Options that
+would override the selected profile are rejected.
 
 Interactive shells load the user's normal startup configuration and history.
 Kantrip then removes aliases, functions, and Fish abbreviations that shadow

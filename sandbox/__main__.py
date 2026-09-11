@@ -30,7 +30,7 @@ from kantrip.console import create_console, create_status_text
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
 
-DEFAULT_BOOTSTRAP_SERVERS = ("localhost:19092",)
+DEFAULT_BOOTSTRAP_SERVERS = ("localhost:9092",)
 DEFAULT_SCHEMA_REGISTRY_URL = "http://localhost:8081"
 KAFKA_COMMANDS = {
     "topics": KAFKA_TOPICS_EXECUTABLES,

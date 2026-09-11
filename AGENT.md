@@ -41,16 +41,19 @@
 
 - kcat is the first supported client. Sessions expose private generated librdkafka
   properties through `KCAT_CONFIG`; interactive shims preserve this contract and
-  reject client attempts to override it with `-F`. Never place configuration
-  values in command arguments.
+  reject client attempts to override it with `-F`. Avro deserializers receive
+  the profile's plain, unauthenticated Schema Registry URL through kcat's native
+  `-r` option; explicit `-r` is rejected. Never place secrets in command
+  arguments.
 - Apache Kafka Unix archives use `.sh` command names; Confluent Platform ships
   the equivalent commands without `.sh`. Adapters recognize both forms for the
   shared tools. All receive `--bootstrap-server`; consumers/producers receive
   their client config option, and administrative tools receive
   `--command-config`, pointing at the private generated Java properties file.
-- Kaskade `admin` and `consumer` receive a private INI file through
-  `--config-file`. Do not assume a Kaskade environment variable until Kaskade
-  implements that contract.
+- Kaskade 5 `admin` and `consumer` receive a private INI file through
+  `--config-file`; registry deserializers select a second private file with a
+  `[registry]` section. Kaskade 4 is unsupported. Do not assume a Kaskade
+  environment variable until Kaskade implements that contract.
 - Interactive sessions support Bash, Zsh, and Fish. They load normal user startup
   files, preserve normal history, neutralize aliases/functions/Fish abbreviations
   for registered adapters, and restore the session shim path. Shims are private

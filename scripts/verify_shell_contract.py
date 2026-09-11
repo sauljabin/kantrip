@@ -35,6 +35,7 @@ session_directory = os.environ.get("KANTRIP_SESSION_DIR", "")
 record = {{
     "argv": arguments,
     "config_exists": bool(config and config.is_file()),
+    "config_contents": config.read_text(encoding="utf-8") if config and config.is_file() else None,
     "config_mode": stat.S_IMODE(config.stat().st_mode) if config and config.is_file() else None,
     "config_in_session": bool(config and session_directory and config.is_relative_to(session_directory)),
     "name": name,
@@ -154,7 +155,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
-            self.assertEqual(len(ADAPTER_EXECUTABLES) + 1, len(records))
+            self.assertEqual(len(ADAPTER_EXECUTABLES) + 4, len(records))
             for record in records:
                 self.assertEqual("contract", record["profile"])
                 self.assertTrue(record["config_exists"], record)
@@ -174,6 +175,13 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     self.assertEqual("http://registry.invalid:8081", record["registry_url"])
                     self.assertIn(
                         "schema.registry.url=http://registry.invalid:8081", record["argv"]
+                    )
+                if record["name"] in KCAT_EXECUTABLES and "-s" in record["argv"]:
+                    self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
+                if record["name"] == "kaskade" and "registry" in record["argv"]:
+                    self.assertIn(
+                        "\n[registry]\nurl=http://registry.invalid:8081\n",
+                        record["config_contents"],
                     )
             producers = [
                 record for record in records if record["name"].endswith("console-producer")
@@ -315,8 +323,9 @@ def _adapter_commands() -> list[str]:
         else:
             commands.append(command)
     commands.append("; ".join(registry_commands))
-    commands.extend(f"{executable} -L" for executable in sorted(KCAT_EXECUTABLES))
-    commands.extend(("kaskade admin", "kaskade consumer"))
+    for executable in sorted(KCAT_EXECUTABLES):
+        commands.extend((f"{executable} -L", f"{executable} -C -s value=avro -t contract"))
+    commands.extend(("kaskade admin", "kaskade consumer", "kaskade consumer -v registry"))
     return commands
 
 

@@ -27,30 +27,30 @@ services:
     environment:
       <<: *kafka-environment
       KAFKA_NODE_ID: "1"
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka1:9092,EXTERNAL://localhost:19092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka1:9092,EXTERNAL://localhost:9092
       KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
     ports:
-      - "19092:19092"
+      - "9092:19092"
 
   kafka2:
     <<: *kafka-common
     environment:
       <<: *kafka-environment
       KAFKA_NODE_ID: "2"
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka2:9092,EXTERNAL://localhost:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka2:9092,EXTERNAL://localhost:9093
       KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092
     ports:
-      - "29092:29092"
+      - "9093:29092"
 
   kafka3:
     <<: *kafka-common
     environment:
       <<: *kafka-environment
       KAFKA_NODE_ID: "3"
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka3:9092,EXTERNAL://localhost:39092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka3:9092,EXTERNAL://localhost:9094
       KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:39092
     ports:
-      - "39092:39092"
+      - "9094:39092"
 
   schema-registry:
     image: confluentinc/cp-schema-registry:${CONFLUENT_VERSION}

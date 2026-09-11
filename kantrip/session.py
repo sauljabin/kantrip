@@ -66,6 +66,7 @@ def run_profile_session(
         kcat_config_path = session_directory / "kcat.conf"
         java_config_path = session_directory / "kafka.properties"
         kaskade_config_path = session_directory / "kaskade.ini"
+        kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
         schema_registry_config_path = session_directory / "schema-registry.properties"
         write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
         write_exclusive_text(java_config_path, _render_properties(java_properties), mode=0o600)
@@ -75,6 +76,12 @@ def run_profile_session(
             mode=0o600,
         )
         if schema_registry_url is not None:
+            write_exclusive_text(
+                kaskade_registry_config_path,
+                f"[kafka]\n{_render_properties(kcat_properties)}"
+                f"\n[registry]\nurl={schema_registry_url}\n",
+                mode=0o600,
+            )
             write_exclusive_text(
                 schema_registry_config_path,
                 _render_properties({"schema.registry.url": schema_registry_url}),
@@ -107,6 +114,7 @@ def run_profile_session(
                     bootstrap_servers=kcat_properties["bootstrap.servers"],
                     java_config_path=java_config_path,
                     kaskade_config_path=kaskade_config_path,
+                    kaskade_registry_config_path=kaskade_registry_config_path,
                     schema_registry_url=schema_registry_url,
                     schema_registry_error=schema_registry_error,
                 )
@@ -116,6 +124,7 @@ def run_profile_session(
                     bootstrap_servers=kcat_properties["bootstrap.servers"],
                     java_config_path=java_config_path,
                     kaskade_config_path=kaskade_config_path,
+                    kaskade_registry_config_path=kaskade_registry_config_path,
                     environment=env,
                     schema_registry_url=schema_registry_url,
                     schema_registry_error=schema_registry_error,

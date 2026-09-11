@@ -107,8 +107,8 @@ Stop it and remove its volumes:
 docker compose --project-directory sandbox down -v
 ```
 
-Kafka is available at `localhost:19092`, `localhost:29092`, and
-`localhost:39092`; Schema Registry is available at `http://localhost:8081`.
+Kafka is available at `localhost:9092`, `localhost:9093`, and
+`localhost:9094`; Schema Registry is available at `http://localhost:8081`.
 The pinned Confluent image version lives in `sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
@@ -119,7 +119,7 @@ uv run --locked python -m sandbox
 uv run --locked python -m sandbox \
   --shell bash --shell zsh --shell fish
 uv run --locked python -m sandbox my-topic \
-  --profile sandbox --bootstrap-server localhost:19092 --keep-topic
+  --profile sandbox --bootstrap-server localhost:9092 --keep-topic
 ```
 
 By default, the script checks Kafka and Schema Registry connectivity, creates
@@ -160,7 +160,11 @@ Create an isolated profile for the running sandbox, then create a topic, produce
 two records, and consume exactly those records:
 
 ```bash
-uv run kantrip add sandbox --bootstrap-server localhost:19092
+uv run kantrip add sandbox \
+  --bootstrap-server localhost:9092 \
+  --bootstrap-server localhost:9093 \
+  --bootstrap-server localhost:9094 \
+  --schema-registry-url http://localhost:8081
 
 uv run kantrip exec sandbox -- kafka-topics --create \
   --topic kantrip-development --partitions 1 --replication-factor 1
@@ -176,6 +180,61 @@ uv run kantrip exec sandbox -- kafka-console-consumer \
 The examples above use Confluent Platform's unsuffixed command names. When using
 an Apache Kafka Unix archive, use the corresponding `.sh` executable, such as
 `kafka-topics.sh` or `kafka-console-consumer.sh`.
+
+### Schema Registry adapter workflow
+
+The sandbox profile above also supports the Confluent Avro, JSON Schema, and
+Protobuf console clients. Create one topic per wire format so each consumer sees
+only records encoded with its expected serializer:
+
+```bash
+for topic in kantrip-avro kantrip-json-schema kantrip-protobuf; do
+  uv run kantrip exec sandbox -- kafka-topics --create \
+    --topic "$topic" --partitions 1 --replication-factor 1
+done
+
+printf '{"message":"hello from avro"}\n' | \
+  uv run kantrip exec sandbox -- kafka-avro-console-producer \
+    --topic kantrip-avro \
+    --property value.schema='{"type":"record","name":"Event","fields":[{"name":"message","type":"string"}]}'
+uv run kantrip exec sandbox -- kafka-avro-console-consumer \
+  --topic kantrip-avro --from-beginning --max-messages 1
+
+printf '{"message":"hello from json schema"}\n' | \
+  uv run kantrip exec sandbox -- kafka-json-schema-console-producer \
+    --topic kantrip-json-schema \
+    --property value.schema='{"type":"object","properties":{"message":{"type":"string"}},"required":["message"]}'
+uv run kantrip exec sandbox -- kafka-json-schema-console-consumer \
+  --topic kantrip-json-schema --from-beginning --max-messages 1
+
+printf '{"message":"hello from protobuf"}\n' | \
+  uv run kantrip exec sandbox -- kafka-protobuf-console-producer \
+    --topic kantrip-protobuf \
+    --property value.schema='syntax = "proto3"; message Event { string message = 1; }'
+uv run kantrip exec sandbox -- kafka-protobuf-console-consumer \
+  --topic kantrip-protobuf --from-beginning --max-messages 1
+```
+
+kcat 1.7+ can decode the Avro topic without an explicit `-r`; Kantrip injects
+the profile's Schema Registry URL when an Avro `-s` deserializer is selected:
+
+```bash
+uv run kantrip exec sandbox -- kcat \
+  -C -t kantrip-avro -o beginning -e -s value=avro
+```
+
+Kaskade 5+ reads the same URL from the generated private `[registry]` section.
+Select its registry deserializer for Avro or JSON Schema records:
+
+```bash
+uv run kantrip exec sandbox -- kaskade consumer \
+  --topic kantrip-avro --earliest -v registry
+```
+
+Kaskade 4 is not supported by this adapter because the required Schema Registry
+configuration-file contract starts with Kaskade 5. Kaskade 5 does not support
+Schema Registry-backed Protobuf decoding; use the Confluent Protobuf consumer
+for that topic.
 
 Additional quick checks for the other adapters are:
 

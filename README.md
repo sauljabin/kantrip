@@ -34,12 +34,14 @@ It can also verify broker connectivity directly from a profile.
 
 ### CLI sessions
 
-- Native kcat configuration through a private, temporary `KCAT_CONFIG` file
+- Native kcat configuration through a private, temporary `KCAT_CONFIG` file,
+  with profile-aware Schema Registry injection for Avro decoding
 - Profile-aware Apache Kafka `.sh` commands and the equivalent unsuffixed
   Confluent Platform commands
 - Profile-aware Avro, JSON Schema, and Protobuf console clients for plain
   Confluent Schema Registry connections
-- Private client-file integration for Kaskade admin and consumer modes
+- Private client-file integration for Kaskade 5 admin, consumer, and Schema
+  Registry deserialization modes
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Child exit-status preservation and automatic session cleanup
 

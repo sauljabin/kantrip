@@ -36,6 +36,19 @@ class TestSandbox(unittest.TestCase):
             self.assertNotIn("SSL", protocols)
             self.assertNotIn("SASL", protocols)
 
+    def test_exposes_brokers_on_standard_consecutive_host_ports(self) -> None:
+        for name, host_port, container_port in (
+            ("kafka1", 9092, 19092),
+            ("kafka2", 9093, 29092),
+            ("kafka3", 9094, 39092),
+        ):
+            service = self.services[name]
+            self.assertEqual([f"{host_port}:{container_port}"], service["ports"])
+            self.assertIn(
+                f"EXTERNAL://localhost:{host_port}",
+                service["environment"]["KAFKA_ADVERTISED_LISTENERS"],
+            )
+
     def test_contains_plain_schema_registry(self) -> None:
         registry = self.services["schema-registry"]
 

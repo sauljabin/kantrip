@@ -277,11 +277,16 @@ startup-time `PATH`, alias, and function changes.
 kantrip exec local -- kcat -L
 kantrip exec local -- kcat -C -t orders
 kantrip exec local -- kcat -P -t orders
+kantrip exec local -- kcat -C -t avro-orders -s value=avro
 ```
 
 Kantrip reports a command-not-found error when an explicit executable is missing.
-It does not install external tools. The kcat `-F` option is rejected because it
-would override the selected profile.
+It does not install external tools. When kcat 1.7+ selects the Avro deserializer
+with `-s avro`, `-s key=avro`, or `-s value=avro`, Kantrip injects `-r` using
+the selected profile's Schema Registry URL. The `-F`, `-r`, and
+`-X schema.registry.url=...` options are rejected because they would override
+the selected profile. Ordinary metadata, producer, and consumer modes do not
+require a Schema Registry profile.
 
 The profile schema accepts only `transport: plaintext` with `auth.type: none`,
 so every valid profile can be executed.
@@ -358,7 +363,7 @@ These commands require the plain `schemaRegistry` profile section documented
 below. A missing section, authentication, HTTPS, or TLS metadata produces an
 actionable error before the console client starts.
 
-### Kaskade
+### Kaskade 5
 
 Kaskade's current `admin` and `consumer` commands accept an explicitly selected
 INI client file. Kantrip generates that private file and inserts
@@ -367,6 +372,7 @@ INI client file. Kantrip generates that private file and inserts
 ```bash
 kantrip exec local -- kaskade admin
 kantrip exec local -- kaskade consumer --topic orders
+kantrip exec local -- kaskade consumer --topic avro-orders --earliest -v registry
 ```
 
 For example, the first command is prepared conceptually as:
@@ -375,13 +381,19 @@ For example, the first command is prepared conceptually as:
 kaskade admin --config-file /tmp/kantrip-SESSION/kaskade.ini
 ```
 
-The temporary INI contains the selected profile's Kafka client properties.
-Explicit `-b`/`--bootstrap-servers`, `--kafka`, and `--config-file` options are
-rejected because they could override that profile. Interactive sessions expose a
-temporary `kaskade` shim using the same behavior.
+The ordinary temporary INI contains the selected profile's Kafka client
+properties. When `-k registry` or `-v registry` is selected, Kantrip uses a
+second private INI containing the profile's Kafka properties and a `[registry]`
+section with its URL. Explicit `-b`/`--bootstrap-servers`, `--kafka`,
+`--config-file`, and `--registry` options are rejected because they could
+override that profile. Interactive sessions expose a temporary `kaskade` shim
+using the same behavior.
 
-This adapter uses Kaskade's current CLI contract and does not set a
-Kaskade-specific environment variable.
+This adapter supports Kaskade 5 and later. Kaskade 4 is not supported because it
+does not provide the required registry configuration-file contract. Kaskade 5
+supports Schema Registry-backed Avro and JSON Schema decoding, but not
+Schema Registry-backed Protobuf. The adapter does not set a Kaskade-specific
+environment variable.
 
 ## Profile configuration
 

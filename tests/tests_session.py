@@ -330,6 +330,7 @@ class TestProfileSession(unittest.TestCase):
                         bootstrap_servers="localhost:9092",
                         java_config_path=root_path / "kafka.properties",
                         kaskade_config_path=root_path / "kaskade.ini",
+                        kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                         environment={"PATH": str(root_path)},
                         schema_registry_error=registry_error,
                     )
@@ -421,12 +422,80 @@ class TestProfileSession(unittest.TestCase):
                 assert isinstance(environment, dict)
                 self.assertNotIn("KASKADE_CLIENT_CONFIG", environment)
 
+    def test_kaskade_registry_deserializer_uses_profile_registry_config(self) -> None:
+        observed: dict[str, object] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            config_path = Path(arguments[3])
+            observed["arguments"] = arguments
+            observed["contents"] = config_path.read_text(encoding="utf-8")
+            observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kaskade", "consumer", "--topic", "orders", "-v", "registry"],
+                environment={},
+            )
+
+        arguments = observed["arguments"]
+        assert isinstance(arguments, list)
+        self.assertEqual("kaskade-registry.ini", Path(arguments[3]).name)
+        self.assertEqual(["--topic", "orders", "-v", "registry"], arguments[4:])
+        self.assertEqual(
+            "[kafka]\n"
+            "bootstrap.servers=localhost:9092,localhost:9093\n"
+            "client.id=kantrip\n"
+            "enable.idempotence=true\n"
+            "security.protocol=PLAINTEXT\n"
+            "\n[registry]\n"
+            "url=http://registry.invalid:8081\n",
+            observed["contents"],
+        )
+        self.assertEqual(0o600, observed["mode"])
+
+    def test_registry_deserializers_require_supported_profile_registry(self) -> None:
+        commands = (
+            ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
+            ["kaskade", "consumer", "-t", "orders", "-v", "registry"],
+        )
+        for command in commands:
+            for registry, expected in (
+                (None, "requires a schemaRegistry section"),
+                (
+                    {"url": "https://registry.invalid", "auth": {"type": "basic"}},
+                    "authenticated or TLS-secured",
+                ),
+            ):
+                with (
+                    self.subTest(command=command, registry=registry),
+                    patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
+                    patch("kantrip.session.subprocess.run") as run,
+                    self.assertRaisesRegex(SessionError, expected),
+                ):
+                    if registry is None:
+                        del self.profile["schemaRegistry"]
+                    else:
+                        self.profile["schemaRegistry"] = registry
+                    run_profile_session("local", self.profile, command, environment={})
+                run.assert_not_called()
+                self.profile["schemaRegistry"] = {
+                    "url": "http://registry.invalid:8081",
+                    "auth": {"type": "none"},
+                }
+
     def test_kaskade_cannot_override_profile_connection_options(self) -> None:
         for option in (
             "-bother:9092",
             "--bootstrap-servers=other:9092",
             "--config-file=other.ini",
             "--kafka=bootstrap.servers=other:9092",
+            "--registry=url=http://other.invalid:8081",
         ):
             with (
                 self.subTest(option=option),
@@ -641,11 +710,46 @@ class TestProfileSession(unittest.TestCase):
             run_profile_session("local", self.profile, ["kcat", "-L"], environment={})
 
     def test_kcat_cannot_override_generated_configuration(self) -> None:
+        for arguments in (
+            ("-F", "other.conf"),
+            ("-r", "http://other.invalid:8081"),
+            ("-X", "schema.registry.url=http://other.invalid:8081"),
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+                self.assertRaisesRegex(SessionError, "cannot override"),
+            ):
+                run_profile_session("local", self.profile, ["kcat", *arguments], environment={})
+
+    def test_kcat_avro_deserializer_uses_profile_registry_url(self) -> None:
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            self.assertRaisesRegex(SessionError, "-F option cannot override"),
+            patch(
+                "kantrip.session.subprocess.run",
+                return_value=subprocess.CompletedProcess(["kcat"], 0),
+            ) as run,
         ):
-            run_profile_session("local", self.profile, ["kcat", "-F", "other.conf"], environment={})
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
+                environment={},
+            )
+
+        self.assertEqual(
+            [
+                "kcat",
+                "-r",
+                "http://registry.invalid:8081",
+                "-C",
+                "-s",
+                "value=avro",
+                "-t",
+                "orders",
+            ],
+            run.call_args.args[0],
+        )
 
     def test_authenticated_profile_is_rejected_before_launch(self) -> None:
         self.profile["kafka"]["auth"] = {"type": "plain"}
