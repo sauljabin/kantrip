@@ -10,13 +10,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 brew install uv
 ```
 
-Create the project environment and install locked development dependencies:
+Install locked development dependencies:
 
 ```bash
 uv sync --locked
 ```
 
-The project is installed in editable mode. Run the CLI with:
+Run the editable CLI with:
 
 ```bash
 uv run kantrip --help
@@ -55,20 +55,17 @@ Generate the deterministic Rich README banner:
 uv run python -m scripts.banner
 ```
 
-Reusable script code belongs in `scripts/__init__.py`; individual modules are
-executable workflows. Tests and fixture utilities remain under their owning test
-suite, and manual-environment utilities remain under `sandbox`. The sandbox smoke
-command is intentionally separate from the offline test suite.
+Shared script code belongs in `scripts/__init__.py`; modules are executable
+workflows. Keep test utilities with their suite and manual utilities in
+`sandbox`, outside the offline tests.
 
 ## Schema and application environment
 
-The profile JSON Schema lives in `schemas/`. Synthetic user-facing examples live
-in `examples/`. Test-owned fixture copies live under `tests` and must never
-contain private infrastructure details.
+Keep the profile schema in `schemas/`, synthetic examples in `examples/`, and
+private-data-free fixtures with their tests.
 
-Application environment variables are documented in `USAGE.md`. When a variable
-changes, update the usage and architecture documentation and the relevant tests
-together.
+When an application variable changes, update `USAGE.md`, architecture guidance,
+and tests together.
 
 ## Build artifacts
 
@@ -85,10 +82,9 @@ required documentation:
 uv run --locked python -m scripts.verify_release dist
 ```
 
-An exact `vMAJOR.MINOR.PATCH` tag, optionally suffixed with PEP 440 `aN`, `bN`,
-or `rcN`, produces a release version. Untagged builds use
-hatch-vcs development metadata; the configured fallback exists only so an empty
-or exported pre-release checkout can bootstrap before the first commit.
+Exact `vMAJOR.MINOR.PATCH` tags, optionally suffixed with PEP 440 `aN`, `bN`, or
+`rcN`, define releases. Untagged builds use hatch-vcs development metadata; its
+fallback only bootstraps empty or exported checkouts.
 
 ## Manual sandbox
 
@@ -108,11 +104,10 @@ Stop it and remove its volumes:
 docker compose --project-directory sandbox down -v
 ```
 
-Kafka is available at `localhost:9092`; Confluent Schema Registry is available
-at `http://localhost:8081`; Apicurio's Confluent-compatible API is available at
-`http://localhost:8082/apis/ccompat/v7`, and its Core API is available at
-`http://localhost:8082/apis/registry/v3`. Pinned image versions live in
-`sandbox/.env`.
+Endpoints are Kafka `localhost:9092`, Confluent Schema Registry
+`http://localhost:8081`, and Apicurio's compatibility and Core APIs at
+`http://localhost:8082/apis/ccompat/v7` and
+`http://localhost:8082/apis/registry/v3`. Versions live in `sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
 adapter smoke checks:
@@ -128,34 +123,26 @@ uv run --locked python -m sandbox my-apicurio-topic \
   --schema-registry-url http://localhost:8082/apis/ccompat/v7
 ```
 
-By default, the script checks Kafka and Confluent Schema Registry connectivity, creates
-and lists a randomized topic, produces and consumes a record, and exercises the
-groups, configs, ACLs, broker API, and all six Schema Registry console adapters.
-It also lists the topic with kcat, validates the Kaskade adapter, and deletes the
-topic. At least one executable variant for every Apache Kafka command and all
-six Confluent Schema Registry console commands must be installed. The check uses
-an animated spinner for running steps and styled emoji for results in a colored
-terminal. It uses stable text status labels when styling is disabled, including
-in CI or when `--no-color` is passed.
+The smoke run checks Kafka and registry connectivity; topic creation, listing,
+production, consumption, groups, configs, ACLs, and broker APIs; all six registry
+console adapters; kcat; Kaskade; and cleanup. It requires each Kafka command
+group and all six Confluent registry commands. Colored terminals animate running
+steps; plain output uses stable status labels.
 
 Pass Apicurio's Confluent-compatible URL as shown above to run the same adapter
 workflow against Apicurio instead.
 
-Repeat `--shell` to add real interactive-subshell checks after the explicit
-command pass. A requested shell is required to be installed; the three-shell
-command above verifies Bash, Zsh, and Fish with PTYs, including profile
-visibility, path restoration, and every installed adapter executable.
+Repeat `--shell` to test installed interactive shells after direct commands. The
+three-shell example verifies Bash, Zsh, and Fish with PTYs, profile visibility,
+path restoration, and installed adapters.
 
 The smoke script is also a pre-commit hook. Keep the sandbox running when making
 commits; this remains a local integration check rather than part of the offline
 unit-test suite.
 
-GitHub Actions separately runs a lightweight shell contract on Bash, Zsh, and
-Fish, including history persistence. It uses generated fake client executables instead of installing Kafka,
-kcat, Kaskade, Java, or Docker. The Python test owns the assertions and reads a
-temporary JSON-lines event log containing command names, safe arguments, config
-file modes, and session metadata. Logs are deleted with the test directory and
-sanitized output is shown only when a contract fails.
+GitHub Actions tests Bash, Zsh, Fish, and history persistence with generated fake
+clients—no Kafka, kcat, Kaskade, Java, or Docker. Python assertions read a
+temporary safe-metadata log, deleted afterward and shown only on failure.
 
 Run that contract independently from the normal unit suite with:
 
@@ -185,15 +172,13 @@ uv run kantrip exec sandbox -- kafka-console-consumer \
   --topic kantrip-development --from-beginning --max-messages 2
 ```
 
-The examples above use Confluent Platform's unsuffixed command names. When using
-an Apache Kafka Unix archive, use the corresponding `.sh` executable, such as
-`kafka-topics.sh` or `kafka-console-consumer.sh`.
+Examples use Confluent's unsuffixed names; Apache Kafka archives use `.sh`, such
+as `kafka-topics.sh`.
 
 ### Schema Registry adapter workflow
 
-The sandbox profile above also supports the Confluent Avro, JSON Schema, and
-Protobuf console clients. Create one topic per wire format so each consumer sees
-only records encoded with its expected serializer:
+For Confluent Avro, JSON Schema, and Protobuf clients, use one topic per wire
+format:
 
 ```bash
 for topic in kantrip-avro kantrip-json-schema kantrip-protobuf; do
@@ -223,26 +208,23 @@ uv run kantrip exec sandbox -- kafka-protobuf-console-consumer \
   --topic kantrip-protobuf --from-beginning --max-messages 1
 ```
 
-kcat 1.7+ can decode the Avro topic without an explicit `-r`; Kantrip injects
-the profile's Schema Registry URL when an Avro `-s` deserializer is selected:
+kcat 1.7+ receives the registry URL when an Avro `-s` deserializer is selected:
 
 ```bash
 uv run kantrip exec sandbox -- kcat \
   -C -t kantrip-avro -o beginning -e -s value=avro
 ```
 
-Kaskade 5+ reads the same URL from the generated private `[registry]` section.
-Select its registry deserializer for Avro, JSON Schema, or Protobuf records:
+Kaskade 5+ reads that URL from its private `[registry]` section:
 
 ```bash
 uv run kantrip exec sandbox -- kaskade consumer \
   --topic kantrip-avro --earliest -v registry
 ```
 
-Use the same command with `--topic kantrip-json-schema` or
-`--topic kantrip-protobuf` to inspect the other registered formats.
+Change `--topic` to inspect the JSON Schema or Protobuf topics.
 
-Additional quick checks for the other adapters are:
+Other adapter checks:
 
 ```bash
 uv run kantrip exec sandbox -- kafka-consumer-groups --list
@@ -257,9 +239,8 @@ uv run kantrip exec sandbox -- kafka-topics --delete \
   --topic kantrip-development
 ```
 
-The sandbox does not configure a Kafka authorizer, so use `--version` to validate
-the ACL adapter there. Listing or changing ACLs requires a cluster with an
-authorizer and a suitably authorized principal.
+The sandbox has no authorizer, so validate ACLs with `--version`; ACL operations
+require an authorized principal on a configured cluster.
 
 ## Architecture and security
 
@@ -270,10 +251,9 @@ authorizer and a suitably authorized principal.
 
 ## Release
 
-Git tags are the only release-version source. GitHub Releases are the canonical
-release history; never edit a static package version or maintained changelog.
-Use the reusable [release checklist](RELEASE_CHECKLIST.md) to record preparation
-and post-release evidence for each candidate.
+Git tags define versions and GitHub Releases hold history; do not maintain a
+static version or changelog. Record each candidate with the
+[release checklist](RELEASE_CHECKLIST.md).
 
 Before releasing, ensure `main` is current, clean, and passing:
 
@@ -288,9 +268,8 @@ uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
 
-Create and push an annotated stable (`vMAJOR.MINOR.PATCH`) or PEP 440
-pre-release tag (with an `aN`, `bN`, or `rcN` suffix). The protected release
-workflow validates the tag against `main`, builds once, verifies and installs the
-wheel, generates Conventional Commit notes, attests the distributions, waits for
-approval, publishes through PyPI trusted publishing, and creates the GitHub
-Release from the same artifacts. Kantrip has no Docker release job.
+Push an annotated stable tag (`vMAJOR.MINOR.PATCH`) or PEP 440 pre-release tag
+(`aN`, `bN`, or `rcN`). The protected workflow validates it against `main`,
+builds and verifies once, installs the wheel, generates Conventional Commit
+notes, attests artifacts, awaits approval, publishes through PyPI trusted
+publishing, and creates the GitHub Release. Kantrip has no Docker release job.

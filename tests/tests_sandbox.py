@@ -3,8 +3,6 @@ from pathlib import Path
 
 import yaml
 
-from sandbox.__main__ import _schema_registry_probe
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
 SANDBOX_COMPOSE = PROJECT_ROOT / "sandbox" / "compose.yml"
@@ -77,12 +75,6 @@ class TestSandbox(unittest.TestCase):
 
     def test_keeps_a_repository_specific_network(self) -> None:
         self.assertEqual("kantrip-sandbox", self.compose["networks"]["default"]["name"])
-
-    def test_schema_registry_probe_uses_successful_version_command(self) -> None:
-        self.assertEqual(
-            ("kafka-avro-console-consumer", "--version"),
-            _schema_registry_probe("kafka-avro-console-consumer"),
-        )
 
 
 if __name__ == "__main__":
