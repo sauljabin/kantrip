@@ -95,7 +95,8 @@ or exported pre-release checkout can bootstrap before the first commit.
 The sandbox is a manual environment, not a test-fixture provider. Automated tests
 must not import it.
 
-Start its single-node plaintext Kafka cluster and Schema Registry:
+Start its single-node plaintext Kafka cluster, Confluent Schema Registry, and
+Apicurio Registry:
 
 ```bash
 docker compose --project-directory sandbox up -d
@@ -107,9 +108,11 @@ Stop it and remove its volumes:
 docker compose --project-directory sandbox down -v
 ```
 
-Kafka is available at `localhost:9092`; Schema Registry is available at
-`http://localhost:8081`.
-The pinned Confluent image version lives in `sandbox/.env`.
+Kafka is available at `localhost:9092`; Confluent Schema Registry is available
+at `http://localhost:8081`; Apicurio's Confluent-compatible API is available at
+`http://localhost:8082/apis/ccompat/v7`, and its Core API is available at
+`http://localhost:8082/apis/registry/v3`. Pinned image versions live in
+`sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
 adapter smoke checks:
@@ -120,9 +123,12 @@ uv run --locked python -m sandbox \
   --shell bash --shell zsh --shell fish
 uv run --locked python -m sandbox my-topic \
   --profile sandbox --bootstrap-servers localhost:9092 --keep-topic
+uv run --locked python -m sandbox my-apicurio-topic \
+  --profile sandbox-apicurio \
+  --schema-registry-url http://localhost:8082/apis/ccompat/v7
 ```
 
-By default, the script checks Kafka and Schema Registry connectivity, creates
+By default, the script checks Kafka and Confluent Schema Registry connectivity, creates
 and lists a randomized topic, produces and consumes a record, and exercises the
 groups, configs, ACLs, broker API, and all six Schema Registry console adapters.
 It also lists the topic with kcat, validates the Kaskade adapter, and deletes the
@@ -130,6 +136,9 @@ topic. At least one executable variant for every Apache Kafka command and all
 six Confluent Schema Registry console commands must be installed. The check uses
 styled emoji output in a terminal and text status labels when styling is
 disabled, including in CI or when `--no-color` is passed.
+
+Pass Apicurio's Confluent-compatible URL as shown above to run the same adapter
+workflow against Apicurio instead.
 
 Repeat `--shell` to add real interactive-subshell checks after the explicit
 command pass. A requested shell is required to be installed; the three-shell
