@@ -98,14 +98,15 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
     table = Table(
         box=box.HORIZONTALS,
         border_style="muted",
+        expand=True,
         header_style="heading",
         show_edge=False,
         show_lines=True,
     )
-    table.add_column("Profile", style="primary", no_wrap=True)
+    table.add_column("Profile", style="secondary", no_wrap=True)
     table.add_column("Description", style="foreground")
     for name, profile in profiles.items():
-        table.add_row(name, str(profile.get("description", "")))
+        table.add_row(name, str(profile.get("description") or "-"))
     return table
 
 

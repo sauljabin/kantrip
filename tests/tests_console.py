@@ -75,9 +75,17 @@ class TestConsole(unittest.TestCase):
         output = stream.getvalue()
         separators = [line for line in output.splitlines() if line and set(line) == {"─"}]
         self.assertEqual(3, len(separators))
+        self.assertTrue(all(len(line) == console.width for line in separators))
+        self.assertRegex(output, r"local\s+-")
+        self.assertRegex(output, r"sandbox\s+-")
         self.assertNotIn("│", output)
         self.assertNotIn("╭", output)
         self.assertNotIn("╰", output)
+
+        table = create_profile_table(profiles)
+        self.assertTrue(table.expand)
+        self.assertEqual("heading", table.header_style)
+        self.assertEqual("secondary", table.columns[0].style)
 
     def test_yaml_syntax_uses_color(self) -> None:
         stream = TerminalBuffer()
