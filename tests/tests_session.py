@@ -1,6 +1,7 @@
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -314,6 +315,94 @@ class TestProfileSession(unittest.TestCase):
         directory = observed["directory"]
         assert isinstance(directory, Path)
         self.assertFalse(directory.exists())
+
+    def test_zsh_restores_shims_after_loading_user_configuration(self) -> None:
+        observed: dict[str, object] = {}
+
+        def find_executable(executable: str, **options: object) -> str | None:
+            if executable == "/bin/zsh":
+                return executable
+            if executable == "kafka-topics":
+                return "/opt/kafka/bin/kafka-topics"
+            return None
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            startup_path = Path(environment["ZDOTDIR"]) / ".zshrc"
+            observed["arguments"] = arguments
+            observed["environment"] = environment
+            observed["contents"] = startup_path.read_text(encoding="utf-8")
+            observed["mode"] = stat.S_IMODE(startup_path.stat().st_mode)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with tempfile.TemporaryDirectory() as home:
+            user_startup = Path(home) / ".zshrc"
+            user_startup.write_text('export PATH="/opt/homebrew/bin:$PATH"\n', encoding="utf-8")
+            with (
+                patch("kantrip.session.shutil.which", side_effect=find_executable),
+                patch("kantrip.adapters.shutil.which", side_effect=find_executable),
+                patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            ):
+                run_profile_session(
+                    "local",
+                    self.profile,
+                    [],
+                    environment={"SHELL": "/bin/zsh", "PATH": "/bin", "HOME": home},
+                )
+
+        self.assertEqual(["/bin/zsh"], observed["arguments"])
+        contents = observed["contents"]
+        assert isinstance(contents, str)
+        source_position = contents.index(f"source {user_startup}")
+        path_position = contents.index("export PATH=")
+        self.assertLess(source_position, path_position)
+        self.assertIn("/bin", contents)
+        self.assertTrue(contents.endswith("rehash\n"))
+        self.assertEqual(0o600, observed["mode"])
+
+    def test_bash_uses_a_session_rcfile_that_restores_shims_last(self) -> None:
+        observed: dict[str, object] = {}
+
+        def find_executable(executable: str, **options: object) -> str | None:
+            if executable == "/bin/bash":
+                return executable
+            if executable == "kaskade":
+                return "/opt/bin/kaskade"
+            return None
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            observed["arguments"] = arguments
+            startup_path = Path(arguments[-1])
+            observed["contents"] = startup_path.read_text(encoding="utf-8")
+            observed["mode"] = stat.S_IMODE(startup_path.stat().st_mode)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with tempfile.TemporaryDirectory() as home:
+            user_startup = Path(home) / ".bashrc"
+            user_startup.write_text('export PATH="/opt/homebrew/bin:$PATH"\n', encoding="utf-8")
+            with (
+                patch("kantrip.session.shutil.which", side_effect=find_executable),
+                patch("kantrip.adapters.shutil.which", side_effect=find_executable),
+                patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            ):
+                run_profile_session(
+                    "local",
+                    self.profile,
+                    [],
+                    environment={"SHELL": "/bin/bash", "PATH": "/bin", "HOME": home},
+                )
+
+        arguments = observed["arguments"]
+        assert isinstance(arguments, list)
+        self.assertEqual(["/bin/bash", "--rcfile"], arguments[:2])
+        contents = observed["contents"]
+        assert isinstance(contents, str)
+        source_position = contents.index(f"source {user_startup}")
+        path_position = contents.index("export PATH=")
+        self.assertLess(source_position, path_position)
+        self.assertTrue(contents.endswith("hash -r\n"))
+        self.assertEqual(0o600, observed["mode"])
 
     def test_missing_command_is_an_actionable_error(self) -> None:
         with (

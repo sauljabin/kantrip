@@ -91,6 +91,9 @@
   snapshot topics must be created with three replicas before the registry starts.
 - Reusable repository-script helpers belong in `scripts/__init__.py`; individual
   script modules remain focused on executable workflows.
+- The adapter smoke workflow lives in `sandbox.smoke`, requires a running sandbox
+  and locally installed clients, and runs as a pre-commit hook. It is not part of
+  the offline test suite or a packaged E2E suite.
 
 ## Verification
 

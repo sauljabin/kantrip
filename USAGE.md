@@ -168,7 +168,11 @@ exit
 ```
 
 The shims exist only inside that session and are removed on exit. Kantrip does
-not install the Kafka CLI or create persistent shell aliases.
+not install the Kafka CLI or create persistent shell aliases. For Zsh and Bash,
+Kantrip loads the user's normal interactive startup file through a private
+session startup file, then restores the shim directory to the front of `PATH`
+and clears the shell's command cache. This keeps Oh My Zsh, Homebrew, and other
+startup-time `PATH` configuration from bypassing the adapters.
 
 ### Kaskade
 

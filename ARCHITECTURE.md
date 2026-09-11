@@ -54,6 +54,12 @@ creates secret-bearing files with restrictive permissions from the first write,
 and removes them with the session. User-provided source files are never cleanup
 targets.
 
+Interactive Zsh and Bash sessions load the user's normal startup configuration
+through a session-owned startup file. The session restores its executable-shim
+directory at the front of `PATH` after that configuration loads and refreshes
+the shell command cache, preventing startup-time path management from selecting
+an unadapted executable.
+
 ## Secret handling and diagnostics
 
 Resolved secrets remain in memory only as long as necessary to prepare and run

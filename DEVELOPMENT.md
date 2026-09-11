@@ -57,7 +57,8 @@ uv run python -m scripts.banner
 
 Reusable script code belongs in `scripts/__init__.py`; individual modules are
 executable workflows. Tests and fixture utilities remain under their owning test
-suite, and manual-environment utilities remain under `sandbox`.
+suite, and manual-environment utilities remain under `sandbox`. The sandbox smoke
+script is intentionally separate from the offline test suite.
 
 ## Schema and application environment
 
@@ -119,6 +120,26 @@ registry starts, so `docker compose up -d` is the complete startup sequence.
 The initial topology is plaintext infrastructure only. Authentication work
 extends this one authoritative topology with synthetic TLS, SASL, OAuth, and
 identity-provider material instead of introducing unrelated Compose files.
+
+With the sandbox running and the supported clients installed locally, run the
+adapter smoke checks:
+
+```bash
+uv run --locked python -m sandbox.smoke
+uv run --locked python -m sandbox.smoke my-topic \
+  --profile sandbox --bootstrap-server localhost:19092 --keep-topic
+```
+
+By default, the script creates a randomized topic through the Kafka topics
+adapter, lists it with every installed `kafka-topics` executable variant and
+with kcat, validates the Kaskade adapter, and deletes the topic. Missing
+`kafka-topics`/`kafka-topics.sh` variants are reported and skipped when the other
+name is installed. The check uses styled emoji output in a terminal and disables
+color automatically in CI or when `--no-color` is passed.
+
+The smoke script is also a pre-commit hook. Keep the sandbox running when making
+commits; this remains a local integration check rather than part of the offline
+unit-test suite.
 
 Create a profile for the sandbox and try the supported Kafka clients:
 
