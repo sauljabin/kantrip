@@ -76,9 +76,7 @@
 
 ## Tests, Scripts, and Sandbox
 
-- Unit tests and their fixtures live in `tests/unit`. End-to-end tests and any
-  E2E-only fixtures live in `tests/e2e` and provision their own disposable
-  services. Keep unit tests offline.
+- Unit tests and their fixtures live in `tests/unit` and remain offline.
 - The manual environment lives entirely in `sandbox`, including Compose files,
   versions, generated synthetic material, and population tools. Tests may read
   pinned image versions and assert Compose structure, but must not import sandbox
@@ -96,7 +94,6 @@ Run these checks for code, environment, schema, tooling, or documentation change
 ```text
 uv run --locked python -m scripts.analyze
 uv run --locked python -m scripts.tests
-uv run --locked python -m scripts.tests --e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```

@@ -16,7 +16,7 @@ Closes #
 
 - [ ] `uv run --locked python -m scripts.analyze`
 - [ ] `uv run --locked python -m scripts.tests`
-- [ ] Relevant manual or end-to-end checks
+- [ ] Relevant manual checks
 
 ## Security and compatibility
 

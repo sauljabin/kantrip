@@ -43,11 +43,10 @@ Run type, formatting, lint, spelling, and workflow analysis:
 uv run python -m scripts.analyze
 ```
 
-Run offline unit tests and self-contained E2E tests separately:
+Run the offline unit tests:
 
 ```bash
 uv run python -m scripts.tests
-uv run python -m scripts.tests --e2e
 ```
 
 Generate the deterministic Rich README banner:
@@ -121,6 +120,21 @@ The initial topology is plaintext infrastructure only. Authentication work
 extends this one authoritative topology with synthetic TLS, SASL, OAuth, and
 identity-provider material instead of introducing unrelated Compose files.
 
+Create a profile for the sandbox and try the supported Kafka clients:
+
+```bash
+uv run kantrip add sandbox --bootstrap-server localhost:19092
+
+uv run kantrip exec sandbox -- kcat -L
+uv run kantrip exec sandbox -- kafka-topics --list
+uv run kantrip exec sandbox -- kafka-topics.sh --list
+```
+
+The final command is useful with Apache Kafka distributions that retain the
+`.sh` executable suffix. Kantrip supplies the selected bootstrap servers and
+temporary client configuration, so do not repeat `--bootstrap-server`, `-F`, or
+`--command-config` in these commands.
+
 ## Architecture and security
 
 - Stable design decisions: [`ARCHITECTURE.md`](ARCHITECTURE.md)
@@ -141,7 +155,6 @@ git status --short
 uv lock --check
 uv run --locked python -m scripts.analyze
 uv run --locked python -m scripts.tests
-uv run --locked python -m scripts.tests --e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
