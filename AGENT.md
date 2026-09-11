@@ -68,6 +68,7 @@
   Redact secret references as well as resolved secret values in profile output.
 - Normal command output goes to stdout and diagnostics go to stderr. Rich
   styling must respect `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output.
+  Status output uses text labels instead of emoji whenever styling is disabled.
 
 ## Environment and Schemas
 
