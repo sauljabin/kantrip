@@ -37,6 +37,24 @@
 - Keep interfaces portable enough for later Windows support without claiming
   Windows compatibility in the MVP.
 
+## Client Support
+
+- kcat is the first supported external CLI. Sessions provide its generated
+  librdkafka properties through `KCAT_CONFIG`; do not create aliases or place
+  configuration values in command arguments.
+- `kafka-topics` and `kafka-topics.sh` inject `--bootstrap-server` and a generated
+  Java `--command-config`. Interactive subshells expose session-owned executable
+  shims for installed variants; never create persistent aliases.
+- Kaskade currently receives a private INI file through its command-level
+  `--config-file` option for `admin` and `consumer`. Do not set or assume a
+  Kaskade-specific environment variable until Kaskade implements that contract.
+- Reject `kantrip exec` when `KANTRIP_SESSION_ID` already identifies an active
+  parent session. Sessions must never be nested.
+- Temporary Zsh startup indirection must preserve and load the user's normal
+  history file; session cleanup must not discard interactive command history.
+- Until credential-backed sessions are implemented, execution accepts only
+  profiles with `transport: plaintext` and `auth.type: none`.
+
 ## Secrets and Diagnostics
 
 - Long-lived secrets belong only in an approved operating-system credential
@@ -54,6 +72,9 @@
 - The machine-readable profile schema lives in `schemas/`; examples live in
   `examples/`; test-owned fixtures live under their owning suite. Keep them
   synchronized.
+- `kantrip add` creates configuration when necessary, and profile additions and
+  removals are validated and atomic. Adding an existing profile must not overwrite
+  it; listing absent configuration behaves as an empty profile collection.
 - Application-facing values use `KAFKA_*` and `SCHEMA_REGISTRY_*`. Reserve
   `KANTRIP_*` for profile and session metadata owned by Kantrip.
 - The documented environment is injected only into supervised child processes.
@@ -62,14 +83,19 @@
 
 ## Tests, Scripts, and Sandbox
 
-- Unit tests and their fixtures live in `tests/unit`. End-to-end tests and any
-  E2E-only fixtures live in `tests/e2e` and provision their own disposable
-  services. Keep unit tests offline.
+- Tests and their domain-owned fixtures live in `tests` and remain offline.
 - The manual environment lives entirely in `sandbox`, including Compose files,
-  versions, generated synthetic material, and population tools. Tests must not
-  import sandbox code or assets, and sandbox code must not import test fixtures.
+  versions, generated synthetic material, and population tools. Tests may read
+  pinned image versions and assert Compose structure, but must not import sandbox
+  executable code or use sandbox data as test fixtures. Sandbox code must not
+  import test fixtures.
+- Keep the sandbox's Apicurio Registry on KafkaSQL storage. Its journal and
+  snapshot topics must be created with three replicas before the registry starts.
 - Reusable repository-script helpers belong in `scripts/__init__.py`; individual
   script modules remain focused on executable workflows.
+- The adapter smoke workflow lives in `sandbox.smoke`, requires a running sandbox
+  and locally installed clients, and runs as a pre-commit hook. It is not part of
+  the offline test suite or a packaged E2E suite.
 
 ## Verification
 
@@ -78,7 +104,6 @@ Run these checks for code, environment, schema, tooling, or documentation change
 ```text
 uv run --locked python -m scripts.analyze
 uv run --locked python -m scripts.tests
-uv run --locked python -m scripts.tests --e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```

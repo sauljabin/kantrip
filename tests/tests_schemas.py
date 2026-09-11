@@ -5,7 +5,7 @@ from pathlib import Path
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile-v1.schema.json"
 PROFILE_FIXTURE = Path(__file__).parent / "profiles" / "config-v1.yaml"
 

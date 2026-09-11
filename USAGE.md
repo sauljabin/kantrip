@@ -1,31 +1,206 @@
 # Kantrip Usage
 
-Kantrip is in pre-release development. The current CLI exposes help, version,
-and global presentation behavior:
-
-```bash
-kantrip --help
-kantrip --version
-kantrip --no-color --help
-```
-
-Profile, connectivity, execution, and cleanup commands documented below define
-the planned workflow but are not implemented yet.
-
-## Planned profile workflow
+Kantrip is in pre-release development. The current CLI can manage plaintext
+profiles and run profile sessions:
 
 ```bash
 kantrip add local
 kantrip list
-kantrip use local
-kantrip current
 kantrip show local
-kantrip ping local
-kantrip exec local -- java -jar application.jar
+kantrip exec local -- kcat -L
+```
+
+Persistent selection, connectivity checks, and authenticated sessions are not
+implemented yet.
+
+## First-run configuration
+
+Add a plaintext profile using the default local broker:
+
+```bash
+kantrip add local
+```
+
+Choose one or more broker addresses when needed:
+
+```bash
+kantrip add development \
+  --bootstrap-server kafka-1.example.com:9092 \
+  --bootstrap-server kafka-2.example.com:9092
+```
+
+`add` follows the documented configuration lookup order, creates the file when
+necessary, and refuses to overwrite an existing profile. Remove a profile with:
+
+```bash
+kantrip remove development
+```
+
+`kantrip list` prints no profile rows and exits successfully when configuration
+does not exist or contains no profiles. Existing files are validated automatically
+whenever Kantrip reads or updates them.
+
+## Profile workflow
+
+```bash
+kantrip list
+kantrip show local
+kantrip exec local -- kcat -L
 ```
 
 Omitting the command after `kantrip exec PROFILE` opens an interactive supervised
-subshell. Kantrip never exports a selected profile into the parent shell.
+subshell using `SHELL`, or `/bin/sh` when `SHELL` is unset:
+
+```bash
+kantrip exec local
+kantrip current
+kcat -L
+kafka-topics --list
+exit
+```
+
+Kantrip never exports a selected profile into the parent shell. Background or
+detached child processes are not supported because they can outlive the temporary
+session. Sessions cannot be nested: exit the current `kantrip exec` subshell
+before starting another one.
+
+`kantrip current` prints the active profile name inside the session. Outside a
+session it reports that no profile is active. This is the command equivalent of
+reading `KANTRIP_PROFILE` directly.
+
+## Displaying the active profile in your prompt
+
+Prompt integrations should read `KANTRIP_PROFILE`. It is available to an
+interactive shell opened by `kantrip exec PROFILE` and disappears when that
+session exits. Prompt code does not need to invoke Kantrip repeatedly.
+
+### Starship
+
+Add a custom module to `~/.config/starship.toml`:
+
+```toml
+[custom.kantrip]
+command = 'printf %s "$KANTRIP_PROFILE"'
+when = 'test -n "$KANTRIP_PROFILE"'
+format = '[kantrip:$output]($style) '
+style = 'bold purple'
+```
+
+Starship's default prompt includes custom modules. If you define a custom global
+`format`, add `${custom.kantrip}` where the profile should appear.
+
+### Oh My Zsh
+
+For an Oh My Zsh theme that uses the standard `PROMPT` variable, add this after
+`source $ZSH/oh-my-zsh.sh` in `~/.zshrc`:
+
+```zsh
+kantrip_prompt_info() {
+  [[ -n ${KANTRIP_PROFILE:-} ]] || return
+  print -P -n '%F{magenta}kantrip:%f%F{cyan}'
+  print -rn -- "$KANTRIP_PROFILE"
+  print -P -n '%f '
+}
+
+setopt prompt_subst
+PROMPT='$(kantrip_prompt_info)'"$PROMPT"
+```
+
+Themes that replace `PROMPT` after this code may need the snippet moved to the
+end of `~/.zshrc`.
+
+### Powerlevel10k
+
+Define a custom segment in `~/.p10k.zsh`:
+
+```zsh
+function prompt_kantrip() {
+  [[ -n ${KANTRIP_PROFILE:-} ]] || return
+  p10k segment -f 5 -t "kantrip:${KANTRIP_PROFILE}"
+}
+```
+
+Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
+`POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file. Start a new shell, run
+`kantrip exec local`, and the segment will be visible until that subshell exits.
+
+### kcat
+
+Kantrip generates a private librdkafka properties file for each session and sets
+`KCAT_CONFIG` to its path. kcat reads this variable natively, so Kantrip does not
+create an alias or rewrite kcat's arguments.
+
+```bash
+kantrip exec local -- kcat -L
+kantrip exec local -- kcat -C -t orders
+kantrip exec local -- kcat -P -t orders
+```
+
+Kantrip reports a command-not-found error when an explicit executable is missing.
+It does not install external tools. The kcat `-F` option is rejected because it
+would override the selected profile.
+
+Only profiles with `transport: plaintext` and `auth.type: none` can currently be
+executed. Other valid profiles can still be listed and displayed safely.
+
+### Kafka topics
+
+Both executable names shipped by common Apache Kafka distributions are
+supported:
+
+```bash
+kantrip exec local -- kafka-topics --list
+kantrip exec local -- kafka-topics.sh --describe --topic orders
+```
+
+Kantrip injects the selected profile through `--bootstrap-server` and a private
+Java `--command-config` file. Supplying either connection option explicitly is
+rejected because it would override the selected profile.
+
+An interactive session creates temporary executable shims for whichever variants
+are installed before the session starts, so the same commands work without
+repeating `kantrip exec`:
+
+```bash
+kantrip exec local
+kafka-topics --list
+exit
+```
+
+The shims exist only inside that session and are removed on exit. Kantrip does
+not install the Kafka CLI or create persistent shell aliases. For Zsh and Bash,
+Kantrip loads the user's normal interactive startup file through a private
+session startup file, then restores the shim directory to the front of `PATH`
+and clears the shell's command cache. This keeps Oh My Zsh, Homebrew, and other
+startup-time `PATH` configuration from bypassing the adapters. Zsh sessions
+restore and load the user's normal history file instead of writing command
+history into the temporary session directory.
+
+### Kaskade
+
+Kaskade's current `admin` and `consumer` commands accept an explicitly selected
+INI client file. Kantrip generates that private file and inserts
+`--config-file` after the Kaskade command:
+
+```bash
+kantrip exec local -- kaskade admin
+kantrip exec local -- kaskade consumer --topic orders
+```
+
+For example, the first command is prepared conceptually as:
+
+```bash
+kaskade admin --config-file /tmp/kantrip-SESSION/kaskade.ini
+```
+
+The temporary INI contains the selected profile's Kafka client properties.
+Explicit `-b`/`--bootstrap-servers`, `--kafka`, and `--config-file` options are
+rejected because they could override that profile. Interactive sessions expose a
+temporary `kaskade` shim using the same behavior.
+
+This adapter is a compatibility bridge for Kaskade's current CLI. It does not set
+a Kaskade-specific environment variable. Kantrip can move to direct environment
+integration after Kaskade defines and implements that contract.
 
 ## Profile configuration
 
@@ -118,6 +293,10 @@ disabled when:
 - `NO_COLOR` is present in the environment.
 - `TERM=dumb`.
 - The destination stream is not a terminal.
+
+`kantrip list` displays configured profiles in a table with styled headers and
+profile names. `kantrip show PROFILE` syntax-highlights its redacted YAML. Both
+remain readable without ANSI color when styling is disabled.
 
 Secret classification occurs before values reach Rich. Styling never changes
 exit statuses or becomes necessary to interpret an error.

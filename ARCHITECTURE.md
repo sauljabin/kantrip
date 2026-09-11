@@ -31,6 +31,8 @@ root.
 
 Foreground process supervision is the supported execution model. A child that
 detaches itself can outlive session cleanup and is therefore unsupported.
+Kantrip rejects nested sessions when the child environment already contains its
+active session marker.
 
 ## Child environment
 
@@ -51,6 +53,14 @@ shims. Kantrip materializes those artifacts only inside the session directory,
 creates secret-bearing files with restrictive permissions from the first write,
 and removes them with the session. User-provided source files are never cleanup
 targets.
+
+Interactive Zsh and Bash sessions load the user's normal startup configuration
+through a session-owned startup file. The session restores its executable-shim
+directory at the front of `PATH` after that configuration loads and refreshes
+the shell command cache, preventing startup-time path management from selecting
+an unadapted executable. Zsh history remains attached to the user's normal
+history file; the temporary startup directory is never used as durable command
+history storage.
 
 ## Secret handling and diagnostics
 

@@ -1,0 +1,101 @@
+import io
+import unittest
+
+from kantrip.console import (
+    ARCANA_COLORS,
+    ARCANA_THEME,
+    colors_enabled,
+    create_console,
+    create_profile_table,
+    create_yaml_syntax,
+)
+
+
+class TerminalBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+class TestConsole(unittest.TestCase):
+    def test_arcana_theme_defines_every_semantic_color(self) -> None:
+        for name, color in ARCANA_COLORS.items():
+            with self.subTest(name=name):
+                self.assertTrue(color.startswith("#"))
+        self.assertIn("primary", ARCANA_THEME.styles)
+        self.assertIn("error", ARCANA_THEME.styles)
+
+    def test_terminal_color_can_be_disabled_explicitly(self) -> None:
+        stream = TerminalBuffer()
+
+        self.assertFalse(colors_enabled(stream, no_color=True, environment={}))
+
+    def test_no_color_environment_disables_terminal_color(self) -> None:
+        stream = TerminalBuffer()
+
+        self.assertFalse(colors_enabled(stream, environment={"NO_COLOR": ""}))
+
+    def test_non_terminal_output_has_no_escape_sequences(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+
+        console.print("failure", style="error")
+
+        self.assertEqual("failure\n", stream.getvalue())
+
+    def test_terminal_output_uses_arcana_styles(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        console.print("magic", style="primary")
+
+        self.assertIn("\x1b[", stream.getvalue())
+
+    def test_profile_table_uses_color_and_contains_profile_data(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        console.print(create_profile_table({"local": {"description": "Local development"}}))
+
+        self.assertIn("\x1b[", stream.getvalue())
+        self.assertIn("Profile", stream.getvalue())
+        self.assertIn("local", stream.getvalue())
+        self.assertIn("Local development", stream.getvalue())
+
+    def test_profile_table_has_spacing_without_borders_or_lines(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+        profiles = {
+            "local": {},
+            "test": {"description": "test"},
+            "sandbox": {},
+        }
+
+        console.print(create_profile_table(profiles))
+
+        output = stream.getvalue()
+        self.assertRegex(output, r"local\s+-")
+        self.assertRegex(output, r"sandbox\s+-")
+        self.assertNotIn("─", output)
+        self.assertNotIn("│", output)
+        self.assertNotIn("╭", output)
+        self.assertNotIn("╰", output)
+
+        table = create_profile_table(profiles)
+        self.assertFalse(table.expand)
+        self.assertEqual("heading", table.header_style)
+        self.assertEqual("secondary", table.columns[0].style)
+        self.assertEqual(12, table.columns[0].min_width)
+        self.assertEqual(20, table.columns[1].min_width)
+
+    def test_yaml_syntax_uses_color(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        console.print(create_yaml_syntax("transport: plaintext\n"), end="")
+
+        self.assertIn("\x1b[", stream.getvalue())
+        self.assertIn("transport", stream.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

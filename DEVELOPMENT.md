@@ -43,11 +43,10 @@ Run type, formatting, lint, spelling, and workflow analysis:
 uv run python -m scripts.analyze
 ```
 
-Run offline unit tests and self-contained E2E tests separately:
+Run the offline unit tests:
 
 ```bash
 uv run python -m scripts.tests
-uv run python -m scripts.tests --e2e
 ```
 
 Generate the deterministic Rich README banner:
@@ -58,12 +57,13 @@ uv run python -m scripts.banner
 
 Reusable script code belongs in `scripts/__init__.py`; individual modules are
 executable workflows. Tests and fixture utilities remain under their owning test
-suite, and manual-environment utilities remain under `sandbox`.
+suite, and manual-environment utilities remain under `sandbox`. The sandbox smoke
+script is intentionally separate from the offline test suite.
 
 ## Schema and application environment
 
 The profile JSON Schema lives in `schemas/`. Synthetic user-facing examples live
-in `examples/`. Test-owned fixture copies live under `tests/unit` and must never
+in `examples/`. Test-owned fixture copies live under `tests` and must never
 contain real credentials or infrastructure details.
 
 Application environment variables are documented in `USAGE.md`. When a variable
@@ -94,8 +94,8 @@ or exported pre-release checkout can bootstrap before the first commit.
 The sandbox is a manual environment, not a test-fixture provider. Automated tests
 must not import it.
 
-Start its three-node Kafka cluster, Apicurio Registry, and Confluent Schema
-Registry:
+Start its three-node Kafka cluster, Kafka-backed Apicurio Registry, and Confluent
+Schema Registry:
 
 ```bash
 docker compose --project-directory sandbox up -d
@@ -110,11 +110,53 @@ docker compose --project-directory sandbox down -v
 Kafka is available at `localhost:19092`, `localhost:29092`, and
 `localhost:39092`. Confluent Schema Registry is at `http://localhost:18081` and
 Apicurio's compatibility API is at `http://localhost:18082/apis/ccompat/v7`.
-Pinned image versions live in `sandbox/.env`.
+Its native v3 API is at `http://localhost:18082/apis/registry/v3`. Pinned image
+versions live in `sandbox/.env`.
+
+Apicurio uses its KafkaSQL storage backend. The one-shot `apicurio-topics`
+service creates its journal and snapshot topics with three replicas before the
+registry starts, so `docker compose up -d` is the complete startup sequence.
 
 The initial topology is plaintext infrastructure only. Authentication work
 extends this one authoritative topology with synthetic TLS, SASL, OAuth, and
 identity-provider material instead of introducing unrelated Compose files.
+
+With the sandbox running and the supported clients installed locally, run the
+adapter smoke checks:
+
+```bash
+uv run --locked python -m sandbox.smoke
+uv run --locked python -m sandbox.smoke my-topic \
+  --profile sandbox --bootstrap-server localhost:19092 --keep-topic
+```
+
+By default, the script creates a randomized topic through the Kafka topics
+adapter, lists it with every installed `kafka-topics` executable variant and
+with kcat, validates the Kaskade adapter, and deletes the topic. Missing
+`kafka-topics`/`kafka-topics.sh` variants are reported and skipped when the other
+name is installed. The check uses styled emoji output in a terminal and disables
+color automatically in CI or when `--no-color` is passed.
+
+The smoke script is also a pre-commit hook. Keep the sandbox running when making
+commits; this remains a local integration check rather than part of the offline
+unit-test suite.
+
+Create a profile for the sandbox and try the supported Kafka clients:
+
+```bash
+uv run kantrip add sandbox --bootstrap-server localhost:19092
+
+uv run kantrip exec sandbox -- kcat -L
+uv run kantrip exec sandbox -- kafka-topics --list
+uv run kantrip exec sandbox -- kafka-topics.sh --list
+uv run kantrip exec sandbox -- kaskade admin
+uv run kantrip exec sandbox -- kaskade consumer --topic orders
+```
+
+The `kafka-topics.sh` form is useful with Apache Kafka distributions that retain
+the executable suffix. Kantrip supplies the selected bootstrap servers and
+temporary client configuration, so do not repeat `--bootstrap-server`, `-F`,
+`--command-config`, or Kaskade connection options in these commands.
 
 ## Architecture and security
 
@@ -136,7 +178,6 @@ git status --short
 uv lock --check
 uv run --locked python -m scripts.analyze
 uv run --locked python -m scripts.tests
-uv run --locked python -m scripts.tests --e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
