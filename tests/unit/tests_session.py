@@ -17,6 +17,7 @@ class TestProfileSession(unittest.TestCase):
                 "auth": {"type": "none"},
                 "properties": {
                     "common": {"client.id": "kantrip"},
+                    "java": {"request.timeout.ms": 30000},
                     "librdkafka": {"enable.idempotence": True},
                 },
             }
@@ -71,6 +72,113 @@ class TestProfileSession(unittest.TestCase):
             run_profile_session("local", self.profile, [], environment={"SHELL": sys.executable})
 
         self.assertEqual([sys.executable], run.call_args.args[0])
+
+    def test_adapts_both_kafka_topics_executable_names(self) -> None:
+        for executable in ("kafka-topics", "kafka-topics.sh"):
+            with self.subTest(executable=executable):
+                observed: dict[str, object] = {}
+
+                def inspect_run(
+                    arguments: list[str],
+                    *,
+                    _observed: dict[str, object] = observed,
+                    **options: object,
+                ) -> subprocess.CompletedProcess:
+                    environment = options["env"]
+                    assert isinstance(environment, dict)
+                    config_path = Path(environment["KAFKA_JAVA_CONFIG_FILE"])
+                    _observed["arguments"] = arguments
+                    _observed["contents"] = config_path.read_text(encoding="utf-8")
+                    _observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                with (
+                    patch("kantrip.session.shutil.which", return_value=f"/opt/kafka/{executable}"),
+                    patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                ):
+                    run_profile_session(
+                        "local", self.profile, [executable, "--list"], environment={}
+                    )
+
+                arguments = observed["arguments"]
+                assert isinstance(arguments, list)
+                self.assertEqual(
+                    [
+                        executable,
+                        "--bootstrap-server",
+                        "localhost:9092,localhost:9093",
+                        "--command-config",
+                    ],
+                    arguments[:4],
+                )
+                self.assertEqual("kafka.properties", Path(arguments[4]).name)
+                self.assertEqual(["--list"], arguments[5:])
+                self.assertEqual(
+                    "bootstrap.servers=localhost:9092,localhost:9093\n"
+                    "client.id=kantrip\n"
+                    "request.timeout.ms=30000\n"
+                    "security.protocol=PLAINTEXT\n",
+                    observed["contents"],
+                )
+                self.assertEqual(0o600, observed["mode"])
+
+    def test_kafka_topics_cannot_override_profile_connection_options(self) -> None:
+        for option in (
+            "--bootstrap-server",
+            "--bootstrap-server=other:9092",
+            "--command-config",
+            "--command-config=other.properties",
+        ):
+            with (
+                self.subTest(option=option),
+                patch("kantrip.session.shutil.which", return_value="/opt/kafka/kafka-topics"),
+                self.assertRaisesRegex(SessionError, "cannot override"),
+            ):
+                run_profile_session("local", self.profile, ["kafka-topics", option], environment={})
+
+    def test_interactive_shell_contains_kafka_topics_shims(self) -> None:
+        observed: dict[str, object] = {}
+
+        def find_executable(executable: str, **options: object) -> str | None:
+            if executable == sys.executable:
+                return sys.executable
+            if executable in {"kafka-topics", "kafka-topics.sh"}:
+                return f"/opt/kafka/bin/{executable}"
+            return None
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            shim_directory = Path(environment["PATH"].split(":", 1)[0])
+            observed["directory"] = shim_directory
+            observed["shims"] = {
+                path.name: path.read_text(encoding="utf-8") for path in shim_directory.iterdir()
+            }
+            observed["modes"] = {
+                path.name: stat.S_IMODE(path.stat().st_mode) for path in shim_directory.iterdir()
+            }
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", side_effect=find_executable),
+            patch("kantrip.adapters.shutil.which", side_effect=find_executable),
+            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local", self.profile, [], environment={"SHELL": sys.executable, "PATH": "/bin"}
+            )
+
+        shims = observed["shims"]
+        assert isinstance(shims, dict)
+        self.assertEqual({"kafka-topics", "kafka-topics.sh"}, set(shims))
+        for name, contents in shims.items():
+            self.assertIn(f"exec /opt/kafka/bin/{name}", contents)
+            self.assertIn("--bootstrap-server localhost:9092,localhost:9093", contents)
+            self.assertIn("--command-config", contents)
+        self.assertEqual({"kafka-topics": 0o700, "kafka-topics.sh": 0o700}, observed["modes"])
+        directory = observed["directory"]
+        assert isinstance(directory, Path)
+        self.assertFalse(directory.exists())
 
     def test_missing_command_is_an_actionable_error(self) -> None:
         with (

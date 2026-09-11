@@ -55,6 +55,7 @@ subshell using `SHELL`, or `/bin/sh` when `SHELL` is unset:
 kantrip exec local
 kantrip current
 kcat -L
+kafka-topics --list
 exit
 ```
 
@@ -140,6 +141,33 @@ would override the selected profile.
 
 Only profiles with `transport: plaintext` and `auth.type: none` can currently be
 executed. Other valid profiles can still be listed and displayed safely.
+
+### Kafka topics
+
+Both executable names shipped by common Apache Kafka distributions are
+supported:
+
+```bash
+kantrip exec local -- kafka-topics --list
+kantrip exec local -- kafka-topics.sh --describe --topic orders
+```
+
+Kantrip injects the selected profile through `--bootstrap-server` and a private
+Java `--command-config` file. Supplying either connection option explicitly is
+rejected because it would override the selected profile.
+
+An interactive session creates temporary executable shims for whichever variants
+are installed before the session starts, so the same commands work without
+repeating `kantrip exec`:
+
+```bash
+kantrip exec local
+kafka-topics --list
+exit
+```
+
+The shims exist only inside that session and are removed on exit. Kantrip does
+not install the Kafka CLI or create persistent shell aliases.
 
 ## Profile configuration
 

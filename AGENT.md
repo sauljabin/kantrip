@@ -42,6 +42,9 @@
 - kcat is the first supported external CLI. Sessions provide its generated
   librdkafka properties through `KCAT_CONFIG`; do not create aliases or place
   configuration values in command arguments.
+- `kafka-topics` and `kafka-topics.sh` inject `--bootstrap-server` and a generated
+  Java `--command-config`. Interactive subshells expose session-owned executable
+  shims for installed variants; never create persistent aliases.
 - Until credential-backed sessions are implemented, execution accepts only
   profiles with `transport: plaintext` and `auth.type: none`.
 
@@ -75,9 +78,7 @@
 
 - Unit tests and their fixtures live in `tests/unit`. End-to-end tests and any
   E2E-only fixtures live in `tests/e2e` and provision their own disposable
-  services. CI must exercise the built wheel through its installed `kantrip`
-  entry point, including a real kcat produce/consume round trip. Keep unit tests
-  offline.
+  services. Keep unit tests offline.
 - The manual environment lives entirely in `sandbox`, including Compose files,
   versions, generated synthetic material, and population tools. Tests may read
   pinned image versions and assert Compose structure, but must not import sandbox

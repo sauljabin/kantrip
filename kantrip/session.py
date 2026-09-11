@@ -11,6 +11,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
+from kantrip.adapters import (
+    KAFKA_TOPICS_EXECUTABLES,
+    AdapterError,
+    create_subshell_shims,
+    prepare_command,
+)
+
 
 class SessionError(RuntimeError):
     """Raised when a profile session cannot be prepared or started."""
@@ -30,23 +37,47 @@ def run_profile_session(
 
     _validate_executable(executable, env)
     _validate_kcat_arguments(arguments)
-    kcat_properties = _kcat_properties(profile)
+    kcat_properties = _client_properties(profile, "librdkafka")
+    java_properties = _client_properties(profile, "java")
 
     session_id = secrets.token_hex(16)
     with tempfile.TemporaryDirectory(prefix=f"kantrip-{session_id}-") as directory:
         session_directory = Path(directory)
-        config_path = session_directory / "kcat.conf"
-        _write_private_file(config_path, _render_properties(kcat_properties))
+        kcat_config_path = session_directory / "kcat.conf"
+        java_config_path = session_directory / "kafka.properties"
+        _write_private_file(kcat_config_path, _render_properties(kcat_properties))
+        _write_private_file(java_config_path, _render_properties(java_properties))
 
         child_environment = env | {
             "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
-            "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(config_path),
+            "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
+            "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
             "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
             "KANTRIP_PROFILE": profile_name,
             "KANTRIP_SESSION_DIR": str(session_directory),
             "KANTRIP_SESSION_ID": session_id,
-            "KCAT_CONFIG": str(config_path),
+            "KCAT_CONFIG": str(kcat_config_path),
         }
+        try:
+            if command:
+                arguments = prepare_command(
+                    arguments,
+                    bootstrap_servers=kcat_properties["bootstrap.servers"],
+                    java_config_path=java_config_path,
+                )
+            else:
+                shim_directory = create_subshell_shims(
+                    session_directory / "bin",
+                    bootstrap_servers=kcat_properties["bootstrap.servers"],
+                    java_config_path=java_config_path,
+                    environment=env,
+                )
+                if shim_directory is not None:
+                    child_environment["PATH"] = (
+                        f"{shim_directory}{os.pathsep}{env.get('PATH', os.defpath)}"
+                    )
+        except AdapterError as error:
+            raise SessionError(str(error)) from error
         try:
             result = subprocess.run(arguments, env=child_environment, check=False)
         except OSError as error:
@@ -57,10 +88,16 @@ def run_profile_session(
 def _validate_executable(executable: str, environment: Mapping[str, str]) -> None:
     path = environment.get("PATH")
     if shutil.which(executable, path=path) is None:
-        if Path(executable).name in {"kcat", "kafkacat"}:
+        executable_name = Path(executable).name
+        if executable_name in {"kcat", "kafkacat"}:
             raise SessionError(
                 "command 'kcat' was not found; install it with 'brew install kcat' "
                 "on macOS or your Linux package manager"
+            )
+        if executable_name in KAFKA_TOPICS_EXECUTABLES:
+            raise SessionError(
+                f"command '{executable_name}' was not found; install the Apache Kafka CLI "
+                "and ensure its bin directory is on PATH"
             )
         raise SessionError(f"command '{executable}' was not found")
 
@@ -72,7 +109,7 @@ def _validate_kcat_arguments(arguments: Sequence[str]) -> None:
         raise SessionError("kcat's -F option cannot override the selected Kantrip profile")
 
 
-def _kcat_properties(profile: Mapping[str, Any]) -> dict[str, str]:
+def _client_properties(profile: Mapping[str, Any], client: str) -> dict[str, str]:
     kafka = profile["kafka"]
     if kafka["transport"] != "plaintext" or kafka["auth"]["type"] != "none":
         raise SessionError("only plaintext profiles without authentication are supported")
@@ -80,7 +117,7 @@ def _kcat_properties(profile: Mapping[str, Any]) -> dict[str, str]:
     configured = kafka.get("properties", {})
     properties = {
         str(key): _property_value(value)
-        for group in (configured.get("common", {}), configured.get("librdkafka", {}))
+        for group in (configured.get("common", {}), configured.get(client, {}))
         for key, value in group.items()
     }
     properties.update(
