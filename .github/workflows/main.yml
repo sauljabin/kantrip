@@ -91,7 +91,7 @@ jobs:
           CI: "1"
           KANTRIP_REQUIRED_SHELLS: bash,zsh,fish
           NO_COLOR: "1"
-        run: uv run --locked python -m unittest -v tests.shell_contract
+        run: uv run --locked python -m scripts.verify_shell_contract
 
   build:
     name: Package

@@ -1,4 +1,4 @@
-"""Exercise the adapter contract in real shells with generated fake clients."""
+"""Verify the adapter contract in real shells with generated fake clients."""
 
 import json
 import os
@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES
 from kantrip.config import add_profile
@@ -49,7 +50,7 @@ else:
 """
 
 
-class TestInteractiveShellContract(unittest.TestCase):
+class VerifyInteractiveShellContract(unittest.TestCase):
     maxDiff = None
 
     def test_bash_contract(self) -> None:
@@ -88,7 +89,7 @@ class TestInteractiveShellContract(unittest.TestCase):
             _write_startup(shell_name, home, environment)
 
             first_status, first_output = _run_kantrip_shell(
-                environment, ("echo CONTRACT_PRIOR", "exit")
+                environment, ("echo CONTRACT_PRIOR", "exit"), ready_text="__KANTRIP_READY__"
             )
             self.assertEqual(0, first_status, first_output)
 
@@ -111,7 +112,9 @@ class TestInteractiveShellContract(unittest.TestCase):
                 "echo CONTRACT_NEW",
                 "exit",
             ]
-            status, output = _run_kantrip_shell(environment, commands)
+            status, output = _run_kantrip_shell(
+                environment, commands, ready_text="__KANTRIP_READY__"
+            )
             self.assertEqual(0, status, output)
             self.assertIn("__HISTORY_OK__", output)
             self.assertIn("__STARTUP__loaded", output)
@@ -123,7 +126,9 @@ class TestInteractiveShellContract(unittest.TestCase):
             self.assertIn("a Kantrip session is already active", output)
             self.assertNotIn("__BYPASS__", output)
 
-            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            records: list[dict[str, Any]] = [
+                json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
+            ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
             self.assertEqual(18, len(records))
             for record in records:
@@ -190,6 +195,7 @@ def _write_startup(shell_name: str, home: Path, environment: dict[str, str]) -> 
             "export HISTFILE=$HOME/.bash_history\n"
             "export HISTCONTROL=\n"
             "shopt -s histappend\n"
+            "PS1='__KANTRIP_READY__ '\n"
             "alias kcat='echo __BYPASS__'\n"
             "kafka-topics() { echo __BYPASS__; }\n",
             encoding="utf-8",
@@ -203,6 +209,7 @@ def _write_startup(shell_name: str, home: Path, environment: dict[str, str]) -> 
             "SAVEHIST=100\n"
             "setopt append_history\n"
             "fc -R $HISTFILE 2>/dev/null || true\n"
+            "PROMPT='__KANTRIP_READY__ '\n"
             "alias kcat='echo __BYPASS__'\n"
             "function kafka-topics { echo __BYPASS__ }\n",
             encoding="utf-8",
@@ -215,18 +222,22 @@ def _write_startup(shell_name: str, home: Path, environment: dict[str, str]) -> 
             "set -gx PATH /usr/bin /bin\n"
             "abbr --add kcat 'echo __BYPASS__'\n"
             "function kafka-topics; echo __BYPASS__; end\n"
-            "function fish_prompt; echo -n 'CONTRACT> '; end\n",
+            "function fish_prompt; echo -n '__KANTRIP_READY__ '; end\n",
             encoding="utf-8",
         )
 
 
 def _run_kantrip_shell(
-    environment: dict[str, str], commands: tuple[str, ...] | list[str]
+    environment: dict[str, str],
+    commands: tuple[str, ...] | list[str],
+    *,
+    ready_text: str,
 ) -> tuple[int, str]:
     return run_terminal(
         (sys.executable, "-m", "kantrip.cli", "exec", "contract"),
         commands,
         environment=environment,
+        ready_text=ready_text,
     )
 
 

@@ -160,7 +160,7 @@ Run that contract independently from the normal unit suite with:
 
 ```bash
 KANTRIP_REQUIRED_SHELLS=bash,zsh,fish \
-  uv run --locked python -m unittest -v tests.shell_contract
+  uv run --locked python -m scripts.verify_shell_contract
 ```
 
 ### End-to-end adapter workflow

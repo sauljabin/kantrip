@@ -22,13 +22,14 @@ def run_terminal(
     commands: Sequence[str],
     *,
     environment: Mapping[str, str],
+    ready_text: str | None = None,
     timeout: float = 30,
 ) -> tuple[int, str]:
     """Run newline-delimited commands in a real terminal and capture decoded output."""
     child, master = _spawn_terminal(arguments, environment)
     child_status: int | None = None
     try:
-        child_status, output = _communicate(master, child, commands, timeout)
+        child_status, output = _communicate(master, child, commands, ready_text, timeout)
         return os.waitstatus_to_exitcode(child_status), output.decode(errors="replace")
     finally:
         os.close(master)
@@ -61,6 +62,7 @@ def _communicate(
     master: int,
     child: int,
     commands: Sequence[str],
+    ready_text: str | None,
     timeout: float,
 ) -> tuple[int, bytearray]:
     output = bytearray()
@@ -68,6 +70,7 @@ def _communicate(
     current = bytearray()
     next_write = time.monotonic()
     deadline = time.monotonic() + timeout
+    ready = ready_text is None
     while True:
         waited, status = os.waitpid(child, os.WNOHANG)
         if waited:
@@ -79,12 +82,13 @@ def _communicate(
             raise TerminalTimeout(f"terminal process exceeded {timeout:g} seconds")
         if not current and pending:
             current.extend(pending.popleft())
-        can_write = bool(current) and time.monotonic() >= next_write
+        can_write = ready and bool(current) and time.monotonic() >= next_write
         readable, writable, _ = select.select(
             (master,), (master,) if can_write else (), (), min(remaining, 0.05)
         )
         if readable:
             _read_available(master, output)
+            ready = ready or ready_text is not None and ready_text.encode() in output
         if writable:
             written = os.write(master, current)
             del current[:written]
