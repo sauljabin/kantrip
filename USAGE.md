@@ -86,6 +86,19 @@ format = '[kantrip:$output]($style) '
 style = 'bold purple'
 ```
 
+For a more compact prompt with a magic wand, use this `format` instead:
+
+```toml
+format = '[🪄 $output]($style) '
+```
+
+If you use MesloLGS NF or another Nerd Font, you can use its magic-wand glyph
+(`U+F1844`) instead:
+
+```toml
+format = '[󱡄 $output]($style) '
+```
+
 Starship's default prompt includes custom modules. If you define a custom global
 `format`, add `${custom.kantrip}` where the profile should appear.
 
@@ -106,6 +119,20 @@ setopt prompt_subst
 PROMPT='$(kantrip_prompt_info)'"$PROMPT"
 ```
 
+As a magic-wand alternative, replace the first `print` command in
+`kantrip_prompt_info` with:
+
+```zsh
+print -P -n '%F{magenta}🪄 %f%F{cyan}'
+```
+
+With MesloLGS NF or another Nerd Font, use its magic-wand glyph (`U+F1844`)
+instead:
+
+```zsh
+print -P -n '%F{magenta}󱡄 %f%F{cyan}'
+```
+
 Themes that replace `PROMPT` after this code may need the snippet moved to the
 end of `~/.zshrc`.
 
@@ -118,6 +145,19 @@ function prompt_kantrip() {
   [[ -n ${KANTRIP_PROFILE:-} ]] || return
   p10k segment -f 5 -t "kantrip:${KANTRIP_PROFILE}"
 }
+```
+
+For a compact magic-wand segment, use this `p10k segment` line instead:
+
+```zsh
+p10k segment -f 5 -t "🪄 ${KANTRIP_PROFILE}"
+```
+
+With MesloLGS NF or another Nerd Font, use its magic-wand glyph (`U+F1844`)
+instead:
+
+```zsh
+p10k segment -f 5 -t "󱡄 ${KANTRIP_PROFILE}"
 ```
 
 Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
