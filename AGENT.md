@@ -97,10 +97,10 @@ when the banner, console theme, or SVG helper changes.
 
 ## Releases and Contributions
 
-- Annotated `vMAJOR.MINOR.PATCH` tags on `main` are the only release version
-  source; Hatchling and hatch-vcs derive package metadata from Git. GitHub Releases
-  are the canonical changelog, so do not add maintained changelogs or version-bump
-  commits.
+- Annotated `vMAJOR.MINOR.PATCH` and `vMAJOR.MINOR.PATCHaN` tags on `main` are
+  the only release version source; Hatchling and hatch-vcs derive package
+  metadata from Git. GitHub Releases are the canonical changelog, so do not add
+  maintained changelogs or version-bump commits.
 - Never hard-code the current release version in documentation, templates,
   examples, or commands. Use `kantrip --version`, `MAJOR.MINOR.PATCH`, or Git
   metadata so releases need no follow-up edits.
