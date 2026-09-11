@@ -30,6 +30,19 @@ class TestDoctor(unittest.TestCase):
         self.assertTrue(
             any("Schema Registry profiles: 1 profile" in message for message in messages)
         )
+        verbose_messages = [
+            check.message
+            for _, checks in report.sections(verbose=True)
+            for check in checks
+            if check.verbose_only
+        ]
+        self.assertTrue(any(message.startswith("Kafka topics: ") for message in verbose_messages))
+        self.assertTrue(
+            any(
+                message.startswith("kafka-protobuf-console-consumer: ")
+                for message in verbose_messages
+            )
+        )
 
     def test_invalid_configuration_is_unhealthy_without_contacting_kafka(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

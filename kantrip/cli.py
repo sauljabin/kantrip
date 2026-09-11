@@ -164,6 +164,7 @@ def current_profile() -> None:
 
 @cli.command("doctor")
 @cloup.option(
+    "-v",
     "--verbose",
     is_flag=True,
     help="Show every diagnostic, including resolved paths and profile IDs.",

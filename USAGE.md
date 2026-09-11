@@ -25,8 +25,9 @@ kantrip doctor
 
 Doctor groups its compact report into System, Configuration, Session, and
 Clients sections, names missing commands, and ends with an overall health
-summary. Pass `--verbose` to include resolved executable paths, profile-ID
-validation, and every individual diagnostic.
+summary. Pass `-v` or `--verbose` to include every resolved client executable,
+Kantrip's executable path, profile-ID validation, and every individual
+diagnostic.
 
 Doctor validates the resolved configuration against the bundled schema, checks
 that profile IDs are unique, warns about unsafe file permissions, verifies an

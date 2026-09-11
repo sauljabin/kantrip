@@ -309,11 +309,35 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
     search_path = environment.get("PATH")
     return [
         _check_command_group("kcat", (KCAT_EXECUTABLES,), search_path),
+        *_check_command_paths("kcat", (("executable", KCAT_EXECUTABLES),), search_path),
         _check_kafka_commands(search_path),
+        *_check_command_paths("Kafka", _KAFKA_COMMAND_GROUPS, search_path),
         _check_command_group(
             "Schema Registry console", _SCHEMA_REGISTRY_COMMAND_GROUPS, search_path
         ),
+        *_check_command_paths(
+            "",
+            tuple((next(iter(names)), names) for names in _SCHEMA_REGISTRY_COMMAND_GROUPS),
+            search_path,
+        ),
         _check_command_group("Kaskade", (KASKADE_EXECUTABLES,), search_path),
+        *_check_command_paths("Kaskade", (("executable", KASKADE_EXECUTABLES),), search_path),
+    ]
+
+
+def _check_command_paths(
+    label: str,
+    groups: Sequence[tuple[str, frozenset[str]]],
+    search_path: str | None,
+) -> list[DoctorCheck]:
+    return [
+        DoctorCheck(
+            "success",
+            f"{label + ' ' if label else ''}{group}: {resolved}",
+            verbose_only=True,
+        )
+        for group, names in groups
+        if (resolved := _find_first(names, search_path)) is not None
     ]
 
 
@@ -355,7 +379,7 @@ def _check_command_group(
             f"missing: {', '.join(missing)}",
         )
     if len(installed) == 1:
-        return DoctorCheck("success", f"{label}: {installed[0]}")
+        return DoctorCheck("success", f"{label}: installed")
     return DoctorCheck("success", f"{label}: all {len(installed)} command groups installed")
 
 
