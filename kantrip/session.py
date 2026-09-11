@@ -9,8 +9,9 @@ import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
+from kantrip._files import write_exclusive_text
 from kantrip.adapters import (
     KAFKA_EXECUTABLES,
     KASKADE_EXECUTABLES,
@@ -62,11 +63,12 @@ def run_profile_session(
         kcat_config_path = session_directory / "kcat.conf"
         java_config_path = session_directory / "kafka.properties"
         kaskade_config_path = session_directory / "kaskade.ini"
-        _write_private_file(kcat_config_path, _render_properties(kcat_properties))
-        _write_private_file(java_config_path, _render_properties(java_properties))
-        _write_private_file(
+        write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
+        write_exclusive_text(java_config_path, _render_properties(java_properties), mode=0o600)
+        write_exclusive_text(
             kaskade_config_path,
             f"[kafka]\n{_render_properties(kcat_properties)}",
+            mode=0o600,
         )
 
         child_environment = env | {
@@ -178,13 +180,6 @@ def _render_properties(properties: Mapping[str, str]) -> str:
         if "=" in key or "\n" in key or "\r" in key:
             raise SessionError("kcat property names cannot contain '=' or line breaks")
     return "".join(f"{key}={value}\n" for key, value in sorted(properties.items()))
-
-
-def _write_private_file(path: Path, contents: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    stream: TextIO
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(contents)
 
 
 __all__ = ["SessionError", "ensure_session_available", "run_profile_session"]

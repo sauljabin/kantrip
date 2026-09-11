@@ -10,9 +10,9 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES
+from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES, KCAT_EXECUTABLES
 from kantrip.config import add_profile
-from scripts.terminal import run_terminal
+from scripts import run_terminal
 
 _FAKE_CLIENT = r"""#!{python}
 import json
@@ -23,7 +23,7 @@ from pathlib import Path
 
 name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
-config_path = os.environ.get("KCAT_CONFIG") if name in {{"kcat", "kafkacat"}} else None
+config_path = os.environ.get("KCAT_CONFIG") if name in {kcat_executables} else None
 for option in ("--consumer.config", "--producer.config", "--command-config", "--config-file"):
     if option in arguments:
         config_path = arguments[arguments.index(option) + 1]
@@ -131,7 +131,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
-            self.assertEqual(18, len(records))
+            self.assertEqual(len(_adapter_commands()), len(records))
             for record in records:
                 self.assertEqual("contract", record["profile"])
                 self.assertTrue(record["config_exists"], record)
@@ -154,7 +154,10 @@ def _required_shells() -> frozenset[str]:
 
 
 def _write_fake_clients(directory: Path) -> None:
-    contents = _FAKE_CLIENT.format(python=sys.executable)
+    contents = _FAKE_CLIENT.format(
+        python=sys.executable,
+        kcat_executables=repr(set(KCAT_EXECUTABLES)),
+    )
     for executable in ADAPTER_EXECUTABLES:
         path = directory / executable
         path.write_text(contents, encoding="utf-8")
@@ -269,7 +272,8 @@ def _adapter_commands() -> list[str]:
             commands.append(f"printf 'contract record\\n' | {executable} --topic contract")
         else:
             commands.append(f"{executable} --contract")
-    commands.extend(("kcat -L", "kafkacat -L", "kaskade admin", "kaskade consumer"))
+    commands.extend(f"{executable} -L" for executable in sorted(KCAT_EXECUTABLES))
+    commands.extend(("kaskade admin", "kaskade consumer"))
     return commands
 
 

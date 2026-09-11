@@ -58,7 +58,7 @@ uv run python -m scripts.banner
 Reusable script code belongs in `scripts/__init__.py`; individual modules are
 executable workflows. Tests and fixture utilities remain under their owning test
 suite, and manual-environment utilities remain under `sandbox`. The sandbox smoke
-script is intentionally separate from the offline test suite.
+command is intentionally separate from the offline test suite.
 
 ## Schema and application environment
 
@@ -125,10 +125,10 @@ With the sandbox running and the supported clients installed locally, run the
 adapter smoke checks:
 
 ```bash
-uv run --locked python -m sandbox.smoke
-uv run --locked python -m sandbox.smoke \
+uv run --locked python -m sandbox
+uv run --locked python -m sandbox \
   --shell bash --shell zsh --shell fish
-uv run --locked python -m sandbox.smoke my-topic \
+uv run --locked python -m sandbox my-topic \
   --profile sandbox --bootstrap-server localhost:19092 --keep-topic
 ```
 

@@ -40,5 +40,5 @@ repos:
         always_run: true
         pass_filenames: false
         entry: >-
-          uv run --locked python -m sandbox.smoke
+          uv run --locked python -m sandbox
           --shell bash --shell zsh --shell fish

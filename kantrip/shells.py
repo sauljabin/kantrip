@@ -8,8 +8,8 @@ import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
 
+from kantrip._files import write_exclusive_text
 from kantrip.adapters import ADAPTER_EXECUTABLES
 
 SUPPORTED_SHELLS = frozenset({"bash", "fish", "zsh"})
@@ -86,9 +86,10 @@ def _prepare_bash(
     home = environment.get("HOME")
     original_startup = Path(home).expanduser() / ".bashrc" if home else None
     startup_path = session_directory / "bashrc"
-    _write_private_file(
+    write_exclusive_text(
         startup_path,
         _render_posix_startup(original_startup, shim_directory, refresh_command="hash -r"),
+        mode=0o600,
     )
     return ShellPlan((shell, "--rcfile", str(startup_path)), {})
 
@@ -115,7 +116,7 @@ def _prepare_zsh(
         original_zdotdir=environment.get("ZDOTDIR"),
         original_shell_sessions_disable=environment.get("SHELL_SESSIONS_DISABLE"),
     )
-    _write_private_file(startup_directory / ".zshrc", contents)
+    write_exclusive_text(startup_directory / ".zshrc", contents, mode=0o600)
     return ShellPlan(
         (shell,),
         {"ZDOTDIR": str(startup_directory), "SHELL_SESSIONS_DISABLE": "1"},
@@ -200,13 +201,6 @@ def _fish_shadow_cleanup() -> list[str]:
 def _fish_quote(value: str) -> str:
     """Quote one literal Fish argument without relying on POSIX shell syntax."""
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
-
-
-def _write_private_file(path: Path, contents: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    stream: TextIO
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(contents)
 
 
 __all__ = [

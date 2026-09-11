@@ -7,7 +7,8 @@ import shlex
 import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TextIO
+
+from kantrip._files import write_exclusive_text
 
 KASKADE_EXECUTABLES = frozenset({"kaskade"})
 KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
@@ -255,10 +256,7 @@ exec {shlex.quote(executable)} "$@"
 
 
 def _write_executable(path: Path, contents: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
-    stream: TextIO
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(contents)
+    write_exclusive_text(path, contents, mode=0o700)
 
 
 __all__ = [
