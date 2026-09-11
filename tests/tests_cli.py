@@ -155,11 +155,12 @@ class TestCli(unittest.TestCase):
         self.assertIn("└─ [passed] resolved executable path", result.output)
         self.assertIn("[passed] Healthy", result.output)
 
-    def test_doctor_rejects_verbose_shorthand(self) -> None:
-        result = self.runner.invoke(cli, ["doctor", "-v"])
+    def test_doctor_help_lists_only_long_verbose_option(self) -> None:
+        result = self.runner.invoke(cli, ["doctor", "--help"])
 
-        self.assertNotEqual(0, result.exit_code)
-        self.assertIn("No such option '-v'", result.output)
+        self.assertEqual(0, result.exit_code, result.output)
+        verbose_line = next(line for line in result.output.splitlines() if "--verbose" in line)
+        self.assertTrue(verbose_line.lstrip().startswith("--verbose "))
 
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
         with patch("kantrip.cli.run_doctor") as run:
