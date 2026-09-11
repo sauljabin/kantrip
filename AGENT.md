@@ -1,108 +1,91 @@
 # Agent Instructions
 
-## Public Interfaces
+## Engineering Contract
 
-- Do not create empty modules or speculative adapters for unimplemented
-  behavior.
-- Keep the public profile schema versioned. Breaking schema changes require a
-  new version, migration guidance, fixtures, examples, and tests.
-- Treat the application environment documented in `USAGE.md` as public behavior.
-  Add variables compatibly; a rename or semantic break requires release and
-  migration guidance.
+- Treat this file as living operational knowledge. When work establishes or
+  changes a durable convention, update this guidance and every affected guide,
+  schema, fixture, example, issue template, and command sample. Rewrite obsolete
+  or duplicate guidance instead of appending contradictions.
+- Do not add empty modules or speculative adapters. Keep cyclomatic complexity
+  at or below 10; repository-wide Ruff `C901` runs in `scripts.analyze`, so use
+  focused helpers instead of suppressions.
+- Importing `kantrip` must not create directories, open files, configure logging,
+  construct consoles, or contact credential stores or Kafka. Classify and redact
+  values before presentation, and keep command behavior independent from Rich.
+- Support Linux and macOS on Python 3.10 through 3.14. Keep paths, permissions,
+  signals, terminals, and shell documentation portable enough for later Windows
+  support without claiming Windows compatibility.
 
-## Code Quality
+## Profiles and Sessions
 
-- Keep cyclomatic complexity at or below 10. Repository-wide Ruff `C901` is part
-  of `scripts.analyze`; prefer focused named helpers over lint suppressions.
-- Importing `kantrip` must not create directories, open files, configure
-  logging, construct terminal consoles, or contact credential stores or Kafka.
-- Keep command behavior independent from Rich. Values must be classified and
-  redacted before they reach presentation code.
+- The versioned profile schema lives in `schemas/`, examples in `examples/`, and
+  test fixtures under their owning suite. A breaking schema change requires a new
+  version, migration guidance, synchronized fixtures/examples, and tests.
+- Treat the environment documented in `USAGE.md` as public API. Add variables
+  compatibly; renames or semantic breaks require release and migration guidance.
+  Use `KAFKA_*` and `SCHEMA_REGISTRY_*` for application values and reserve
+  `KANTRIP_*` for Kantrip-owned profile/session metadata.
+- `kantrip add` creates missing configuration. Add/remove operations are validated
+  and atomic, adding an existing profile never overwrites it, and listing missing
+  configuration returns an empty collection.
+- Inject the documented environment only into supervised children; never mutate
+  the caller's environment or add a separate JSON schema for environment values.
+- Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
+  session. Until credentials exist, execution accepts only `transport: plaintext`
+  with `auth.type: none`.
 
-## Living Knowledge and Documentation
+## Client Adapters and Shells
 
-- Treat this file as the project's living operational knowledge. Update it when
-  work establishes a durable convention, architectural decision, workflow, or
-  constraint that future agents need to follow.
-- Review existing guidance while updating it. Remove or rewrite obsolete,
-  redundant, or contradicted knowledge rather than only appending sections.
-- When behavior changes, update every affected guide, schema, fixture, example,
-  issue template, and command sample in the same change.
+- kcat is the first supported client. Sessions expose private generated librdkafka
+  properties through `KCAT_CONFIG`; interactive shims preserve this contract and
+  reject client attempts to override it with `-F`. Never place configuration
+  values in command arguments.
+- Official Kafka tools recognize names with and without `.sh`. All receive
+  `--bootstrap-server`; consumers/producers receive their client config option,
+  and administrative tools receive `--command-config`, pointing at the private
+  generated Java properties file.
+- Kaskade `admin` and `consumer` receive a private INI file through
+  `--config-file`. Do not assume a Kaskade environment variable until Kaskade
+  implements that contract.
+- Interactive sessions support Bash, Zsh, and Fish. They load normal user startup
+  files, preserve normal history, neutralize aliases/functions/Fish abbreviations
+  for registered adapters, and restore the session shim path. Shims are private
+  and temporary; never install persistent aliases.
+- Adapters must reject connection arguments that override the selected profile.
 
-## Supported Platforms
-
-- Kantrip must work consistently on Linux and macOS with Python 3.10 through
-  3.14. Keep paths, permissions, signal handling, terminal behavior, and
-  shell-facing documentation portable across both platforms.
-- Keep interfaces portable enough for later Windows support without claiming
-  Windows compatibility in the MVP.
-
-## Client Support
-
-- kcat is the first supported external CLI. Sessions provide its generated
-  librdkafka properties through `KCAT_CONFIG`; do not create aliases or place
-  configuration values in command arguments.
-- Official Kafka CLI adapters recognize executable names with and without `.sh`.
-  Consumer and producer commands receive their client-specific config flags;
-  administrative commands receive `--command-config`. All receive
-  `--bootstrap-server` and use the generated Java properties file. Interactive
-  subshells expose session-owned executable shims; never create persistent aliases.
-- Kaskade currently receives a private INI file through its command-level
-  `--config-file` option for `admin` and `consumer`. Do not set or assume a
-  Kaskade-specific environment variable until Kaskade implements that contract.
-- Reject `kantrip exec` when `KANTRIP_SESSION_ID` already identifies an active
-  parent session. Sessions must never be nested.
-- Temporary Zsh startup indirection must preserve and load the user's normal
-  history file; session cleanup must not discard interactive command history.
-- Until credential-backed sessions are implemented, execution accepts only
-  profiles with `transport: plaintext` and `auth.type: none`.
-
-## Secrets and Diagnostics
+## Secrets and Output
 
 - Long-lived secrets belong only in an approved operating-system credential
-  store. Never add a plaintext or locally encrypted file fallback.
-- Never put passwords, tokens, private keys, secret-bearing JAAS strings, or
-  Registry credentials in command arguments, repository fixtures, logs, normal
-  output, diagnostics, tracebacks, or error snapshots.
-- Fixtures and examples use conspicuously synthetic values and infrastructure.
-  Redact secret references as well as resolved secret values in profile output.
-- Normal command output goes to stdout and diagnostics go to stderr. Rich
-  styling must respect `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output.
-  Status output uses text labels instead of emoji whenever styling is disabled.
-
-## Environment and Schemas
-
-- The machine-readable profile schema lives in `schemas/`; examples live in
-  `examples/`; test-owned fixtures live under their owning suite. Keep them
-  synchronized.
-- `kantrip add` creates configuration when necessary, and profile additions and
-  removals are validated and atomic. Adding an existing profile must not overwrite
-  it; listing absent configuration behaves as an empty profile collection.
-- Application-facing values use `KAFKA_*` and `SCHEMA_REGISTRY_*`. Reserve
-  `KANTRIP_*` for profile and session metadata owned by Kantrip.
-- The documented environment is injected only into supervised child processes.
-  Never modify the caller's parent environment or add a separate JSON schema for
-  environment variables.
+  store; never add plaintext or locally encrypted file fallbacks.
+- Never expose passwords, tokens, keys, secret-bearing JAAS strings, or Registry
+  credentials in arguments, fixtures, logs, output, diagnostics, tracebacks, or
+  snapshots. Examples use conspicuously synthetic values and infrastructure;
+  profile output redacts secret references as well as resolved values.
+- Send command results to stdout and diagnostics to stderr. Styling respects
+  `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output; use text status labels
+  instead of emoji when styling is disabled.
 
 ## Tests, Scripts, and Sandbox
 
-- Tests and their domain-owned fixtures live in `tests` and remain offline.
-- The manual environment lives entirely in `sandbox`, including Compose files,
-  versions, generated synthetic material, and population tools. Tests may read
-  pinned image versions and assert Compose structure, but must not import sandbox
-  executable code or use sandbox data as test fixtures. Sandbox code must not
-  import test fixtures.
-- Keep the sandbox's Apicurio Registry on KafkaSQL storage. Its journal and
-  snapshot topics must be created with three replicas before the registry starts.
-- Reusable repository-script helpers belong in `scripts/__init__.py`; individual
-  script modules remain focused on executable workflows.
-- The adapter smoke workflow lives in `sandbox.smoke`, requires a running sandbox
-  and locally installed clients, and runs as a pre-commit hook. It is not part of
-  the offline test suite or a packaged E2E suite.
+- Tests and their fixtures live in `tests` and remain offline. Shared workflow
+  helpers belong in `scripts/__init__.py`; other script modules are executable
+  workflows.
+- The manual environment lives in `sandbox`, including Compose definitions,
+  versions, synthetic data, and population tools. Tests may inspect pinned image
+  versions and Compose structure, but sandbox code and test fixtures must not
+  import each other.
+- Keep Apicurio on KafkaSQL storage. Create its journal and snapshot topics with
+  three replicas before starting the registry.
+- `python -m sandbox` runs the adapter smoke workflow against an active sandbox
+  with locally installed clients and optional shells. It is a pre-commit hook,
+  not an offline or packaged E2E test.
+- `python -m scripts.verify_shell_contract` verifies Bash, Zsh, and Fish with
+  PTYs and generated fake clients. Assertions stay in Python; its temporary event
+  logs contain only safe metadata and are removed with their temporary directory.
 
 ## Verification
 
-Run these checks for code, environment, schema, tooling, or documentation changes:
+Run these checks after code, environment, schema, tooling, or documentation work:
 
 ```text
 uv run --locked python -m scripts.analyze
@@ -114,41 +97,17 @@ uv run --locked python -m scripts.verify_release dist
 Regenerate `images/banner.svg` with `uv run --locked python -m scripts.banner`
 when the banner, console theme, or SVG helper changes.
 
-## Releases and Versions
+## Releases and Contributions
 
-- Annotated tags matching `vMAJOR.MINOR.PATCH` on `main` are the only release
-  version source. Hatchling and hatch-vcs derive package metadata from Git.
-- GitHub Releases are the canonical changelog. Do not add a maintained changelog
-  or version-bump commit.
-- Never hard-code Kantrip's current release version in documentation, issue
-  templates, examples, or release commands. Refer to `kantrip --version`, use a
-  `MAJOR.MINOR.PATCH` placeholder, or derive the version from Git metadata so a
-  release does not require follow-up file edits.
-
-## Commits
-
-Use the [Conventional Commits](https://www.conventionalcommits.org/) format for
-every commit message:
-
-```text
-<type>(<optional scope>): <description>
-```
-
-The description must be a short, imperative summary of the feature or fix. Do
-not use it as a list of changes.
-
-End every commit message with an `Assisted-by` trailer, separated from the body
-by a blank line:
-
-```text
-Assisted-by: <AI model> <version>
-```
-
-Use the actual AI model and version that generated the commit.
-
-## Pull Requests
-
-Pull request titles and descriptions must follow the same rules as commit
-messages: use the Conventional Commits format, provide a short imperative
-summary of the feature or fix rather than a list of changes, and end with the
-`Assisted-by: <AI model> <version>` trailer.
+- Annotated `vMAJOR.MINOR.PATCH` tags on `main` are the only release version
+  source; Hatchling and hatch-vcs derive package metadata from Git. GitHub Releases
+  are the canonical changelog, so do not add maintained changelogs or version-bump
+  commits.
+- Never hard-code the current release version in documentation, templates,
+  examples, or commands. Use `kantrip --version`, `MAJOR.MINOR.PATCH`, or Git
+  metadata so releases need no follow-up edits.
+- Commits and pull-request titles use Conventional Commits:
+  `<type>(<optional scope>): <imperative summary>`. Keep the summary short and do
+  not use it as a change list.
+- End commit messages and pull-request descriptions with a blank line followed by
+  `Assisted-by: <AI model> <version>`, using the actual model and version.

@@ -7,9 +7,11 @@ import shlex
 import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TextIO
+
+from kantrip._files import write_exclusive_text
 
 KASKADE_EXECUTABLES = frozenset({"kaskade"})
+KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
 KAFKA_CONSOLE_CONSUMER_EXECUTABLES = frozenset(
     {"kafka-console-consumer", "kafka-console-consumer.sh"}
 )
@@ -44,6 +46,7 @@ KAFKA_EXECUTABLE_OPTIONS = {
     },
 }
 KAFKA_EXECUTABLES = frozenset(KAFKA_EXECUTABLE_OPTIONS)
+ADAPTER_EXECUTABLES = KAFKA_EXECUTABLES | KASKADE_EXECUTABLES | KCAT_EXECUTABLES
 _KASKADE_COMMANDS = frozenset({"admin", "consumer"})
 _KASKADE_CONNECTION_OPTIONS = (
     "--bootstrap-servers",
@@ -118,7 +121,7 @@ def create_subshell_shims(
     java_config_path: Path,
     kaskade_config_path: Path,
     environment: Mapping[str, str],
-) -> Path | None:
+) -> Path:
     """Create session-owned shims for installed adapter executables."""
     search_path = environment.get("PATH", os.defpath)
     kafka_executables = {
@@ -127,9 +130,11 @@ def create_subshell_shims(
         if (resolved := shutil.which(name, path=search_path)) is not None
     }
     kaskade_executable = shutil.which("kaskade", path=search_path)
-    if not kafka_executables and kaskade_executable is None:
-        return None
-
+    kcat_executables = {
+        name: resolved
+        for name in sorted(KCAT_EXECUTABLES)
+        if (resolved := shutil.which(name, path=search_path)) is not None
+    }
     directory.mkdir(mode=0o700)
     for name, executable in kafka_executables.items():
         bootstrap_option, config_option = KAFKA_EXECUTABLE_OPTIONS[name]
@@ -147,6 +152,8 @@ def create_subshell_shims(
             directory / "kaskade",
             _render_kaskade_shim(kaskade_executable, kaskade_config_path),
         )
+    for name, executable in kcat_executables.items():
+        _write_executable(directory / name, _render_kcat_shim(name, executable))
     return directory
 
 
@@ -234,14 +241,26 @@ esac
 """
 
 
+def _render_kcat_shim(name: str, executable: str) -> str:
+    return f"""#!/bin/sh
+for argument in "$@"; do
+  case "$argument" in
+    -F|-F*)
+      printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2
+      exit 2
+      ;;
+  esac
+done
+exec {shlex.quote(executable)} "$@"
+"""
+
+
 def _write_executable(path: Path, contents: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
-    stream: TextIO
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        stream.write(contents)
+    write_exclusive_text(path, contents, mode=0o700)
 
 
 __all__ = [
+    "ADAPTER_EXECUTABLES",
     "KAFKA_ACLS_EXECUTABLES",
     "KAFKA_BROKER_API_VERSIONS_EXECUTABLES",
     "KAFKA_CONFIGS_EXECUTABLES",
@@ -252,6 +271,7 @@ __all__ = [
     "KAFKA_EXECUTABLE_OPTIONS",
     "KAFKA_TOPICS_EXECUTABLES",
     "KASKADE_EXECUTABLES",
+    "KCAT_EXECUTABLES",
     "AdapterError",
     "create_subshell_shims",
     "prepare_command",

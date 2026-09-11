@@ -49,7 +49,8 @@ kantrip exec local -- kcat -L
 ```
 
 Omitting the command after `kantrip exec PROFILE` opens an interactive supervised
-subshell using `SHELL`, or `/bin/sh` when `SHELL` is unset:
+Bash, Zsh, or Fish subshell using `SHELL`. When `SHELL` is unset, Kantrip selects
+an installed Bash. Other shells are rejected with an actionable error:
 
 ```bash
 kantrip exec local
@@ -67,6 +68,12 @@ before starting another one.
 `kantrip current` prints the active profile name inside the session. Outside a
 session it reports that no profile is active. This is the command equivalent of
 reading `KANTRIP_PROFILE` directly.
+
+The subshell loads the user's normal startup configuration and keeps its normal
+history file. Kantrip then removes aliases, functions, and Fish abbreviations
+that shadow supported client names, restores its temporary adapter directory at
+the front of `PATH`, and refreshes the shell's command lookup. These changes are
+limited to the child shell and disappear on `exit`.
 
 ## Displaying the active profile in your prompt
 
@@ -229,7 +236,9 @@ command-line options from overriding the selected profile.
 
 Kantrip generates a private librdkafka properties file for each session and sets
 `KCAT_CONFIG` to its path. kcat reads this variable natively, so Kantrip does not
-create an alias or rewrite kcat's arguments.
+create an alias or add configuration arguments. Interactive sessions use a
+temporary pass-through executable only to keep the installed kcat ahead of
+startup-time `PATH`, alias, and function changes.
 
 ```bash
 kantrip exec local -- kcat -L
@@ -278,13 +287,14 @@ exit
 ```
 
 The shims exist only inside that session and are removed on exit. Kantrip does
-not install the Kafka CLI or create persistent shell aliases. For Zsh and Bash,
-Kantrip loads the user's normal interactive startup file through a private
-session startup file, then restores the shim directory to the front of `PATH`
-and clears the shell's command cache. This keeps Oh My Zsh, Homebrew, and other
-startup-time `PATH` configuration from bypassing the adapters. Zsh sessions
-restore and load the user's normal history file instead of writing command
-history into the temporary session directory.
+not install the Kafka CLI or create persistent shell aliases. Bash and Zsh use a
+private startup file that loads the user's normal startup file; Fish uses an init
+command after its normal configuration loads. Kantrip then clears child-shell
+aliases, functions, or abbreviations for supported client names, restores the
+shim directory to the front of `PATH`, and refreshes command lookup. This keeps
+Oh My Zsh, Homebrew, Fish configuration, and other startup-time path changes from
+bypassing the adapters. Each shell continues to use its normal user history
+location instead of the temporary session directory.
 
 ### Kaskade
 

@@ -6,6 +6,12 @@ subject to Apache Kafka's normal client/broker compatibility. Both unsuffixed
 commands and the `.sh` variants shipped in Apache Kafka distributions are
 supported.
 
+Interactive sessions support Bash, Zsh, and Fish on Linux and macOS. Kantrip
+loads normal user startup configuration and history, then restores its temporary
+adapter executables after startup-time aliases, functions, abbreviations, and
+`PATH` changes. When `SHELL` is unset, an installed Bash is used. Other shells
+are not supported yet.
+
 | Supported command | CLI version | Kafka | Confluent Schema Registry | Apicurio Registry | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `kafka-console-consumer[.sh]` | Apache Kafka 2.6–4.3 | Consume records | — | — | Injects `--bootstrap-server` and `--consumer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |

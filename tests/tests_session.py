@@ -64,15 +64,15 @@ class TestProfileSession(unittest.TestCase):
 
     def test_opens_configured_shell_when_command_is_omitted(self) -> None:
         with (
-            patch("kantrip.session.shutil.which", return_value=sys.executable),
+            patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
             patch(
                 "kantrip.session.subprocess.run",
-                return_value=subprocess.CompletedProcess([sys.executable], 0),
+                return_value=subprocess.CompletedProcess(["/bin/bash"], 0),
             ) as run,
         ):
-            run_profile_session("local", self.profile, [], environment={"SHELL": sys.executable})
+            run_profile_session("local", self.profile, [], environment={})
 
-        self.assertEqual([sys.executable], run.call_args.args[0])
+        self.assertEqual(["/bin/bash", "--rcfile"], run.call_args.args[0][:2])
 
     def test_rejects_a_nested_kantrip_session_before_launch(self) -> None:
         with (
@@ -297,12 +297,12 @@ class TestProfileSession(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 0)
 
         with (
-            patch("kantrip.session.shutil.which", side_effect=find_executable),
+            patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
             patch("kantrip.adapters.shutil.which", side_effect=find_executable),
             patch("kantrip.session.subprocess.run", side_effect=inspect_run),
         ):
             run_profile_session(
-                "local", self.profile, [], environment={"SHELL": sys.executable, "PATH": "/bin"}
+                "local", self.profile, [], environment={"SHELL": "/bin/bash", "PATH": "/bin"}
             )
 
         shims = observed["shims"]
@@ -337,12 +337,12 @@ class TestProfileSession(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 0)
 
         with (
-            patch("kantrip.session.shutil.which", side_effect=find_executable),
+            patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
             patch("kantrip.adapters.shutil.which", side_effect=find_executable),
             patch("kantrip.session.subprocess.run", side_effect=inspect_run),
         ):
             run_profile_session(
-                "local", self.profile, [], environment={"SHELL": sys.executable, "PATH": "/bin"}
+                "local", self.profile, [], environment={"SHELL": "/bin/bash", "PATH": "/bin"}
             )
 
         self.assertIn("exec /opt/bin/kaskade", observed["contents"])

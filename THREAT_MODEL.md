@@ -32,6 +32,8 @@ process, credential store, or administrator.
 - Temporary files surviving normal exit or an unclean termination indefinitely.
 - Malicious profile names, generated shims, executable resolution, or command
   interpolation changing the selected process.
+- User startup aliases, functions, abbreviations, or `PATH` changes bypassing a
+  profile adapter inside an interactive session.
 - Unsupported client adapters silently dropping authentication or exposing a
   credential through process arguments.
 - A pre-authentication Kafka `ApiVersions` response being mistaken for proof of
@@ -50,6 +52,8 @@ process, credential store, or administrator.
   cleanup after crashes.
 - Preserve explicit adapter capability failures instead of weakening a security
   requirement for compatibility.
+- Load normal Bash, Zsh, or Fish configuration, then remove supported-client
+  shadows and restore session-owned shims only in the supervised child shell.
 - Redact before rendering and keep Rich tracebacks from displaying locals.
 
 ## Accepted limitations
