@@ -50,6 +50,8 @@
   Kaskade-specific environment variable until Kaskade implements that contract.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` already identifies an active
   parent session. Sessions must never be nested.
+- Temporary Zsh startup indirection must preserve and load the user's normal
+  history file; session cleanup must not discard interactive command history.
 - Until credential-backed sessions are implemented, execution accepts only
   profiles with `transport: plaintext` and `auth.type: none`.
 

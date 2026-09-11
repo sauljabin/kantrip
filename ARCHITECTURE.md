@@ -58,7 +58,9 @@ Interactive Zsh and Bash sessions load the user's normal startup configuration
 through a session-owned startup file. The session restores its executable-shim
 directory at the front of `PATH` after that configuration loads and refreshes
 the shell command cache, preventing startup-time path management from selecting
-an unadapted executable.
+an unadapted executable. Zsh history remains attached to the user's normal
+history file; the temporary startup directory is never used as durable command
+history storage.
 
 ## Secret handling and diagnostics
 

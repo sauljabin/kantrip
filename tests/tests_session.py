@@ -352,11 +352,18 @@ class TestProfileSession(unittest.TestCase):
                 )
 
         self.assertEqual(["/bin/zsh"], observed["arguments"])
+        environment = observed["environment"]
+        assert isinstance(environment, dict)
+        self.assertEqual("1", environment["SHELL_SESSIONS_DISABLE"])
         contents = observed["contents"]
         assert isinstance(contents, str)
+        history_position = contents.index(f"HISTFILE={Path(home) / '.zsh_history'}")
         source_position = contents.index(f"source {user_startup}")
         path_position = contents.index("export PATH=")
+        self.assertLess(history_position, source_position)
         self.assertLess(source_position, path_position)
+        self.assertIn("unset SHELL_SESSIONS_DISABLE", contents)
+        self.assertNotIn("fc -R", contents)
         self.assertIn("/bin", contents)
         self.assertTrue(contents.endswith("rehash\n"))
         self.assertEqual(0o600, observed["mode"])
