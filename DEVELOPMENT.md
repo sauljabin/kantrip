@@ -156,6 +156,13 @@ temporary JSON-lines event log containing command names, safe arguments, config
 file modes, and session metadata. Logs are deleted with the test directory and
 sanitized output is shown only when a contract fails.
 
+Run that contract independently from the normal unit suite with:
+
+```bash
+KANTRIP_REQUIRED_SHELLS=bash,zsh,fish \
+  uv run --locked python -m unittest -v tests.shell_contract
+```
+
 ### End-to-end adapter workflow
 
 Create an isolated profile for the running sandbox, then create a topic, produce

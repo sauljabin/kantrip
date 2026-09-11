@@ -25,6 +25,18 @@ def run_terminal(
     timeout: float = 30,
 ) -> tuple[int, str]:
     """Run newline-delimited commands in a real terminal and capture decoded output."""
+    child, master = _spawn_terminal(arguments, environment)
+    child_status: int | None = None
+    try:
+        child_status, output = _communicate(master, child, commands, timeout)
+        return os.waitstatus_to_exitcode(child_status), output.decode(errors="replace")
+    finally:
+        os.close(master)
+        if child_status is None:
+            _terminate_child(child)
+
+
+def _spawn_terminal(arguments: Sequence[str], environment: Mapping[str, str]) -> tuple[int, int]:
     ready_reader, ready_writer = os.pipe()
     child, master = pty.fork()
     if child == 0:
@@ -42,45 +54,50 @@ def run_terminal(
     os.read(ready_reader, 1)
     os.close(ready_reader)
     os.set_blocking(master, False)
+    return child, master
+
+
+def _communicate(
+    master: int,
+    child: int,
+    commands: Sequence[str],
+    timeout: float,
+) -> tuple[int, bytearray]:
     output = bytearray()
     pending = deque(f"{command}\n".encode() for command in commands)
     current = bytearray()
     next_write = time.monotonic()
     deadline = time.monotonic() + timeout
-    child_status: int | None = None
+    while True:
+        waited, status = os.waitpid(child, os.WNOHANG)
+        if waited:
+            _drain(master, output)
+            return status, output
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            os.kill(child, signal.SIGTERM)
+            raise TerminalTimeout(f"terminal process exceeded {timeout:g} seconds")
+        if not current and pending:
+            current.extend(pending.popleft())
+        can_write = bool(current) and time.monotonic() >= next_write
+        readable, writable, _ = select.select(
+            (master,), (master,) if can_write else (), (), min(remaining, 0.05)
+        )
+        if readable:
+            _read_available(master, output)
+        if writable:
+            written = os.write(master, current)
+            del current[:written]
+            if not current:
+                next_write = time.monotonic() + 0.05
+
+
+def _terminate_child(child: int) -> None:
     try:
-        while child_status is None:
-            waited, status = os.waitpid(child, os.WNOHANG)
-            if waited:
-                child_status = status
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                os.kill(child, signal.SIGTERM)
-                raise TerminalTimeout(f"terminal process exceeded {timeout:g} seconds")
-            if not current and pending:
-                current.extend(pending.popleft())
-            can_write = bool(current) and time.monotonic() >= next_write
-            readable, writable, _ = select.select(
-                (master,), (master,) if can_write else (), (), min(remaining, 0.05)
-            )
-            if readable:
-                _read_available(master, output)
-            if writable:
-                written = os.write(master, current)
-                del current[:written]
-                if not current:
-                    next_write = time.monotonic() + 0.05
-        _drain(master, output)
-        return os.waitstatus_to_exitcode(child_status), output.decode(errors="replace")
-    finally:
-        os.close(master)
-        if child_status is None:
-            try:
-                os.kill(child, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.waitpid(child, 0)
+        os.kill(child, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    os.waitpid(child, 0)
 
 
 def _drain(master: int, output: bytearray) -> None:

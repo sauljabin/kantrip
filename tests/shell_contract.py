@@ -1,3 +1,5 @@
+"""Exercise the adapter contract in real shells with generated fake clients."""
+
 import json
 import os
 import shlex
@@ -172,6 +174,7 @@ def _contract_environment(
             "TERM": "xterm-256color",
             "XDG_CONFIG_HOME": str(home / ".config"),
             "XDG_DATA_HOME": str(home / ".local" / "share"),
+            "ZDOTDIR": str(home),
         }
     )
     environment.pop("KANTRIP_PROFILE", None)
