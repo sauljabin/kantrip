@@ -79,8 +79,9 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             config_path = root / "config.yaml"
             add_profile("contract", config_path, bootstrap_servers=("contract.invalid:9092",))
             _write_fake_clients(fake_bin)
+            isolated_shell = _isolate_shell(shell_name, shell, root)
             environment = _contract_environment(
-                shell=shell,
+                shell=isolated_shell,
                 home=home,
                 fake_bin=fake_bin,
                 config_path=config_path,
@@ -158,6 +159,20 @@ def _write_fake_clients(directory: Path) -> None:
         path = directory / executable
         path.write_text(contents, encoding="utf-8")
         path.chmod(0o700)
+
+
+def _isolate_shell(shell_name: str, shell: str, root: Path) -> str:
+    if shell_name != "zsh":
+        return shell
+    directory = root / "shells"
+    directory.mkdir()
+    launcher = directory / "zsh"
+    launcher.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(shell)} -d "$@"\n',
+        encoding="utf-8",
+    )
+    launcher.chmod(0o700)
+    return str(launcher)
 
 
 def _contract_environment(
