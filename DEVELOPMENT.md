@@ -204,6 +204,8 @@ authorizer and a suitably authorized principal.
 
 Git tags are the only release-version source. GitHub Releases are the canonical
 release history; never edit a static package version or maintained changelog.
+Use the reusable [release checklist](RELEASE_CHECKLIST.md) to record preparation
+and post-release evidence for each candidate.
 
 Before releasing, ensure `main` is current, clean, and passing:
 

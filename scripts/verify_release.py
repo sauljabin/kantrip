@@ -20,6 +20,7 @@ SDIST_REQUIRED = {
     "LICENSE",
     "MVP.md",
     "README.md",
+    "RELEASE_CHECKLIST.md",
     "SECURITY.md",
     "THREAT_MODEL.md",
     "USAGE.md",
