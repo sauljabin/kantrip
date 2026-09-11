@@ -178,10 +178,19 @@ def doctor(context: cloup.Context, verbose: bool) -> None:
     for section, checks in report.sections(verbose=verbose):
         console.print()
         console.print(Text(section, style="heading"))
-        for check in checks:
+        for index, check in enumerate(checks):
+            status_text = create_status_text(console, check.status, check.message)
+            if check.verbose_only:
+                has_next_detail = index + 1 < len(checks) and checks[index + 1].verbose_only
+                detail_text = Text(
+                    "├─ " if has_next_detail else "└─ ",
+                    style="muted",
+                )
+                detail_text.append_text(status_text)
+                status_text = detail_text
             console.print(
                 Padding(
-                    create_status_text(console, check.status, check.message),
+                    status_text,
                     (0, 0, 0, 2),
                     expand=False,
                 )

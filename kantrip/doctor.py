@@ -97,9 +97,9 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
     env = os.environ if environment is None else environment
     system_checks = [
         DoctorCheck("success", f"Kantrip {APP_VERSION}"),
+        _check_cli(env),
         _check_python(),
         _check_platform(),
-        _check_cli(env),
         _check_shell(env),
     ]
     configuration, config_checks = _check_configuration(env)
@@ -165,8 +165,8 @@ def _check_configuration(
             f"Configuration matches schema: {path} ({profile_count} {profile_label})",
         )
     ]
-    checks.append(_check_config_file(path))
     checks.append(_check_profile_ids(configuration))
+    checks.append(_check_config_file(path))
     checks.append(_check_profiles(configuration))
     checks.extend(_check_schema_registry_profiles(configuration))
     return configuration, checks

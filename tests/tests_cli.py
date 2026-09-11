@@ -152,7 +152,7 @@ class TestCli(unittest.TestCase):
             result = self.runner.invoke(cli, ["--no-color", "doctor", "--verbose"])
 
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("[passed] resolved executable path", result.output)
+        self.assertIn("└─ [passed] resolved executable path", result.output)
         self.assertIn("[passed] Healthy", result.output)
 
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
