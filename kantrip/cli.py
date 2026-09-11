@@ -78,10 +78,15 @@ def error_console_from_context(context: cloup.Context) -> Console:
     help="Kafka broker address; may be repeated.",
 )
 @cloup.option("--description", help="Optional profile description.")
+@cloup.option(
+    "--schema-registry-url",
+    help="Optional plain, unauthenticated Schema Registry URL.",
+)
 def add_configured_profile(
     profile_name: str,
     bootstrap_servers: tuple[str, ...],
     description: str | None,
+    schema_registry_url: str | None,
 ) -> None:
     """Add a plaintext profile."""
     try:
@@ -89,6 +94,7 @@ def add_configured_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
             description=description,
+            schema_registry_url=schema_registry_url,
         )
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
@@ -165,13 +171,11 @@ def doctor(context: cloup.Context) -> None:
 )
 @cloup.pass_context
 def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
-    """Check whether PROFILE can connect to Kafka."""
+    """Check PROFILE's Kafka and configured Schema Registry connections."""
     console = console_from_context(context)
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
-        console.print(
-            create_status_text(console, "progress", f"Checking Kafka profile '{profile_name}'")
-        )
+        console.print(create_status_text(console, "progress", f"Checking profile '{profile_name}'"))
         result = ping_profile(profile, timeout=timeout)
     except ConfigurationError as error:
         error_console = error_console_from_context(context)
@@ -183,7 +187,7 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
             create_status_text(
                 error_console,
                 "error",
-                f"Could not connect to Kafka for profile '{profile_name}': {error}",
+                f"Could not connect for profile '{profile_name}': {error}",
             )
         )
         raise click.exceptions.Exit(1) from error
@@ -195,6 +199,15 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
             f"{'s' if result.broker_count != 1 else ''})",
         )
     )
+    if result.schema_registry_subject_count is not None:
+        console.print(
+            create_status_text(
+                console,
+                "success",
+                f"Connected to Schema Registry ({result.schema_registry_subject_count} subject"
+                f"{'s' if result.schema_registry_subject_count != 1 else ''})",
+            )
+        )
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})

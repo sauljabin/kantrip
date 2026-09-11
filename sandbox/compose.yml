@@ -52,6 +52,29 @@ services:
     ports:
       - "39092:39092"
 
+  schema-registry:
+    image: confluentinc/cp-schema-registry:${CONFLUENT_VERSION}
+    restart: unless-stopped
+    depends_on:
+      kafka1:
+        condition: service_healthy
+      kafka2:
+        condition: service_healthy
+      kafka3:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka1:9092,PLAINTEXT://kafka2:9092,PLAINTEXT://kafka3:9092
+    healthcheck:
+      test: [CMD-SHELL, "curl --fail --silent http://localhost:8081/subjects >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    ports:
+      - "8081:8081"
+
 networks:
   default:
     name: kantrip-sandbox

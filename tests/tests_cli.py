@@ -33,7 +33,7 @@ class TestCli(unittest.TestCase):
     def test_profile_commands_use_resolved_file(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
             environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
 
             listed = self.runner.invoke(cli, ["list"], env=environment)
@@ -41,8 +41,11 @@ class TestCli(unittest.TestCase):
 
         self.assertIn("Profile", listed.output)
         self.assertIn("Description", listed.output)
+        self.assertIn("Kafka", listed.output)
+        self.assertIn("Schema Registry", listed.output)
         self.assertIn("local", listed.output)
         self.assertIn("Local development", listed.output)
+        self.assertIn("localhost:8081", listed.output)
         self.assertNotIn("\x1b[", listed.output)
         self.assertEqual(0, shown.exit_code, shown.output)
         self.assertIn("bootstrapServers:", shown.output)
@@ -53,7 +56,14 @@ class TestCli(unittest.TestCase):
             environment = {"KANTRIP_CONFIG": str(config_path)}
             added = self.runner.invoke(
                 cli,
-                ["add", "development", "--bootstrap-server", "broker.example.com:19092"],
+                [
+                    "add",
+                    "development",
+                    "--bootstrap-server",
+                    "broker.example.com:19092",
+                    "--schema-registry-url",
+                    "http://registry.example.com:8081",
+                ],
                 env=environment,
             )
             listed = self.runner.invoke(cli, ["list"], env=environment)
@@ -63,6 +73,8 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, added.exit_code, added.output)
         self.assertIn("Profile", listed.output)
         self.assertIn("development", listed.output)
+        self.assertIn("http://registry.example.", listed.output)
+        self.assertIn("com:8081", listed.output)
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
 
@@ -135,9 +147,29 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("[running] Checking Kafka profile 'local'", result.output)
+        self.assertIn("[running] Checking profile 'local'", result.output)
         self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
         ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5)
+
+    def test_ping_reports_schema_registry_connectivity(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                return_value=PingResult(broker_count=2, schema_registry_subject_count=3),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "ping", "local", "--timeout", "1.5"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("[running] Checking profile 'local'", result.output)
+        self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
+        self.assertIn("[passed] Connected to Schema Registry (3 subjects)", result.output)
 
     def test_ping_exits_nonzero_when_kafka_is_unreachable(self) -> None:
         with self.runner.isolated_filesystem():
@@ -155,7 +187,7 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("[failed] Could not connect to Kafka for profile 'local'", result.stderr)
+        self.assertIn("[failed] Could not connect for profile 'local'", result.stderr)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():
@@ -212,6 +244,13 @@ profiles:
       bootstrapServers:
         - localhost:9092
       transport: plaintext
+      auth:
+        type: none
+"""
+
+_VALID_REGISTRY_CONFIG = _VALID_CONFIG + """\
+    schemaRegistry:
+      url: http://localhost:8081
       auth:
         type: none
 """

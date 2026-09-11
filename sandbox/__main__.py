@@ -24,12 +24,14 @@ from kantrip.adapters import (
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
     KCAT_EXECUTABLES,
+    SCHEMA_REGISTRY_EXECUTABLES,
 )
 from kantrip.console import create_console, create_status_text
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
 
 DEFAULT_BOOTSTRAP_SERVERS = ("localhost:19092",)
+DEFAULT_SCHEMA_REGISTRY_URL = "http://localhost:8081"
 KAFKA_COMMANDS = {
     "topics": KAFKA_TOPICS_EXECUTABLES,
     "producer": KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
@@ -38,6 +40,7 @@ KAFKA_COMMANDS = {
     "configs": KAFKA_CONFIGS_EXECUTABLES,
     "acls": KAFKA_ACLS_EXECUTABLES,
     "broker API versions": KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
+    "Schema Registry console": SCHEMA_REGISTRY_EXECUTABLES,
 }
 
 
@@ -57,6 +60,12 @@ class SmokeFailure(RuntimeError):
     help="Sandbox broker address; may be repeated.",
 )
 @cloup.option("--keep-topic", is_flag=True, help="Leave the smoke topic in the cluster.")
+@cloup.option(
+    "--schema-registry-url",
+    default=DEFAULT_SCHEMA_REGISTRY_URL,
+    show_default=True,
+    help="Sandbox Schema Registry URL.",
+)
 @cloup.option("--no-color", is_flag=True, help="Disable styled terminal output.")
 @cloup.option(
     "--shell",
@@ -70,6 +79,7 @@ def main(
     profile: str,
     bootstrap_servers: tuple[str, ...],
     keep_topic: bool,
+    schema_registry_url: str,
     no_color: bool,
     shells: tuple[str, ...],
 ) -> None:
@@ -87,6 +97,7 @@ def main(
             bootstrap_servers=bootstrap_servers,
             topic=smoke_topic,
             keep_topic=keep_topic,
+            schema_registry_url=schema_registry_url,
             environment=environment,
             shells=shells,
         )
@@ -101,6 +112,7 @@ def smoke(
     bootstrap_servers: Sequence[str],
     topic: str,
     keep_topic: bool,
+    schema_registry_url: str,
     environment: Mapping[str, str],
     shells: Sequence[str] = (),
 ) -> None:
@@ -119,7 +131,19 @@ def smoke(
     with tempfile.TemporaryDirectory(prefix="kantrip-smoke-") as directory:
         smoke_environment = dict(environment)
         smoke_environment["KANTRIP_CONFIG"] = str(Path(directory) / "config.yaml")
-        _add_profile(console, profile, bootstrap_servers, smoke_environment)
+        _add_profile(
+            console,
+            profile,
+            bootstrap_servers,
+            schema_registry_url,
+            smoke_environment,
+        )
+        _check(
+            console,
+            "check Kafka and Schema Registry connectivity",
+            [sys.executable, "-m", "kantrip.cli", "ping", profile],
+            smoke_environment,
+        )
         creator = installed["topics"][0]
         created = False
         try:
@@ -140,6 +164,13 @@ def smoke(
                 smoke_environment,
             )
             created = True
+            for executable in installed["Schema Registry console"]:
+                _check(
+                    console,
+                    f"validate the Schema Registry adapter with {executable}",
+                    _kantrip(profile, executable, "--help"),
+                    smoke_environment,
+                )
             for executable in installed["topics"]:
                 output = _check(
                     console,
@@ -334,6 +365,7 @@ def _shell_commands(
     )
     commands.extend(f"{executable} --version" for executable in installed["acls"])
     commands.extend(executable for executable in installed["broker API versions"])
+    commands.extend(f"{executable} --help" for executable in installed["Schema Registry console"])
     commands.extend(f"{executable} -L" for executable in kcat_executables)
     commands.extend(("kaskade admin --help", "kaskade consumer --help"))
     return commands
@@ -343,11 +375,13 @@ def _add_profile(
     console: Console,
     profile: str,
     bootstrap_servers: Sequence[str],
+    schema_registry_url: str,
     environment: Mapping[str, str],
 ) -> None:
     command = [sys.executable, "-m", "kantrip.cli", "add", profile]
     for server in bootstrap_servers:
         command.extend(("--bootstrap-server", server))
+    command.extend(("--schema-registry-url", schema_registry_url))
     _check(console, "prepare an isolated sandbox profile", command, environment)
 
 

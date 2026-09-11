@@ -43,10 +43,11 @@
   properties through `KCAT_CONFIG`; interactive shims preserve this contract and
   reject client attempts to override it with `-F`. Never place configuration
   values in command arguments.
-- Official Kafka tools recognize names with and without `.sh`. All receive
-  `--bootstrap-server`; consumers/producers receive their client config option,
-  and administrative tools receive `--command-config`, pointing at the private
-  generated Java properties file.
+- Apache Kafka Unix archives use `.sh` command names; Confluent Platform ships
+  the equivalent commands without `.sh`. Adapters recognize both forms for the
+  shared tools. All receive `--bootstrap-server`; consumers/producers receive
+  their client config option, and administrative tools receive
+  `--command-config`, pointing at the private generated Java properties file.
 - Kaskade `admin` and `consumer` receive a private INI file through
   `--config-file`. Do not assume a Kaskade environment variable until Kaskade
   implements that contract.
@@ -56,7 +57,8 @@
   and temporary; never install persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
 - `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata
-  with a bounded timeout; it does not depend on an installed external Kafka CLI.
+  and checks `/subjects` when Schema Registry is configured. Both use a bounded
+  timeout and do not depend on an installed external Kafka CLI.
 
 ## Sensitive Values and Output
 

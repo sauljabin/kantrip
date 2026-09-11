@@ -45,10 +45,11 @@ supported client names, restores the session shim directory at the front of
 file permissions, profile IDs, runtime support, active-session state, shim-path
 precedence, and installed client commands without contacting Kafka.
 
-`kantrip ping` performs an explicit remote connectivity check. It uses the
+`kantrip ping` performs explicit remote connectivity checks. It uses the
 Confluent Kafka `AdminClient` to request cluster metadata through the profile's
-bootstrap servers with a bounded timeout. This exercises broker discovery and
-provides a client boundary that can grow with authenticated profiles.
+bootstrap servers and, when a plain Schema Registry connection is configured,
+requests its `/subjects` endpoint. Both operations use the configured bounded
+timeout.
 
 Kantrip executes children directly with argument arrays. Normal command output
 and diagnostics remain separate, sensitive-looking values are redacted before

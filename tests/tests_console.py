@@ -91,7 +91,27 @@ class TestConsole(unittest.TestCase):
         self.assertEqual("heading", table.header_style)
         self.assertEqual("secondary", table.columns[0].style)
         self.assertEqual(12, table.columns[0].min_width)
-        self.assertEqual(20, table.columns[1].min_width)
+        self.assertEqual(12, table.columns[1].min_width)
+
+    def test_profile_table_does_not_display_registry_url_credentials_or_query(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+        profiles = {
+            "local": {
+                "kafka": {"bootstrapServers": ["localhost:9092"]},
+                "schemaRegistry": {
+                    "url": "http://user:secret@localhost:8081/path?token=classified"
+                },
+            }
+        }
+
+        console.print(create_profile_table(profiles))
+
+        output = stream.getvalue()
+        self.assertIn("http://localhost:8081", output)
+        self.assertIn("/path", output)
+        self.assertNotIn("secret", output)
+        self.assertNotIn("classified", output)
 
     def test_yaml_syntax_uses_color(self) -> None:
         stream = TerminalBuffer()

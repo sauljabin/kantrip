@@ -10,3 +10,7 @@ profiles:
       transport: plaintext
       auth:
         type: none
+    schemaRegistry:
+      url: http://localhost:8081
+      auth:
+        type: none

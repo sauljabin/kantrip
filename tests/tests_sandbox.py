@@ -29,11 +29,22 @@ class TestSandbox(unittest.TestCase):
         )
 
     def test_contains_only_the_supported_plaintext_kafka_cluster(self) -> None:
-        self.assertEqual({"kafka1", "kafka2", "kafka3"}, set(self.services))
-        for service in self.services.values():
+        self.assertEqual({"kafka1", "kafka2", "kafka3", "schema-registry"}, set(self.services))
+        for name in ("kafka1", "kafka2", "kafka3"):
+            service = self.services[name]
             protocols = service["environment"]["KAFKA_LISTENER_SECURITY_PROTOCOL_MAP"]
             self.assertNotIn("SSL", protocols)
             self.assertNotIn("SASL", protocols)
+
+    def test_contains_plain_schema_registry(self) -> None:
+        registry = self.services["schema-registry"]
+
+        self.assertEqual("confluentinc/cp-schema-registry:${CONFLUENT_VERSION}", registry["image"])
+        self.assertEqual(["8081:8081"], registry["ports"])
+        self.assertEqual(
+            "http://0.0.0.0:8081", registry["environment"]["SCHEMA_REGISTRY_LISTENERS"]
+        )
+        self.assertNotIn("HTTPS", registry["environment"]["SCHEMA_REGISTRY_LISTENERS"])
 
     def test_keeps_a_repository_specific_network(self) -> None:
         self.assertEqual("kantrip-sandbox", self.compose["networks"]["default"]["name"])

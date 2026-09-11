@@ -31,20 +31,19 @@ clients and a missing first-run configuration are warnings; invalid
 configuration or inconsistent active-session state makes the command exit with
 status 1. Doctor performs only local checks.
 
-## Kafka connectivity
+## Kafka and Schema Registry connectivity
 
-Check that at least one bootstrap server in a profile accepts a Kafka protocol
-request:
+Check Kafka and, when configured, Schema Registry connectivity:
 
 ```bash
 kantrip ping local
 ```
 
-`ping` uses the Confluent Kafka Admin client to request cluster metadata and
-succeeds when Kafka returns a valid response. It does not require kcat or the
-Apache Kafka CLI. The check uses a five-second timeout by default; set a
-different limit with `--timeout SECONDS`. Output uses colored status lines and
-emoji in a capable terminal, and readable text markers when styling is disabled.
+`ping` uses the Confluent Kafka Admin client to request cluster metadata. When
+the profile contains `schemaRegistry`, it also requests the registry's
+`/subjects` endpoint and reports the subject count. It does not require an
+external Kafka CLI. Both requests use a five-second timeout by default; set a
+different limit with `--timeout SECONDS`.
 
 ## First-run configuration
 
@@ -59,7 +58,8 @@ Choose one or more broker addresses when needed:
 ```bash
 kantrip add development \
   --bootstrap-server kafka-1.example.com:9092 \
-  --bootstrap-server kafka-2.example.com:9092
+  --bootstrap-server kafka-2.example.com:9092 \
+  --schema-registry-url http://registry.example.com:8081
 ```
 
 `add` follows the documented configuration lookup order, creates the file when
@@ -286,10 +286,11 @@ would override the selected profile.
 The profile schema accepts only `transport: plaintext` with `auth.type: none`,
 so every valid profile can be executed.
 
-### Kafka topics
+### Apache Kafka and Confluent Kafka commands
 
-Both executable names shipped by common Apache Kafka distributions are
-supported:
+Apache Kafka's Unix archives use `.sh` command names. Confluent Platform ships
+the equivalent commands without `.sh`. Kantrip recognizes both naming forms for
+the shared Kafka tools:
 
 ```bash
 kantrip exec local -- kafka-topics --list
@@ -305,8 +306,9 @@ Kantrip injects `--bootstrap-server` and a private Java client-properties file.
 Console consumers receive `--consumer.config`, console producers receive
 `--producer.config`, and administrative commands receive `--command-config`.
 Supplying an injected or legacy connection option explicitly is rejected because
-it could override the selected profile. Executable names with and without `.sh`
-are supported.
+it could override the selected profile. Use the `.sh` name with an Apache Kafka
+archive and the unsuffixed name with Confluent Platform. Kantrip also recognizes
+either form when another package exposes it.
 
 An interactive session creates temporary executable shims for whichever variants
 are installed before the session starts, so the same commands work without
@@ -328,6 +330,33 @@ shim directory to the front of `PATH`, and refreshes command lookup. This keeps
 Oh My Zsh, Homebrew, Fish configuration, and other startup-time path changes from
 bypassing the adapters. Each shell continues to use its normal user history
 location instead of the temporary session directory.
+
+### Additional Confluent Schema Registry console clients
+
+In addition to its unsuffixed versions of the shared Kafka commands, Confluent
+Platform supplies Avro, JSON Schema, and Protobuf producer and consumer scripts.
+These six commands are unsuffixed in Confluent Platform's `bin` directory:
+
+```bash
+kantrip exec local -- kafka-avro-console-producer --topic orders \
+  --property value.schema='{"type":"string"}'
+kantrip exec local -- kafka-avro-console-consumer --topic orders --from-beginning
+kantrip exec local -- kafka-json-schema-console-producer --topic orders \
+  --property value.schema='{"type":"string"}'
+kantrip exec local -- kafka-json-schema-console-consumer --topic orders --from-beginning
+kantrip exec local -- kafka-protobuf-console-producer --topic orders \
+  --property value.schema='syntax = "proto3"; message Order { string id = 1; }'
+kantrip exec local -- kafka-protobuf-console-consumer --topic orders --from-beginning
+```
+
+Each command receives the selected Kafka bootstrap servers, the private Java
+client file, and `schema.registry.url`. Explicit connection flags and
+`bootstrap.servers` or `schema.registry.url` properties are rejected. The same
+behavior is available through Bash, Zsh, and Fish interactive sessions.
+
+These commands require the plain `schemaRegistry` profile section documented
+below. A missing section, authentication, HTTPS, or TLS metadata produces an
+actionable error before the console client starts.
 
 ### Kaskade
 
@@ -368,7 +397,19 @@ Configuration lookup order is:
 3. `~/.config/kantrip/config.yaml`.
 
 Profile YAML stores plaintext broker metadata only. Authentication, TLS, and
-Schema Registry fields are rejected by the current schema.
+encrypted Kafka connections are rejected by the current schema. A profile may
+also contain a Schema Registry connection:
+
+```yaml
+schemaRegistry:
+  url: http://localhost:8081
+  auth:
+    type: none
+```
+
+Only this plain, unauthenticated registry connection is executable today.
+Authenticated and TLS-secured registry metadata may be represented for future
+support, but Schema Registry-aware commands reject it before launch.
 
 The configuration document does not contain a separate version field. The
 schema bundled with each Kantrip application release is authoritative, so
@@ -400,6 +441,16 @@ appropriate flags directly to supported tools.
 | `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Generated librdkafka properties path |
 | `KCAT_CONFIG` | Generated librdkafka properties path read natively by kcat |
 
+### Schema Registry variables
+
+These variables are present when the selected profile has a supported plain
+Schema Registry connection.
+
+| Variable | Meaning |
+| --- | --- |
+| `SCHEMA_REGISTRY_URL` | Schema Registry URL from the selected profile |
+| `SCHEMA_REGISTRY_CONFIG_FILE` | Generated Schema Registry properties path |
+
 ### Kantrip session metadata
 
 | Variable | Meaning |
@@ -422,9 +473,9 @@ disabled when:
 - `TERM=dumb`.
 - The destination stream is not a terminal.
 
-`kantrip list` displays configured profiles in a table with styled headers and
-profile names. `kantrip show PROFILE` syntax-highlights its redacted YAML. Both
-remain readable without ANSI color when styling is disabled.
+`kantrip list` displays configured profiles with their Kafka bootstrap servers
+and Schema Registry URL. `kantrip show PROFILE` syntax-highlights its redacted
+YAML. Both remain readable without ANSI color when styling is disabled.
 
 Sensitive-looking values are classified before they reach Rich. Styling never
 changes exit statuses or becomes necessary to interpret an error.

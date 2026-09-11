@@ -95,7 +95,7 @@ or exported pre-release checkout can bootstrap before the first commit.
 The sandbox is a manual environment, not a test-fixture provider. Automated tests
 must not import it.
 
-Start its three-node plaintext Kafka cluster:
+Start its three-node plaintext Kafka cluster and Schema Registry:
 
 ```bash
 docker compose --project-directory sandbox up -d
@@ -108,7 +108,8 @@ docker compose --project-directory sandbox down -v
 ```
 
 Kafka is available at `localhost:19092`, `localhost:29092`, and
-`localhost:39092`. The pinned Kafka image version lives in `sandbox/.env`.
+`localhost:39092`; Schema Registry is available at `http://localhost:8081`.
+The pinned Confluent image version lives in `sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
 adapter smoke checks:
@@ -121,13 +122,14 @@ uv run --locked python -m sandbox my-topic \
   --profile sandbox --bootstrap-server localhost:19092 --keep-topic
 ```
 
-By default, the script creates and lists a randomized topic, produces and
-consumes a record, and exercises the groups, configs, ACLs, and broker API
-adapters. It also lists the topic with kcat, validates the Kaskade adapter, and
-deletes the topic. At least one executable variant for every official Kafka
-command must be installed. The check uses styled emoji output in a terminal and
-text status labels when styling is disabled, including in CI or when `--no-color`
-is passed.
+By default, the script checks Kafka and Schema Registry connectivity, creates
+and lists a randomized topic, produces and consumes a record, and exercises the
+groups, configs, ACLs, broker API, and all six Schema Registry console adapters.
+It also lists the topic with kcat, validates the Kaskade adapter, and deletes the
+topic. At least one executable variant for every Apache Kafka command and all
+six Confluent Schema Registry console commands must be installed. The check uses
+styled emoji output in a terminal and text status labels when styling is
+disabled, including in CI or when `--no-color` is passed.
 
 Repeat `--shell` to add real interactive-subshell checks after the explicit
 command pass. A requested shell is required to be installed; the three-shell
@@ -171,8 +173,9 @@ uv run kantrip exec sandbox -- kafka-console-consumer \
   --topic kantrip-development --from-beginning --max-messages 2
 ```
 
-Replace any official Kafka command with its `.sh` form when using an Apache Kafka
-distribution that retains the suffix.
+The examples above use Confluent Platform's unsuffixed command names. When using
+an Apache Kafka Unix archive, use the corresponding `.sh` executable, such as
+`kafka-topics.sh` or `kafka-console-consumer.sh`.
 
 Additional quick checks for the other adapters are:
 

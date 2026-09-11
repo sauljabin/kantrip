@@ -16,10 +16,12 @@ from kantrip.adapters import (
     KAFKA_EXECUTABLES,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
+    SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
     create_subshell_shims,
     prepare_command,
 )
+from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
 from kantrip.shells import ShellError, prepare_interactive_shell, resolve_interactive_shell
 
 
@@ -56,6 +58,7 @@ def run_profile_session(
     _validate_kcat_arguments(arguments)
     kcat_properties = _client_properties(profile, "librdkafka")
     java_properties = _client_properties(profile, "java")
+    schema_registry_url, schema_registry_error = _schema_registry_connection(profile)
 
     session_id = secrets.token_hex(16)
     with tempfile.TemporaryDirectory(prefix=f"kantrip-{session_id}-") as directory:
@@ -63,6 +66,7 @@ def run_profile_session(
         kcat_config_path = session_directory / "kcat.conf"
         java_config_path = session_directory / "kafka.properties"
         kaskade_config_path = session_directory / "kaskade.ini"
+        schema_registry_config_path = session_directory / "schema-registry.properties"
         write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
         write_exclusive_text(java_config_path, _render_properties(java_properties), mode=0o600)
         write_exclusive_text(
@@ -70,6 +74,12 @@ def run_profile_session(
             f"[kafka]\n{_render_properties(kcat_properties)}",
             mode=0o600,
         )
+        if schema_registry_url is not None:
+            write_exclusive_text(
+                schema_registry_config_path,
+                _render_properties({"schema.registry.url": schema_registry_url}),
+                mode=0o600,
+            )
 
         child_environment = env | {
             "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
@@ -81,6 +91,15 @@ def run_profile_session(
             "KANTRIP_SESSION_ID": session_id,
             "KCAT_CONFIG": str(kcat_config_path),
         }
+        child_environment.pop("SCHEMA_REGISTRY_CONFIG_FILE", None)
+        child_environment.pop("SCHEMA_REGISTRY_URL", None)
+        if schema_registry_url is not None:
+            child_environment.update(
+                {
+                    "SCHEMA_REGISTRY_CONFIG_FILE": str(schema_registry_config_path),
+                    "SCHEMA_REGISTRY_URL": schema_registry_url,
+                }
+            )
         try:
             if command:
                 arguments = prepare_command(
@@ -88,6 +107,8 @@ def run_profile_session(
                     bootstrap_servers=kcat_properties["bootstrap.servers"],
                     java_config_path=java_config_path,
                     kaskade_config_path=kaskade_config_path,
+                    schema_registry_url=schema_registry_url,
+                    schema_registry_error=schema_registry_error,
                 )
             else:
                 shim_directory = create_subshell_shims(
@@ -96,6 +117,8 @@ def run_profile_session(
                     java_config_path=java_config_path,
                     kaskade_config_path=kaskade_config_path,
                     environment=env,
+                    schema_registry_url=schema_registry_url,
+                    schema_registry_error=schema_registry_error,
                 )
                 child_environment["PATH"] = (
                     f"{shim_directory}{os.pathsep}{env.get('PATH', os.defpath)}"
@@ -127,6 +150,11 @@ def _validate_executable(executable: str, environment: Mapping[str, str]) -> Non
                 "on macOS or your Linux package manager"
             )
         if executable_name in KAFKA_EXECUTABLES:
+            if executable_name in SCHEMA_REGISTRY_EXECUTABLES:
+                raise SessionError(
+                    f"command '{executable_name}' was not found; install the Confluent Schema "
+                    "Registry package and ensure its bin directory is on PATH"
+                )
             raise SessionError(
                 f"command '{executable_name}' was not found; install the Apache Kafka CLI "
                 "and ensure its bin directory is on PATH"
@@ -163,6 +191,13 @@ def _client_properties(profile: Mapping[str, Any], client: str) -> dict[str, str
         }
     )
     return properties
+
+
+def _schema_registry_connection(profile: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    try:
+        return plain_schema_registry_url(profile), None
+    except SchemaRegistryProfileError as error:
+        return None, str(error)
 
 
 def _property_value(value: object) -> str:

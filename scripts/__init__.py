@@ -124,6 +124,8 @@ def _communicate(
     next_write = time.monotonic()
     deadline = time.monotonic() + timeout
     ready = ready_text is None
+    ready_search_start = 0
+    ready_marker = ready_text.encode() if ready_text is not None else None
     while True:
         waited, status = os.waitpid(child, os.WNOHANG)
         if waited:
@@ -141,12 +143,20 @@ def _communicate(
         )
         if readable:
             _read_available(master, output)
-            ready = ready or ready_text is not None and ready_text.encode() in output
+            if (
+                not ready
+                and ready_marker is not None
+                and ready_marker in output[ready_search_start:]
+            ):
+                ready = True
         if writable:
             written = os.write(master, current)
             del current[:written]
             if not current:
                 next_write = time.monotonic() + 0.05
+                if ready_marker is not None:
+                    ready = False
+                    ready_search_start = max(0, len(output) - len(ready_marker) + 1)
 
 
 def _terminate_child(child: int) -> None:

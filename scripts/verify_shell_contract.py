@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES, KCAT_EXECUTABLES
 from kantrip.config import add_profile
 from scripts import run_terminal
@@ -39,11 +41,20 @@ record = {{
     "profile": os.environ.get("KANTRIP_PROFILE"),
     "session_directory": session_directory,
 }}
-if "--topic" in arguments and name.startswith("kafka-console-producer"):
+registry_config_path = os.environ.get("SCHEMA_REGISTRY_CONFIG_FILE")
+registry_config = Path(registry_config_path) if registry_config_path else None
+record["registry_config_exists"] = bool(registry_config and registry_config.is_file())
+record["registry_config_mode"] = (
+    stat.S_IMODE(registry_config.stat().st_mode)
+    if registry_config and registry_config.is_file()
+    else None
+)
+record["registry_url"] = os.environ.get("SCHEMA_REGISTRY_URL")
+if "--topic" in arguments and name.endswith("console-producer"):
     record["stdin"] = sys.stdin.read()
 with open(os.environ["KANTRIP_CONTRACT_LOG"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(record, sort_keys=True) + "\n")
-if name.startswith("kafka-console-consumer"):
+if name.endswith("console-consumer"):
     print("contract record")
 else:
     print("contract-topic")
@@ -78,6 +89,12 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             log_path = root / f"{shell_name}.jsonl"
             config_path = root / "config.yaml"
             add_profile("contract", config_path, bootstrap_servers=("contract.invalid:9092",))
+            configuration = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            configuration["profiles"]["contract"]["schemaRegistry"] = {
+                "url": "http://registry.invalid:8081",
+                "auth": {"type": "none"},
+            }
+            config_path.write_text(yaml.safe_dump(configuration, sort_keys=False), encoding="utf-8")
             _write_fake_clients(fake_bin)
             isolated_shell = _isolate_shell(shell_name, shell, root)
             environment = _contract_environment(
@@ -109,6 +126,11 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     "kaskade admin --config-file other.ini >/dev/null 2>&1 "
                     "|| echo __KASKADE_OVERRIDE_OK__"
                 ),
+                (
+                    "kafka-avro-console-producer --property "
+                    "schema.registry.url=http://other.invalid:8081 >/dev/null 2>&1 "
+                    "|| echo __SCHEMA_OVERRIDE_OK__"
+                ),
                 f"{shlex.quote(sys.executable)} -m kantrip.cli exec contract",
                 "echo CONTRACT_NEW",
                 "exit",
@@ -123,6 +145,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__KCAT_OVERRIDE_OK__", output)
             self.assertIn("__KAFKA_OVERRIDE_OK__", output)
             self.assertIn("__KASKADE_OVERRIDE_OK__", output)
+            self.assertIn("__SCHEMA_OVERRIDE_OK__", output)
             self.assertIn("contract\r\n", output)
             self.assertIn("a Kantrip session is already active", output)
             self.assertNotIn("__BYPASS__", output)
@@ -131,15 +154,29 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
-            self.assertEqual(len(_adapter_commands()), len(records))
+            self.assertEqual(len(ADAPTER_EXECUTABLES) + 1, len(records))
             for record in records:
                 self.assertEqual("contract", record["profile"])
                 self.assertTrue(record["config_exists"], record)
                 self.assertEqual(0o600, record["config_mode"])
                 self.assertTrue(record["config_in_session"], record)
                 self.assertFalse(Path(record["session_directory"]).exists())
+                if record["name"] in {
+                    "kafka-avro-console-consumer",
+                    "kafka-avro-console-producer",
+                    "kafka-json-schema-console-consumer",
+                    "kafka-json-schema-console-producer",
+                    "kafka-protobuf-console-consumer",
+                    "kafka-protobuf-console-producer",
+                }:
+                    self.assertTrue(record["registry_config_exists"], record)
+                    self.assertEqual(0o600, record["registry_config_mode"])
+                    self.assertEqual("http://registry.invalid:8081", record["registry_url"])
+                    self.assertIn(
+                        "schema.registry.url=http://registry.invalid:8081", record["argv"]
+                    )
             producers = [
-                record for record in records if record["name"].startswith("kafka-console-producer")
+                record for record in records if record["name"].endswith("console-producer")
             ]
             self.assertEqual({"contract record\n"}, {record["stdin"] for record in producers})
             self.assertTrue(_history_path(shell_name, home, environment).is_file())
@@ -267,11 +304,17 @@ def _history_check(shell_name: str) -> str:
 
 def _adapter_commands() -> list[str]:
     commands: list[str] = []
+    registry_commands: list[str] = []
     for executable in sorted(KAFKA_EXECUTABLES):
-        if executable.startswith("kafka-console-producer"):
-            commands.append(f"printf 'contract record\\n' | {executable} --topic contract")
+        if executable.endswith("console-producer"):
+            command = f"printf 'contract record\\n' | {executable} --topic contract"
         else:
-            commands.append(f"{executable} --contract")
+            command = f"{executable} --contract"
+        if "-avro-" in executable or "-json-schema-" in executable or "-protobuf-" in executable:
+            registry_commands.append(command)
+        else:
+            commands.append(command)
+    commands.append("; ".join(registry_commands))
     commands.extend(f"{executable} -L" for executable in sorted(KCAT_EXECUTABLES))
     commands.extend(("kaskade admin", "kaskade consumer"))
     return commands

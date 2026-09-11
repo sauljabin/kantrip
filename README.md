@@ -35,7 +35,10 @@ It can also verify broker connectivity directly from a profile.
 ### CLI sessions
 
 - Native kcat configuration through a private, temporary `KCAT_CONFIG` file
-- Profile-aware official Apache Kafka commands, with and without `.sh`
+- Profile-aware Apache Kafka `.sh` commands and the equivalent unsuffixed
+  Confluent Platform commands
+- Profile-aware Avro, JSON Schema, and Protobuf console clients for plain
+  Confluent Schema Registry connections
 - Private client-file integration for Kaskade admin and consumer modes
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Child exit-status preservation and automatic session cleanup
@@ -52,7 +55,8 @@ Kantrip's MVP grows from today's plaintext local workflow in three steps:
 
 1. Harden profile sessions and add local credential-store integration.
 2. Add TLS and authenticated Kafka profiles and adapters.
-3. Add Schema Registry, OAuth integration, and authenticated connectivity checks.
+3. Add authenticated Schema Registry, OAuth integration, and authenticated
+   connectivity checks.
 
 See the [MVP roadmap](MVP.md) for scope, ordering, and explicit non-goals.
 
@@ -89,8 +93,9 @@ exit
 
 `add` creates `~/.config/kantrip/config.yaml` when necessary and adds a plaintext
 profile for `localhost:9092`. Pass `--bootstrap-server HOST:PORT` to choose a
-different broker. Use `kantrip remove PROFILE` to remove one. `kantrip list`
-prints no profile rows when the configuration is absent or empty.
+different broker and `--schema-registry-url http://HOST:PORT` for an optional
+plain registry. Use `kantrip remove PROFILE` to remove one. `kantrip list` shows
+both endpoints and prints no rows when the configuration is absent or empty.
 
 ## Command compatibility
 
