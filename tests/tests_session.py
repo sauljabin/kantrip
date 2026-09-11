@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from kantrip.adapters import SCHEMA_REGISTRY_EXECUTABLES, create_subshell_shims
 from kantrip.session import SessionError, run_profile_session
 
 
@@ -21,7 +22,11 @@ class TestProfileSession(unittest.TestCase):
                     "java": {"request.timeout.ms": 30000},
                     "librdkafka": {"enable.idempotence": True},
                 },
-            }
+            },
+            "schemaRegistry": {
+                "url": "http://registry.invalid:8081",
+                "auth": {"type": "none"},
+            },
         }
 
     def test_runs_command_with_generated_kcat_configuration(self) -> None:
@@ -183,6 +188,188 @@ class TestProfileSession(unittest.TestCase):
             ):
                 run_profile_session("local", self.profile, [executable, option], environment={})
 
+    def test_adapts_all_schema_registry_console_commands(self) -> None:
+        adapters = {
+            "kafka-avro-console-consumer": "--consumer.config",
+            "kafka-avro-console-producer": "--producer.config",
+            "kafka-json-schema-console-consumer": "--consumer.config",
+            "kafka-json-schema-console-producer": "--producer.config",
+            "kafka-protobuf-console-consumer": "--consumer.config",
+            "kafka-protobuf-console-producer": "--producer.config",
+        }
+        for executable, config_option in adapters.items():
+            with self.subTest(executable=executable):
+                observed: dict[str, object] = {}
+
+                def inspect_run(
+                    arguments: list[str],
+                    *,
+                    _observed: dict[str, object] = observed,
+                    **options: object,
+                ) -> subprocess.CompletedProcess:
+                    environment = options["env"]
+                    assert isinstance(environment, dict)
+                    registry_config = Path(environment["SCHEMA_REGISTRY_CONFIG_FILE"])
+                    _observed["arguments"] = arguments
+                    _observed["environment"] = environment
+                    _observed["contents"] = registry_config.read_text(encoding="utf-8")
+                    _observed["mode"] = stat.S_IMODE(registry_config.stat().st_mode)
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                with (
+                    patch(
+                        "kantrip.session.shutil.which", return_value=f"/opt/confluent/{executable}"
+                    ),
+                    patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                ):
+                    run_profile_session(
+                        "local", self.profile, [executable, "--topic", "orders"], environment={}
+                    )
+
+                arguments = observed["arguments"]
+                assert isinstance(arguments, list)
+                self.assertEqual(
+                    [
+                        executable,
+                        "--bootstrap-server",
+                        "localhost:9092,localhost:9093",
+                        config_option,
+                    ],
+                    arguments[:4],
+                )
+                self.assertEqual("kafka.properties", Path(arguments[4]).name)
+                self.assertEqual(
+                    [
+                        "--property",
+                        "schema.registry.url=http://registry.invalid:8081",
+                        "--topic",
+                        "orders",
+                    ],
+                    arguments[5:],
+                )
+                environment = observed["environment"]
+                assert isinstance(environment, dict)
+                self.assertEqual("http://registry.invalid:8081", environment["SCHEMA_REGISTRY_URL"])
+                self.assertEqual(
+                    "schema.registry.url=http://registry.invalid:8081\n", observed["contents"]
+                )
+                self.assertEqual(0o600, observed["mode"])
+
+    def test_schema_registry_commands_reject_connection_property_overrides(self) -> None:
+        cases = (
+            ("--property", "schema.registry.url=http://other.invalid:8081"),
+            ("--property=schema.registry.url=http://other.invalid:8081",),
+            ("--producer-property", "bootstrap.servers=other.invalid:9092"),
+            ("--consumer-property=bootstrap.servers=other.invalid:9092",),
+            ("--producer.config=other.properties",),
+        )
+        for arguments in cases:
+            with (
+                self.subTest(arguments=arguments),
+                patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
+                patch("kantrip.session.subprocess.run") as run,
+                self.assertRaisesRegex(SessionError, "cannot override"),
+            ):
+                run_profile_session(
+                    "local",
+                    self.profile,
+                    ["kafka-avro-console-producer", *arguments],
+                    environment={},
+                )
+            run.assert_not_called()
+
+    def test_schema_registry_command_requires_registry_configuration(self) -> None:
+        del self.profile["schemaRegistry"]
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
+            patch("kantrip.session.subprocess.run") as run,
+            self.assertRaisesRegex(SessionError, "requires a schemaRegistry section"),
+        ):
+            run_profile_session(
+                "local", self.profile, ["kafka-avro-console-consumer"], environment={}
+            )
+        run.assert_not_called()
+
+    def test_secure_schema_registry_profile_is_rejected_before_launch(self) -> None:
+        self.profile["schemaRegistry"] = {
+            "url": "https://registry.invalid",
+            "auth": {"type": "basic"},
+        }
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
+            patch("kantrip.session.subprocess.run") as run,
+            self.assertRaisesRegex(SessionError, "authenticated or TLS-secured"),
+        ):
+            run_profile_session(
+                "local", self.profile, ["kafka-protobuf-console-consumer"], environment={}
+            )
+        run.assert_not_called()
+
+    def test_registry_shims_reject_missing_and_secure_profiles_without_launching_clients(
+        self,
+    ) -> None:
+        for registry_error, expected in (
+            (None, "requires a schemaRegistry section"),
+            ("secure Schema Registry settings are unsupported", "secure Schema Registry"),
+        ):
+            with self.subTest(registry_error=registry_error), tempfile.TemporaryDirectory() as root:
+                root_path = Path(root)
+                client_path = root_path / "client"
+                client_path.write_text("#!/bin/sh\nprintf CLIENT_LAUNCHED\n", encoding="utf-8")
+                client_path.chmod(0o700)
+
+                def find_executable(
+                    name: str, *, _client_path: Path = client_path, **options: object
+                ) -> str | None:
+                    del options
+                    return str(_client_path) if name in SCHEMA_REGISTRY_EXECUTABLES else None
+
+                with patch("kantrip.adapters.shutil.which", side_effect=find_executable):
+                    shim_directory = create_subshell_shims(
+                        root_path / "bin",
+                        bootstrap_servers="localhost:9092",
+                        java_config_path=root_path / "kafka.properties",
+                        kaskade_config_path=root_path / "kaskade.ini",
+                        kaskade_registry_config_path=root_path / "kaskade-registry.ini",
+                        environment={"PATH": str(root_path)},
+                        schema_registry_error=registry_error,
+                    )
+
+                for executable in SCHEMA_REGISTRY_EXECUTABLES:
+                    result = subprocess.run(
+                        [shim_directory / executable], capture_output=True, text=True, check=False
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn(expected, result.stderr)
+                    self.assertNotIn("CLIENT_LAUNCHED", result.stdout)
+
+    def test_missing_registry_does_not_inherit_registry_environment(self) -> None:
+        del self.profile["schemaRegistry"]
+        observed: dict[str, str] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            observed.update(environment)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kcat", "-L"],
+                environment={
+                    "SCHEMA_REGISTRY_URL": "http://other.invalid",
+                    "SCHEMA_REGISTRY_CONFIG_FILE": "/tmp/other.properties",
+                },
+            )
+
+        self.assertNotIn("SCHEMA_REGISTRY_URL", observed)
+        self.assertNotIn("SCHEMA_REGISTRY_CONFIG_FILE", observed)
+
     def test_adapts_kaskade_admin_and_consumer_with_a_private_ini_file(self) -> None:
         for command, command_arguments in (
             ("admin", []),
@@ -235,12 +422,80 @@ class TestProfileSession(unittest.TestCase):
                 assert isinstance(environment, dict)
                 self.assertNotIn("KASKADE_CLIENT_CONFIG", environment)
 
+    def test_kaskade_registry_deserializer_uses_profile_registry_config(self) -> None:
+        observed: dict[str, object] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            config_path = Path(arguments[3])
+            observed["arguments"] = arguments
+            observed["contents"] = config_path.read_text(encoding="utf-8")
+            observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kaskade", "consumer", "--topic", "orders", "-v", "registry"],
+                environment={},
+            )
+
+        arguments = observed["arguments"]
+        assert isinstance(arguments, list)
+        self.assertEqual("kaskade-registry.ini", Path(arguments[3]).name)
+        self.assertEqual(["--topic", "orders", "-v", "registry"], arguments[4:])
+        self.assertEqual(
+            "[kafka]\n"
+            "bootstrap.servers=localhost:9092,localhost:9093\n"
+            "client.id=kantrip\n"
+            "enable.idempotence=true\n"
+            "security.protocol=PLAINTEXT\n"
+            "\n[registry]\n"
+            "url=http://registry.invalid:8081\n",
+            observed["contents"],
+        )
+        self.assertEqual(0o600, observed["mode"])
+
+    def test_registry_deserializers_require_supported_profile_registry(self) -> None:
+        commands = (
+            ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
+            ["kaskade", "consumer", "-t", "orders", "-v", "registry"],
+        )
+        for command in commands:
+            for registry, expected in (
+                (None, "requires a schemaRegistry section"),
+                (
+                    {"url": "https://registry.invalid", "auth": {"type": "basic"}},
+                    "authenticated or TLS-secured",
+                ),
+            ):
+                with (
+                    self.subTest(command=command, registry=registry),
+                    patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
+                    patch("kantrip.session.subprocess.run") as run,
+                    self.assertRaisesRegex(SessionError, expected),
+                ):
+                    if registry is None:
+                        del self.profile["schemaRegistry"]
+                    else:
+                        self.profile["schemaRegistry"] = registry
+                    run_profile_session("local", self.profile, command, environment={})
+                run.assert_not_called()
+                self.profile["schemaRegistry"] = {
+                    "url": "http://registry.invalid:8081",
+                    "auth": {"type": "none"},
+                }
+
     def test_kaskade_cannot_override_profile_connection_options(self) -> None:
         for option in (
             "-bother:9092",
             "--bootstrap-servers=other:9092",
             "--config-file=other.ini",
             "--kafka=bootstrap.servers=other:9092",
+            "--registry=url=http://other.invalid:8081",
         ):
             with (
                 self.subTest(option=option),
@@ -455,11 +710,46 @@ class TestProfileSession(unittest.TestCase):
             run_profile_session("local", self.profile, ["kcat", "-L"], environment={})
 
     def test_kcat_cannot_override_generated_configuration(self) -> None:
+        for arguments in (
+            ("-F", "other.conf"),
+            ("-r", "http://other.invalid:8081"),
+            ("-X", "schema.registry.url=http://other.invalid:8081"),
+        ):
+            with (
+                self.subTest(arguments=arguments),
+                patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+                self.assertRaisesRegex(SessionError, "cannot override"),
+            ):
+                run_profile_session("local", self.profile, ["kcat", *arguments], environment={})
+
+    def test_kcat_avro_deserializer_uses_profile_registry_url(self) -> None:
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            self.assertRaisesRegex(SessionError, "-F option cannot override"),
+            patch(
+                "kantrip.session.subprocess.run",
+                return_value=subprocess.CompletedProcess(["kcat"], 0),
+            ) as run,
         ):
-            run_profile_session("local", self.profile, ["kcat", "-F", "other.conf"], environment={})
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
+                environment={},
+            )
+
+        self.assertEqual(
+            [
+                "kcat",
+                "-r",
+                "http://registry.invalid:8081",
+                "-C",
+                "-s",
+                "value=avro",
+                "-t",
+                "orders",
+            ],
+            run.call_args.args[0],
+        )
 
     def test_authenticated_profile_is_rejected_before_launch(self) -> None:
         self.profile["kafka"]["auth"] = {"type": "plain"}

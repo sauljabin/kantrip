@@ -1,6 +1,7 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+from urllib.error import URLError
 
 from confluent_kafka import KafkaError, KafkaException
 
@@ -66,6 +67,56 @@ class TestPing(unittest.TestCase):
         with (
             patch("kantrip.ping.AdminClient", return_value=admin),
             self.assertRaisesRegex(PingError, "did not return metadata"),
+        ):
+            ping_profile(profile)
+
+    def test_profile_checks_configured_schema_registry_subjects(self) -> None:
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["localhost:9092"],
+                "transport": "plaintext",
+                "auth": {"type": "none"},
+            },
+            "schemaRegistry": {
+                "url": "http://registry.invalid:8081/",
+                "auth": {"type": "none"},
+            },
+        }
+        admin = Mock()
+        admin.list_topics.return_value = SimpleNamespace(brokers={1: object()})
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'["orders-value", "users-value"]'
+
+        with (
+            patch("kantrip.ping.AdminClient", return_value=admin),
+            patch("kantrip.ping.urlopen", return_value=response) as open_registry,
+        ):
+            result = ping_profile(profile, timeout=1.25)
+
+        self.assertEqual(PingResult(1, schema_registry_subject_count=2), result)
+        request = open_registry.call_args.args[0]
+        self.assertEqual("http://registry.invalid:8081/subjects", request.full_url)
+        self.assertEqual(1.25, open_registry.call_args.kwargs["timeout"])
+
+    def test_profile_reports_schema_registry_connectivity_failure(self) -> None:
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["localhost:9092"],
+                "transport": "plaintext",
+                "auth": {"type": "none"},
+            },
+            "schemaRegistry": {
+                "url": "http://registry.invalid:8081",
+                "auth": {"type": "none"},
+            },
+        }
+        admin = Mock()
+        admin.list_topics.return_value = SimpleNamespace(brokers={1: object()})
+
+        with (
+            patch("kantrip.ping.AdminClient", return_value=admin),
+            patch("kantrip.ping.urlopen", side_effect=URLError("unavailable")),
+            self.assertRaisesRegex(PingError, "Schema Registry did not return"),
         ):
             ping_profile(profile)
 

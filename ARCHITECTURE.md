@@ -29,10 +29,12 @@ child also receives the documented plaintext `KAFKA_*` and `KCAT_CONFIG` values.
 ## Client adapters
 
 Supported adapters inject the selected bootstrap servers and generated client
-configuration using each tool's native interface. kcat reads `KCAT_CONFIG`,
-official Kafka commands receive connection and properties-file arguments, and
-Kaskade `admin` and `consumer` receive a generated INI file. Options that would
-override the selected profile are rejected.
+configuration using each tool's native interface. kcat reads `KCAT_CONFIG` and
+receives the plain registry URL only when an Avro deserializer requires `-r`.
+Official Kafka commands receive connection and properties-file arguments.
+Kaskade 5 `admin` and `consumer` receive a generated INI file, with registry
+deserializers selecting a second file containing `[registry]`. Options that
+would override the selected profile are rejected.
 
 Interactive shells load the user's normal startup configuration and history.
 Kantrip then removes aliases, functions, and Fish abbreviations that shadow
@@ -45,10 +47,11 @@ supported client names, restores the session shim directory at the front of
 file permissions, profile IDs, runtime support, active-session state, shim-path
 precedence, and installed client commands without contacting Kafka.
 
-`kantrip ping` performs an explicit remote connectivity check. It uses the
+`kantrip ping` performs explicit remote connectivity checks. It uses the
 Confluent Kafka `AdminClient` to request cluster metadata through the profile's
-bootstrap servers with a bounded timeout. This exercises broker discovery and
-provides a client boundary that can grow with authenticated profiles.
+bootstrap servers and, when a plain Schema Registry connection is configured,
+requests its `/subjects` endpoint. Both operations use the configured bounded
+timeout.
 
 Kantrip executes children directly with argument arrays. Normal command output
 and diagnostics remain separate, sensitive-looking values are redacted before

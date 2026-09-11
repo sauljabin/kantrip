@@ -73,6 +73,40 @@
         }
       }
     },
+    "schemaRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "auth"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "transport": {
+          "enum": ["plaintext", "tls"]
+        },
+        "auth": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/noneAuth"
+            },
+            {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": {
+                  "enum": ["basic", "bearer"]
+                }
+              }
+            }
+          ]
+        },
+        "tls": {
+          "type": ["object", "boolean"]
+        }
+      }
+    },
     "profile": {
       "type": "object",
       "additionalProperties": false,
@@ -96,6 +130,9 @@
         },
         "kafka": {
           "$ref": "#/$defs/kafka"
+        },
+        "schemaRegistry": {
+          "$ref": "#/$defs/schemaRegistry"
         }
       }
     }

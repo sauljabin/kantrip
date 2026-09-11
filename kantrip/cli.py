@@ -10,14 +10,18 @@ import click
 import cloup
 import yaml
 from rich.console import Console
+from rich.padding import Padding
+from rich.text import Text
 
 from kantrip import APP_VERSION
 from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
 from kantrip.console import (
+    StatusKind,
     create_console,
     create_profile_table,
     create_status_text,
     create_yaml_syntax,
+    show_progress,
 )
 from kantrip.doctor import run_doctor
 from kantrip.ping import PingError, ping_profile
@@ -67,21 +71,37 @@ def error_console_from_context(context: cloup.Context) -> Console:
     return console
 
 
+def _split_bootstrap_servers(
+    context: click.Context, parameter: click.Parameter, value: str
+) -> tuple[str, ...]:
+    del context, parameter
+    servers = tuple(server.strip() for server in value.split(","))
+    if not servers or any(not server for server in servers):
+        raise click.BadParameter("must be a comma-separated list of host:port addresses")
+    return servers
+
+
 @cli.command("add")
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
-    "--bootstrap-server",
+    "-b",
+    "--bootstrap-servers",
     "bootstrap_servers",
-    multiple=True,
-    default=("localhost:9092",),
+    default="localhost:9092",
     show_default=True,
-    help="Kafka broker address; may be repeated.",
+    callback=_split_bootstrap_servers,
+    help="Comma-separated Kafka broker addresses.",
 )
-@cloup.option("--description", help="Optional profile description.")
+@cloup.option("-d", "--description", help="Optional profile description.")
+@cloup.option(
+    "--schema-registry-url",
+    help="Optional plain, unauthenticated Schema Registry URL.",
+)
 def add_configured_profile(
     profile_name: str,
     bootstrap_servers: tuple[str, ...],
     description: str | None,
+    schema_registry_url: str | None,
 ) -> None:
     """Add a plaintext profile."""
     try:
@@ -89,6 +109,7 @@ def add_configured_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
             description=description,
+            schema_registry_url=schema_registry_url,
         )
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
@@ -143,15 +164,59 @@ def current_profile() -> None:
 
 
 @cli.command("doctor")
+@cloup.option(
+    "--verbose",
+    is_flag=True,
+    help="Show every diagnostic, including resolved paths and profile IDs.",
+)
 @cloup.pass_context
-def doctor(context: cloup.Context) -> None:
+def doctor(context: cloup.Context, verbose: bool) -> None:
     """Check Kantrip's local configuration and command environment."""
     console = console_from_context(context)
     report = run_doctor()
-    for check in report.checks:
-        console.print(create_status_text(console, check.status, check.message))
+    console.print(Text("Kantrip Doctor", style="heading"))
+    for section, checks in report.sections(verbose=verbose):
+        console.print()
+        console.print(Text(section, style="heading"))
+        for index, check in enumerate(checks):
+            status_text = create_status_text(console, check.status, check.message)
+            if check.verbose_only:
+                has_next_detail = index + 1 < len(checks) and checks[index + 1].verbose_only
+                detail_text = Text(
+                    "├─ " if has_next_detail else "└─ ",
+                    style="muted",
+                )
+                detail_text.append_text(status_text)
+                status_text = detail_text
+            console.print(
+                Padding(
+                    status_text,
+                    (0, 0, 0, 2),
+                    expand=False,
+                )
+            )
+    console.print()
+    if report.error_count:
+        summary_status: StatusKind = "error"
+        summary = _doctor_summary("Unhealthy", report.error_count, report.warning_count)
+    elif report.warning_count:
+        summary_status = "warning"
+        summary = _doctor_summary("Healthy", 0, report.warning_count)
+    else:
+        summary_status = "success"
+        summary = "Healthy"
+    console.print(create_status_text(console, summary_status, summary))
     if not report.healthy:
         raise click.exceptions.Exit(1)
+
+
+def _doctor_summary(label: str, errors: int, warnings: int) -> str:
+    details: list[str] = []
+    if errors:
+        details.append(f"{errors} error{'s' if errors != 1 else ''}")
+    if warnings:
+        details.append(f"{warnings} warning{'s' if warnings != 1 else ''}")
+    return f"{label} with {', '.join(details)}"
 
 
 @cli.command("ping")
@@ -165,14 +230,12 @@ def doctor(context: cloup.Context) -> None:
 )
 @cloup.pass_context
 def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
-    """Check whether PROFILE can connect to Kafka."""
+    """Check PROFILE's Kafka and configured Schema Registry connections."""
     console = console_from_context(context)
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
-        console.print(
-            create_status_text(console, "progress", f"Checking Kafka profile '{profile_name}'")
-        )
-        result = ping_profile(profile, timeout=timeout)
+        with show_progress(console, f"Checking profile '{profile_name}'"):
+            result = ping_profile(profile, timeout=timeout)
     except ConfigurationError as error:
         error_console = error_console_from_context(context)
         error_console.print(create_status_text(error_console, "error", str(error)))
@@ -183,7 +246,7 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
             create_status_text(
                 error_console,
                 "error",
-                f"Could not connect to Kafka for profile '{profile_name}': {error}",
+                f"Could not connect for profile '{profile_name}': {error}",
             )
         )
         raise click.exceptions.Exit(1) from error
@@ -195,6 +258,15 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
             f"{'s' if result.broker_count != 1 else ''})",
         )
     )
+    if result.schema_registry_subject_count is not None:
+        console.print(
+            create_status_text(
+                console,
+                "success",
+                f"Connected to Schema Registry ({result.schema_registry_subject_count} subject"
+                f"{'s' if result.schema_registry_subject_count != 1 else ''})",
+            )
+        )
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})

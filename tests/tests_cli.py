@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from kantrip import APP_VERSION
 from kantrip.cli import cli
+from kantrip.config import load_configuration
 from kantrip.ping import PingError, PingResult
 
 
@@ -33,7 +34,7 @@ class TestCli(unittest.TestCase):
     def test_profile_commands_use_resolved_file(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
             environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
 
             listed = self.runner.invoke(cli, ["list"], env=environment)
@@ -41,8 +42,11 @@ class TestCli(unittest.TestCase):
 
         self.assertIn("Profile", listed.output)
         self.assertIn("Description", listed.output)
+        self.assertIn("Kafka", listed.output)
+        self.assertIn("Schema Registry", listed.output)
         self.assertIn("local", listed.output)
         self.assertIn("Local development", listed.output)
+        self.assertIn("localhost:8081", listed.output)
         self.assertNotIn("\x1b[", listed.output)
         self.assertEqual(0, shown.exit_code, shown.output)
         self.assertIn("bootstrapServers:", shown.output)
@@ -53,9 +57,19 @@ class TestCli(unittest.TestCase):
             environment = {"KANTRIP_CONFIG": str(config_path)}
             added = self.runner.invoke(
                 cli,
-                ["add", "development", "--bootstrap-server", "broker.example.com:19092"],
+                [
+                    "add",
+                    "development",
+                    "-b",
+                    "broker-1.example.com:9092,broker-2.example.com:9092",
+                    "-d",
+                    "Development cluster",
+                    "--schema-registry-url",
+                    "http://registry.example.com:8081",
+                ],
                 env=environment,
             )
+            profile = load_configuration(config_path).profile("development")
             listed = self.runner.invoke(cli, ["list"], env=environment)
             removed = self.runner.invoke(cli, ["remove", "development"], env=environment)
             empty = self.runner.invoke(cli, ["list"], env=environment)
@@ -63,8 +77,22 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, added.exit_code, added.output)
         self.assertIn("Profile", listed.output)
         self.assertIn("development", listed.output)
+        self.assertIn("Development cluster", listed.output)
+        self.assertEqual(
+            ["broker-1.example.com:9092", "broker-2.example.com:9092"],
+            profile["kafka"]["bootstrapServers"],
+        )
+        self.assertEqual("http://registry.example.com:8081", profile["schemaRegistry"]["url"])
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
+
+    def test_add_rejects_empty_comma_separated_bootstrap_server(self) -> None:
+        result = self.runner.invoke(
+            cli, ["add", "invalid", "-b", "localhost:9092,"], env={"KANTRIP_CONFIG": "x"}
+        )
+
+        self.assertNotEqual(0, result.exit_code)
+        self.assertIn("comma-separated list of host:port addresses", result.output)
 
     def test_list_is_empty_when_configuration_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -96,6 +124,7 @@ class TestCli(unittest.TestCase):
                 run.return_value = DoctorReport(
                     (
                         DoctorCheck("success", "configuration is valid"),
+                        DoctorCheck("success", "resolved executable path", verbose_only=True),
                         DoctorCheck("warning", "kcat was not found"),
                     )
                 )
@@ -106,8 +135,32 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Kantrip Doctor", result.output)
+        self.assertIn("System", result.output)
         self.assertIn("[passed] configuration is valid", result.output)
         self.assertIn("[warning] kcat was not found", result.output)
+        self.assertNotIn("resolved executable path", result.output)
+        self.assertIn("[warning] Healthy with 1 warning", result.output)
+
+    def test_doctor_verbose_shows_detailed_checks(self) -> None:
+        with patch("kantrip.cli.run_doctor") as run:
+            from kantrip.doctor import DoctorCheck, DoctorReport
+
+            run.return_value = DoctorReport(
+                (DoctorCheck("success", "resolved executable path", verbose_only=True),)
+            )
+            result = self.runner.invoke(cli, ["--no-color", "doctor", "--verbose"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("└─ [passed] resolved executable path", result.output)
+        self.assertIn("[passed] Healthy", result.output)
+
+    def test_doctor_help_lists_only_long_verbose_option(self) -> None:
+        result = self.runner.invoke(cli, ["doctor", "--help"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        verbose_line = next(line for line in result.output.splitlines() if "--verbose" in line)
+        self.assertTrue(verbose_line.lstrip().startswith("--verbose "))
 
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
         with patch("kantrip.cli.run_doctor") as run:
@@ -118,6 +171,7 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] configuration is invalid", result.output)
+        self.assertIn("[failed] Unhealthy with 1 error", result.output)
 
     def test_ping_reports_kafka_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
@@ -135,9 +189,29 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("[running] Checking Kafka profile 'local'", result.output)
+        self.assertIn("[running] Checking profile 'local'", result.output)
         self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
         ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5)
+
+    def test_ping_reports_schema_registry_connectivity(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                return_value=PingResult(broker_count=2, schema_registry_subject_count=3),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "ping", "local", "--timeout", "1.5"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("[running] Checking profile 'local'", result.output)
+        self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
+        self.assertIn("[passed] Connected to Schema Registry (3 subjects)", result.output)
 
     def test_ping_exits_nonzero_when_kafka_is_unreachable(self) -> None:
         with self.runner.isolated_filesystem():
@@ -155,7 +229,7 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("[failed] Could not connect to Kafka for profile 'local'", result.stderr)
+        self.assertIn("[failed] Could not connect for profile 'local'", result.stderr)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():
@@ -212,6 +286,13 @@ profiles:
       bootstrapServers:
         - localhost:9092
       transport: plaintext
+      auth:
+        type: none
+"""
+
+_VALID_REGISTRY_CONFIG = _VALID_CONFIG + """\
+    schemaRegistry:
+      url: http://localhost:8081
       auth:
         type: none
 """

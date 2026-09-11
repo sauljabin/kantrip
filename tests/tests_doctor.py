@@ -26,6 +26,23 @@ class TestDoctor(unittest.TestCase):
         self.assertTrue(any("Configuration matches schema" in message for message in messages))
         self.assertTrue(any(message.startswith("kcat: ") for message in messages))
         self.assertTrue(any("Apache Kafka CLI: all 7" in message for message in messages))
+        self.assertTrue(any("Schema Registry console: all 6" in message for message in messages))
+        self.assertTrue(
+            any("Schema Registry profiles: 1 profile" in message for message in messages)
+        )
+        verbose_messages = [
+            check.message
+            for _, checks in report.sections(verbose=True)
+            for check in checks
+            if check.verbose_only
+        ]
+        self.assertTrue(any(message.startswith("Kafka topics: ") for message in verbose_messages))
+        self.assertTrue(
+            any(
+                message.startswith("kafka-protobuf-console-consumer: ")
+                for message in verbose_messages
+            )
+        )
 
     def test_invalid_configuration_is_unhealthy_without_contacting_kafka(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -40,6 +57,62 @@ class TestDoctor(unittest.TestCase):
         self.assertFalse(report.healthy)
         self.assertTrue(
             any("configuration does not match schema" in check.message for check in report.checks)
+        )
+
+    def test_unsupported_schema_registry_profile_is_unhealthy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(
+                _VALID_CONFIG.replace("http://localhost:8081", "https://localhost:8081"),
+                encoding="utf-8",
+            )
+            config_path.chmod(0o600)
+            environment = {
+                "KANTRIP_CONFIG": str(config_path),
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            with patch("kantrip.doctor.shutil.which", side_effect=_installed_tool):
+                report = run_doctor(environment)
+
+        self.assertFalse(report.healthy)
+        self.assertTrue(
+            any(
+                "Schema Registry profile 'local' is not executable" in check.message
+                for check in report.checks
+            )
+        )
+
+    def test_names_a_missing_schema_registry_console_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.chmod(0o600)
+            environment = {
+                "KANTRIP_CONFIG": str(config_path),
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            def installed_without_protobuf_consumer(
+                name: str, path: str | None = None
+            ) -> str | None:
+                if name == "kafka-protobuf-console-consumer":
+                    return None
+                return _installed_tool(name, path)
+
+            with patch(
+                "kantrip.doctor.shutil.which",
+                side_effect=installed_without_protobuf_consumer,
+            ):
+                report = run_doctor(environment)
+
+        self.assertTrue(
+            any(
+                "missing: kafka-protobuf-console-consumer" in check.message
+                for check in report.checks
+            )
         )
 
     def test_active_session_allows_a_benign_path_prefix(self) -> None:
@@ -122,6 +195,12 @@ def _installed_tool(name: str, path: str | None = None) -> str | None:
         "kafka-configs",
         "kafka-acls",
         "kafka-broker-api-versions",
+        "kafka-avro-console-consumer",
+        "kafka-avro-console-producer",
+        "kafka-json-schema-console-consumer",
+        "kafka-json-schema-console-producer",
+        "kafka-protobuf-console-consumer",
+        "kafka-protobuf-console-producer",
     }
     return f"/tools/{name}" if name in installed else None
 
@@ -134,6 +213,10 @@ profiles:
       bootstrapServers:
         - localhost:9092
       transport: plaintext
+      auth:
+        type: none
+    schemaRegistry:
+      url: http://localhost:8081
       auth:
         type: none
 """

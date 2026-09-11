@@ -1,7 +1,6 @@
 # Kantrip Usage
 
-Kantrip is in pre-release development. The current CLI can manage plaintext
-profiles and run profile sessions:
+Kantrip is a pre-release CLI for plaintext profiles and scoped sessions:
 
 ```bash
 kantrip add local
@@ -23,28 +22,29 @@ connection:
 kantrip doctor
 ```
 
-Doctor validates the resolved configuration against the bundled schema, checks
-that profile IDs are unique, warns about unsafe file permissions, verifies an
-active session and its adapter path, and discovers Kantrip, the interactive
-shell, kcat, Apache Kafka commands, and Kaskade on `PATH`. Missing optional
-clients and a missing first-run configuration are warnings; invalid
-configuration or inconsistent active-session state makes the command exit with
-status 1. Doctor performs only local checks.
+Doctor groups local checks under System, Configuration, Session, and Clients,
+names missing commands, and summarizes health. It validates configuration,
+permissions, profile IDs, registry support, active-session state, and the
+installed shell, kcat, Kafka, Confluent Schema Registry, and Kaskade commands.
+Use `--verbose` for executable paths and individual checks.
 
-## Kafka connectivity
+Missing optional clients or first-run configuration produce warnings. Invalid
+configuration, unsupported registry settings, or inconsistent session state
+exit with status 1. Doctor never contacts Kafka or Schema Registry.
 
-Check that at least one bootstrap server in a profile accepts a Kafka protocol
-request:
+## Kafka and Schema Registry connectivity
+
+Check Kafka and, when configured, Schema Registry connectivity:
 
 ```bash
 kantrip ping local
 ```
 
-`ping` uses the Confluent Kafka Admin client to request cluster metadata and
-succeeds when Kafka returns a valid response. It does not require kcat or the
-Apache Kafka CLI. The check uses a five-second timeout by default; set a
-different limit with `--timeout SECONDS`. Output uses colored status lines and
-emoji in a capable terminal, and readable text markers when styling is disabled.
+`ping` uses Confluent's Admin client for Kafka metadata and, when configured,
+requests Schema Registry `/subjects`; it reports broker and subject counts. It
+needs no external CLI and defaults to a five-second timeout, configurable with
+`--timeout SECONDS`. Colored terminals animate checks; plain output uses
+`[running]`.
 
 ## First-run configuration
 
@@ -58,20 +58,20 @@ Choose one or more broker addresses when needed:
 
 ```bash
 kantrip add development \
-  --bootstrap-server kafka-1.example.com:9092 \
-  --bootstrap-server kafka-2.example.com:9092
+  --bootstrap-servers kafka-1.example.com:9092,kafka-2.example.com:9092 \
+  --description 'Development cluster' \
+  --schema-registry-url http://registry.example.com:8081
 ```
 
-`add` follows the documented configuration lookup order, creates the file when
-necessary, and refuses to overwrite an existing profile. Remove a profile with:
+`add` creates the configuration when needed and never overwrites a profile.
+Remove one with:
 
 ```bash
 kantrip remove development
 ```
 
-`kantrip list` prints no profile rows and exits successfully when configuration
-does not exist or contains no profiles. Existing files are validated automatically
-whenever Kantrip reads or updates them.
+`kantrip list` succeeds without rows when no profiles exist. Kantrip validates
+configuration whenever it reads or updates it.
 
 ## Profile workflow
 
@@ -81,9 +81,9 @@ kantrip show local
 kantrip exec local -- kcat -L
 ```
 
-Omitting the command after `kantrip exec PROFILE` opens an interactive supervised
-Bash, Zsh, or Fish subshell using `SHELL`. When `SHELL` is unset, Kantrip selects
-an installed Bash. Other shells are rejected with an actionable error:
+Without a command, `kantrip exec PROFILE` opens a supervised Bash, Zsh, or Fish
+subshell from `SHELL`, falling back to Bash when it is unset. Other shells fail
+with an actionable error:
 
 ```bash
 kantrip exec local
@@ -93,26 +93,20 @@ kafka-topics --list
 exit
 ```
 
-Kantrip never exports a selected profile into the parent shell. Background or
-detached child processes are not supported because they can outlive the temporary
-session. Sessions cannot be nested: exit the current `kantrip exec` subshell
-before starting another one.
+Kantrip never exports the profile to the parent shell. Nested sessions and
+detached children are unsupported; exit before starting another session.
 
-`kantrip current` prints the active profile name inside the session. Outside a
-session it reports that no profile is active. This is the command equivalent of
-reading `KANTRIP_PROFILE` directly.
+`kantrip current` prints the active profile or reports that none is selected. It
+is equivalent to reading `KANTRIP_PROFILE`.
 
-The subshell loads the user's normal startup configuration and keeps its normal
-history file. Kantrip then removes aliases, functions, and Fish abbreviations
-that shadow supported client names, restores its temporary adapter directory at
-the front of `PATH`, and refreshes the shell's command lookup. These changes are
-limited to the child shell and disappear on `exit`.
+The subshell preserves normal startup files and history. It neutralizes aliases,
+functions, and Fish abbreviations that shadow adapters, keeps the shim directory
+first on `PATH`, and removes these changes on exit.
 
 ## Displaying the active profile in your prompt
 
-Prompt integrations should read `KANTRIP_PROFILE`. It is available only inside
-an interactive shell opened by `kantrip exec PROFILE`, and it disappears when
-that session exits. Prompt code does not need to invoke Kantrip repeatedly.
+Prompt integrations should read `KANTRIP_PROFILE`, which exists only inside a
+`kantrip exec PROFILE` subshell. They need not invoke Kantrip repeatedly.
 
 Configure only the integration that renders your prompt:
 
@@ -123,8 +117,7 @@ Configure only the integration that renders your prompt:
 
 ### Choose a display style
 
-The examples below use `kantrip:PROFILE` by default. You can keep that label or
-replace the indicated line with one of these compact alternatives:
+Examples use `kantrip:PROFILE`; the alternatives below provide compact prefixes:
 
 | Style | Reference | Requirement |
 | --- | --- | --- |
@@ -132,10 +125,9 @@ replace the indicated line with one of these compact alternatives:
 | Kantrip magic staff | <img src="images/nf-md-magic-staff.svg" alt="Nerd Font magic staff glyph" width="48"> | MesloLGS NF or another Nerd Font with `nf-md-magic_staff` (`U+F1844`) |
 | Apache Kafka | <img src="images/nf-md-apache-kafka.svg" alt="Nerd Font Apache Kafka glyph" width="48"> | MesloLGS NF or another Nerd Font with `nf-md-apache_kafka` (`U+F100F`) |
 
-The Nerd Font characters may appear as boxes in GitHub code blocks because the
-site does not load Nerd Fonts. The images above show how they look in a
-compatible terminal. Browse the
-[Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet) for more glyphs.
+GitHub may render Nerd Font characters as boxes; the images show their terminal
+appearance. See the [Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet)
+for more glyphs.
 
 ### Starship
 
@@ -149,8 +141,7 @@ format = '[kantrip:$output]($style) '
 style = 'bold purple'
 ```
 
-To use a compact prefix, replace the `format` line with exactly one of the
-following alternatives.
+For a compact prefix, replace `format` with one of these alternatives.
 
 Magic-wand emoji:
 
@@ -190,8 +181,7 @@ setopt prompt_subst
 PROMPT='$(kantrip_prompt_info)'"$PROMPT"
 ```
 
-To use a compact prefix, replace the first `print` command in
-`kantrip_prompt_info` with exactly one of the following alternatives.
+For a compact prefix, replace the first `print` command with one alternative.
 
 Magic-wand emoji:
 
@@ -225,8 +215,7 @@ function prompt_kantrip() {
 }
 ```
 
-To use a compact prefix, replace the `p10k segment` line with exactly one of the
-following alternatives.
+For a compact prefix, replace the `p10k segment` line with one alternative.
 
 Magic-wand emoji:
 
@@ -257,39 +246,34 @@ Start a new shell or reload the relevant prompt configuration, then run:
 kantrip exec local
 ```
 
-The active profile should appear in the prompt inside the new subshell. Run
-`exit` and confirm that it disappears when you return to the parent shell.
+The profile should appear in the subshell and disappear after `exit`.
 
 ## Supported command-line tools
 
-Kantrip configures supported Kafka tools inside `kantrip exec` while preventing
-command-line options from overriding the selected profile.
+Kantrip configures supported tools inside `kantrip exec` and blocks profile
+overrides. It reports missing clients but does not install them.
 
 ### kcat
 
-Kantrip generates a private librdkafka properties file for each session and sets
-`KCAT_CONFIG` to its path. kcat reads this variable natively, so Kantrip does not
-create an alias or add configuration arguments. Interactive sessions use a
-temporary pass-through executable only to keep the installed kcat ahead of
-startup-time `PATH`, alias, and function changes.
+Each session sets `KCAT_CONFIG` to a private librdkafka properties file.
+Interactive sessions add a pass-through executable to resist startup-time
+`PATH`, alias, and function changes without configuration arguments.
 
 ```bash
 kantrip exec local -- kcat -L
 kantrip exec local -- kcat -C -t orders
 kantrip exec local -- kcat -P -t orders
+kantrip exec local -- kcat -C -t avro-orders -s value=avro
 ```
 
-Kantrip reports a command-not-found error when an explicit executable is missing.
-It does not install external tools. The kcat `-F` option is rejected because it
-would override the selected profile.
+For kcat 1.7+, `-s avro`, `-s key=avro`, and `-s value=avro` inject the profile's
+registry URL through `-r`. Kantrip rejects `-F`, `-r`, and
+`-X schema.registry.url=...` overrides. Other modes need no registry profile.
 
-The profile schema accepts only `transport: plaintext` with `auth.type: none`,
-so every valid profile can be executed.
+### Apache Kafka and Confluent Kafka commands
 
-### Kafka topics
-
-Both executable names shipped by common Apache Kafka distributions are
-supported:
+Kantrip recognizes Apache Kafka's `.sh` commands and Confluent Platform's
+unsuffixed equivalents:
 
 ```bash
 kantrip exec local -- kafka-topics --list
@@ -304,13 +288,11 @@ kantrip exec local -- kafka-broker-api-versions
 Kantrip injects `--bootstrap-server` and a private Java client-properties file.
 Console consumers receive `--consumer.config`, console producers receive
 `--producer.config`, and administrative commands receive `--command-config`.
-Supplying an injected or legacy connection option explicitly is rejected because
-it could override the selected profile. Executable names with and without `.sh`
-are supported.
+Injected and legacy connection options cannot override the profile. Use `.sh`
+with Apache Kafka archives and unsuffixed names with Confluent Platform.
 
-An interactive session creates temporary executable shims for whichever variants
-are installed before the session starts, so the same commands work without
-repeating `kantrip exec`:
+Interactive sessions create temporary shims, so commands work without repeating
+`kantrip exec`:
 
 ```bash
 kantrip exec local
@@ -319,47 +301,62 @@ kafka-console-consumer --topic orders --from-beginning
 exit
 ```
 
-The shims exist only inside that session and are removed on exit. Kantrip does
-not install the Kafka CLI or create persistent shell aliases. Bash and Zsh use a
-private startup file that loads the user's normal startup file; Fish uses an init
-command after its normal configuration loads. Kantrip then clears child-shell
-aliases, functions, or abbreviations for supported client names, restores the
-shim directory to the front of `PATH`, and refreshes command lookup. This keeps
-Oh My Zsh, Homebrew, Fish configuration, and other startup-time path changes from
-bypassing the adapters. Each shell continues to use its normal user history
-location instead of the temporary session directory.
+These shims follow the session behavior above and disappear on exit; Kantrip
+installs no CLI or persistent aliases.
 
-### Kaskade
+### Additional Confluent Schema Registry console clients
 
-Kaskade's current `admin` and `consumer` commands accept an explicitly selected
-INI client file. Kantrip generates that private file and inserts
-`--config-file` after the Kaskade command:
+Confluent Platform supplies six unsuffixed Avro, JSON Schema, and Protobuf
+producer and consumer scripts:
+
+```bash
+kantrip exec local -- kafka-avro-console-producer --topic orders \
+  --property value.schema='{"type":"string"}'
+kantrip exec local -- kafka-avro-console-consumer --topic orders --from-beginning
+kantrip exec local -- kafka-json-schema-console-producer --topic orders \
+  --property value.schema='{"type":"string"}'
+kantrip exec local -- kafka-json-schema-console-consumer --topic orders --from-beginning
+kantrip exec local -- kafka-protobuf-console-producer --topic orders \
+  --property value.schema='syntax = "proto3"; message Order { string id = 1; }'
+kantrip exec local -- kafka-protobuf-console-consumer --topic orders --from-beginning
+```
+
+Each receives the profile's bootstrap servers, private Java client file, and
+`schema.registry.url`. Connection and endpoint overrides are rejected in direct
+and interactive sessions.
+
+They require the plain `schemaRegistry` section below; missing or secured
+configuration fails before launch.
+
+### Kaskade 5
+
+Kantrip passes a private INI to Kaskade `admin` and `consumer` through
+`--config-file`:
 
 ```bash
 kantrip exec local -- kaskade admin
 kantrip exec local -- kaskade consumer --topic orders
+kantrip exec local -- kaskade consumer --topic avro-orders --earliest -v registry
 ```
 
-For example, the first command is prepared conceptually as:
+The first command becomes:
 
 ```bash
 kaskade admin --config-file /tmp/kantrip-SESSION/kaskade.ini
 ```
 
-The temporary INI contains the selected profile's Kafka client properties.
-Explicit `-b`/`--bootstrap-servers`, `--kafka`, and `--config-file` options are
-rejected because they could override that profile. Interactive sessions expose a
-temporary `kaskade` shim using the same behavior.
+The default INI contains Kafka properties. Registry deserialization (`-k
+registry` or `-v registry`) selects a second INI with a `[registry]` URL. Kantrip
+rejects `-b`/`--bootstrap-servers`, `--kafka`, `--config-file`, and `--registry`
+overrides. Interactive shims behave identically.
 
-This adapter uses Kaskade's current CLI contract and does not set a
-Kaskade-specific environment variable.
+Kaskade 5+ supports Avro, JSON Schema, and Protobuf registry decoding through
+this adapter; Kantrip sets no Kaskade-specific environment variable.
 
 ## Profile configuration
 
-Profile metadata is YAML validated against
-[`schemas/profile.schema.json`](https://github.com/sauljabin/kantrip/blob/main/schemas/profile.schema.json).
-A synthetic example is available at
-[`examples/config.yaml`](https://github.com/sauljabin/kantrip/blob/main/examples/config.yaml).
+The [profile schema](https://github.com/sauljabin/kantrip/blob/main/schemas/profile.schema.json)
+validates YAML metadata; see the [synthetic example](https://github.com/sauljabin/kantrip/blob/main/examples/config.yaml).
 
 Configuration lookup order is:
 
@@ -367,28 +364,29 @@ Configuration lookup order is:
 2. `$XDG_CONFIG_HOME/kantrip/config.yaml`.
 3. `~/.config/kantrip/config.yaml`.
 
-Profile YAML stores plaintext broker metadata only. Authentication, TLS, and
-Schema Registry fields are rejected by the current schema.
+Profiles support plaintext Kafka metadata and an optional registry connection:
 
-The configuration document does not contain a separate version field. The
-schema bundled with each Kantrip application release is authoritative, so
-upgrades do not require rewriting a version value in every configuration.
-If an early alpha configuration reports `unknown field: version`, remove its
-top-level `version: 1` line. See `MVP.md` for the complete alpha cleanup note.
+```yaml
+schemaRegistry:
+  url: http://localhost:8081
+  auth:
+    type: none
+```
+
+Kafka authentication and TLS are schema-invalid. Registry security metadata may
+be stored for future support, but registry-aware commands currently require the
+plain form above.
+
+Configuration has no version field; each release's bundled schema is
+authoritative. If an early alpha file reports `unknown field: version`, remove
+its top-level `version: 1`; see `MVP.md`.
 
 ## Application environment from `kantrip exec`
 
-Kantrip publishes connection settings only to the supervised child process and
-its descendants. The variables Kantrip may set are listed below.
-
-Kafka clients share configuration-property names but do not define one
-cross-language environment-variable standard. Kantrip therefore uses generic
-`KAFKA_*` names for settings an application may consume. Kantrip-specific
-session metadata uses `KANTRIP_*`.
-
-Applications must opt in to these variables. Kantrip also generates
-client-specific property files and adapters may pass those files or the
-appropriate flags directly to supported tools.
+Kantrip exposes settings only to supervised children. Kafka has no
+cross-language environment standard, so applications must opt into the generic
+`KAFKA_*` values below; `KANTRIP_*` is reserved for session metadata. Adapters
+may instead pass generated client files directly.
 
 ### Kafka variables
 
@@ -400,6 +398,16 @@ appropriate flags directly to supported tools.
 | `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Generated librdkafka properties path |
 | `KCAT_CONFIG` | Generated librdkafka properties path read natively by kcat |
 
+### Schema Registry variables
+
+These variables are present when the selected profile has a supported plain
+Schema Registry connection.
+
+| Variable | Meaning |
+| --- | --- |
+| `SCHEMA_REGISTRY_URL` | Schema Registry URL from the selected profile |
+| `SCHEMA_REGISTRY_CONFIG_FILE` | Generated Schema Registry properties path |
+
 ### Kantrip session metadata
 
 | Variable | Meaning |
@@ -408,23 +416,21 @@ appropriate flags directly to supported tools.
 | `KANTRIP_SESSION_ID` | Opaque session identifier |
 | `KANTRIP_SESSION_DIR` | Private temporary session directory |
 
-Applications should prefer their native generated file where practical, fall
-back to the documented variables, and avoid logging the complete environment or
-generated properties.
+Prefer native generated files, fall back to these variables, and never log the
+complete environment or properties.
 
 ## Output and color
 
-Normal command output goes to stdout and diagnostics go to stderr. Styling is
-disabled when:
+Commands write results to stdout and diagnostics to stderr. Styling is disabled
+when:
 
 - `--no-color` is supplied.
 - `NO_COLOR` is present in the environment.
 - `TERM=dumb`.
 - The destination stream is not a terminal.
 
-`kantrip list` displays configured profiles in a table with styled headers and
-profile names. `kantrip show PROFILE` syntax-highlights its redacted YAML. Both
-remain readable without ANSI color when styling is disabled.
+`kantrip list` shows profile endpoints; `kantrip show PROFILE` syntax-highlights
+redacted YAML. Both remain readable without ANSI color.
 
-Sensitive-looking values are classified before they reach Rich. Styling never
-changes exit statuses or becomes necessary to interpret an error.
+Values are classified before reaching Rich. Styling neither changes exit status
+nor carries essential information.

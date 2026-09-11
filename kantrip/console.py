@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import IO, Any, Literal
 
 from rich.console import Console
@@ -12,6 +13,8 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
+
+from kantrip.schema_registry import display_schema_registry_url
 
 ARCANA_COLORS = {
     "primary": "#3B82F6",
@@ -87,9 +90,18 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
         header_style="heading",
     )
     table.add_column("Profile", style="secondary", no_wrap=True, min_width=12)
-    table.add_column("Description", style="foreground", min_width=20)
+    table.add_column("Description", style="foreground", min_width=12)
+    table.add_column("Kafka", style="foreground", overflow="fold")
+    table.add_column("Schema Registry", style="foreground", overflow="fold")
     for name, profile in profiles.items():
-        table.add_row(name, str(profile.get("description") or "-"))
+        kafka = profile.get("kafka", {})
+        bootstrap_servers = kafka.get("bootstrapServers", ()) if isinstance(kafka, Mapping) else ()
+        table.add_row(
+            name,
+            str(profile.get("description") or "-"),
+            ",".join(str(server) for server in bootstrap_servers),
+            display_schema_registry_url(profile),
+        )
     return table
 
 
@@ -105,12 +117,25 @@ def create_status_text(console: Console, status: StatusKind, message: str) -> Te
     return Text(f"{marker} {message}", style=style)
 
 
+@contextmanager
+def show_progress(console: Console, message: str) -> Iterator[None]:
+    """Show an animated status on colored terminals and a stable line otherwise."""
+    if console.color_system is None:
+        console.print(create_status_text(console, "progress", message))
+        yield
+        return
+    with console.status(message, spinner="dots", spinner_style="primary"):
+        yield
+
+
 __all__ = [
     "ARCANA_COLORS",
     "ARCANA_THEME",
+    "StatusKind",
     "colors_enabled",
     "create_console",
     "create_profile_table",
     "create_status_text",
     "create_yaml_syntax",
+    "show_progress",
 ]

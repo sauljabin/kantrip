@@ -24,12 +24,14 @@ from kantrip.adapters import (
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
     KCAT_EXECUTABLES,
+    SCHEMA_REGISTRY_EXECUTABLES,
 )
-from kantrip.console import create_console, create_status_text
+from kantrip.console import create_console, create_status_text, show_progress
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
 
-DEFAULT_BOOTSTRAP_SERVERS = ("localhost:19092",)
+DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
+DEFAULT_SCHEMA_REGISTRY_URL = "http://localhost:8081"
 KAFKA_COMMANDS = {
     "topics": KAFKA_TOPICS_EXECUTABLES,
     "producer": KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
@@ -38,6 +40,7 @@ KAFKA_COMMANDS = {
     "configs": KAFKA_CONFIGS_EXECUTABLES,
     "acls": KAFKA_ACLS_EXECUTABLES,
     "broker API versions": KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
+    "Schema Registry console": SCHEMA_REGISTRY_EXECUTABLES,
 }
 
 
@@ -49,14 +52,20 @@ class SmokeFailure(RuntimeError):
 @cloup.argument("topic", required=False)
 @cloup.option("--profile", default="sandbox", show_default=True)
 @cloup.option(
-    "--bootstrap-server",
+    "-b",
+    "--bootstrap-servers",
     "bootstrap_servers",
-    multiple=True,
     default=DEFAULT_BOOTSTRAP_SERVERS,
     show_default=True,
-    help="Sandbox broker address; may be repeated.",
+    help="Comma-separated sandbox broker addresses.",
 )
 @cloup.option("--keep-topic", is_flag=True, help="Leave the smoke topic in the cluster.")
+@cloup.option(
+    "--schema-registry-url",
+    default=DEFAULT_SCHEMA_REGISTRY_URL,
+    show_default=True,
+    help="Sandbox Schema Registry URL.",
+)
 @cloup.option("--no-color", is_flag=True, help="Disable styled terminal output.")
 @cloup.option(
     "--shell",
@@ -68,8 +77,9 @@ class SmokeFailure(RuntimeError):
 def main(
     topic: str | None,
     profile: str,
-    bootstrap_servers: tuple[str, ...],
+    bootstrap_servers: str,
     keep_topic: bool,
+    schema_registry_url: str,
     no_color: bool,
     shells: tuple[str, ...],
 ) -> None:
@@ -84,9 +94,10 @@ def main(
         smoke(
             console,
             profile=profile,
-            bootstrap_servers=bootstrap_servers,
+            bootstrap_servers=tuple(server.strip() for server in bootstrap_servers.split(",")),
             topic=smoke_topic,
             keep_topic=keep_topic,
+            schema_registry_url=schema_registry_url,
             environment=environment,
             shells=shells,
         )
@@ -101,6 +112,7 @@ def smoke(
     bootstrap_servers: Sequence[str],
     topic: str,
     keep_topic: bool,
+    schema_registry_url: str,
     environment: Mapping[str, str],
     shells: Sequence[str] = (),
 ) -> None:
@@ -119,7 +131,19 @@ def smoke(
     with tempfile.TemporaryDirectory(prefix="kantrip-smoke-") as directory:
         smoke_environment = dict(environment)
         smoke_environment["KANTRIP_CONFIG"] = str(Path(directory) / "config.yaml")
-        _add_profile(console, profile, bootstrap_servers, smoke_environment)
+        _add_profile(
+            console,
+            profile,
+            bootstrap_servers,
+            schema_registry_url,
+            smoke_environment,
+        )
+        _check(
+            console,
+            "check Kafka and Schema Registry connectivity",
+            [sys.executable, "-m", "kantrip.cli", "ping", profile],
+            smoke_environment,
+        )
         creator = installed["topics"][0]
         created = False
         try:
@@ -140,6 +164,13 @@ def smoke(
                 smoke_environment,
             )
             created = True
+            for executable in installed["Schema Registry console"]:
+                _check(
+                    console,
+                    f"validate the Schema Registry adapter with {executable}",
+                    _kantrip(profile, *_schema_registry_probe(executable)),
+                    smoke_environment,
+                )
             for executable in installed["topics"]:
                 output = _check(
                     console,
@@ -276,7 +307,6 @@ def _check_shell(
     environment: Mapping[str, str],
 ) -> None:
     label = f"exercise adapters in {shell_name}"
-    console.print(create_status_text(console, "progress", label))
     shell_environment = dict(environment)
     shell_environment["SHELL"] = shell
     commands = _shell_commands(
@@ -292,12 +322,13 @@ def _check_shell(
     ]
     checked.append("exit")
     try:
-        status, output = run_terminal(
-            (sys.executable, "-m", "kantrip.cli", "exec", profile),
-            checked,
-            environment=shell_environment,
-            timeout=120,
-        )
+        with show_progress(console, label):
+            status, output = run_terminal(
+                (sys.executable, "-m", "kantrip.cli", "exec", profile),
+                checked,
+                environment=shell_environment,
+                timeout=120,
+            )
     except TerminalTimeout as error:
         raise SmokeFailure(f"{label} failed: {error}") from error
     if status or any(marker not in output for marker in markers):
@@ -334,6 +365,10 @@ def _shell_commands(
     )
     commands.extend(f"{executable} --version" for executable in installed["acls"])
     commands.extend(executable for executable in installed["broker API versions"])
+    commands.extend(
+        " ".join(_schema_registry_probe(executable))
+        for executable in installed["Schema Registry console"]
+    )
     commands.extend(f"{executable} -L" for executable in kcat_executables)
     commands.extend(("kaskade admin --help", "kaskade consumer --help"))
     return commands
@@ -343,11 +378,19 @@ def _add_profile(
     console: Console,
     profile: str,
     bootstrap_servers: Sequence[str],
+    schema_registry_url: str,
     environment: Mapping[str, str],
 ) -> None:
-    command = [sys.executable, "-m", "kantrip.cli", "add", profile]
-    for server in bootstrap_servers:
-        command.extend(("--bootstrap-server", server))
+    command = [
+        sys.executable,
+        "-m",
+        "kantrip.cli",
+        "add",
+        profile,
+        "--bootstrap-servers",
+        ",".join(bootstrap_servers),
+    ]
+    command.extend(("--schema-registry-url", schema_registry_url))
     _check(console, "prepare an isolated sandbox profile", command, environment)
 
 
@@ -364,6 +407,11 @@ def _kantrip(profile: str, executable: str, *arguments: str) -> list[str]:
     ]
 
 
+def _schema_registry_probe(executable: str) -> tuple[str, str]:
+    """Return a side-effect-free Schema Registry adapter command that exits successfully."""
+    return executable, "--version"
+
+
 def _check(
     console: Console,
     label: str,
@@ -372,15 +420,15 @@ def _check(
     *,
     input_text: str | None = None,
 ) -> str:
-    console.print(create_status_text(console, "progress", label))
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        text=True,
-        input=input_text,
-        check=False,
-    )
+    with show_progress(console, label):
+        result = subprocess.run(
+            command,
+            env=environment,
+            capture_output=True,
+            text=True,
+            input=input_text,
+            check=False,
+        )
     output = f"{result.stdout}{result.stderr}"
     if result.returncode:
         details = output.strip() or f"command exited with status {result.returncode}"

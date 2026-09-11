@@ -93,6 +93,29 @@ class TestConfiguration(unittest.TestCase):
             self.assertEqual({}, configuration.profiles)
             self.assertEqual({}, load_configuration(path).profiles)
 
+    def test_adds_a_plain_schema_registry_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+
+            configuration = add_profile("local", path, schema_registry_url="http://localhost:8081")
+
+        self.assertEqual(
+            {
+                "url": "http://localhost:8081",
+                "auth": {"type": "none"},
+            },
+            configuration.profile("local")["schemaRegistry"],
+        )
+
+    def test_add_rejects_a_secure_schema_registry_url(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+
+            with self.assertRaisesRegex(ConfigurationError, "supports only an http://"):
+                add_profile("local", path, schema_registry_url="https://registry.example.com")
+
+            self.assertFalse(path.exists())
+
     def test_add_refuses_to_replace_an_existing_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"

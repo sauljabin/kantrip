@@ -2,16 +2,15 @@
 
 ## Engineering Contract
 
-- Treat this file as living operational knowledge. When work establishes or
-  changes a durable convention, update this guidance and every affected guide,
-  schema, fixture, example, issue template, and command sample. Rewrite obsolete
-  or duplicate guidance instead of appending contradictions.
+- When a durable convention changes, update this file and every affected guide,
+  schema, fixture, example, template, and command. Replace obsolete or duplicate
+  guidance.
 - Do not add empty modules or speculative adapters. Keep cyclomatic complexity
   at or below 10; repository-wide Ruff `C901` runs in `scripts.analyze`, so use
   focused helpers instead of suppressions.
-- Importing `kantrip` must not create directories, open files, configure logging,
-  construct consoles, or contact Kafka. Classify and redact values before
-  presentation, and keep command behavior independent from Rich.
+- Importing `kantrip` must have no filesystem, logging, console, or network side
+  effects. Classify and redact values before presentation; keep behavior
+  independent from Rich.
 - Support Linux and macOS on Python 3.10 through 3.14. Keep paths, permissions,
   signals, terminals, and shell documentation portable.
 - Keep unimplemented product work in `MVP.md`, not in current feature docs,
@@ -19,18 +18,16 @@
 
 ## Profiles and Sessions
 
-- The profile schema lives in `schemas/`, examples in `examples/`, and synthetic
-  test data inside its owning test module. Keep it limited to implemented
-  behavior and synchronize examples, tests, and migration notes when it changes.
-  Schema filenames and configuration documents do not duplicate the application
-  version; the schema shipped by an application release is authoritative.
+- Keep the implemented profile schema in `schemas/`, examples in `examples/`, and
+  synthetic data with its tests. Update examples, tests, and migration notes with
+  schema changes. Release-bundled schemas are authoritative; filenames and
+  configuration omit application versions.
 - Treat the environment documented in `USAGE.md` as public API. Add variables
   compatibly; renames or semantic breaks require release and migration guidance.
   Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
   Kantrip-owned profile/session metadata.
-- `kantrip add` creates missing configuration. Add/remove operations are validated
-  and atomic, adding an existing profile never overwrites it, and listing missing
-  configuration returns an empty collection.
+- Profile add/remove is validated and atomic; add creates missing configuration,
+  never overwrites a profile, and list returns empty when configuration is absent.
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
@@ -39,49 +36,51 @@
 
 ## Client Adapters and Shells
 
-- kcat is the first supported client. Sessions expose private generated librdkafka
-  properties through `KCAT_CONFIG`; interactive shims preserve this contract and
-  reject client attempts to override it with `-F`. Never place configuration
-  values in command arguments.
-- Official Kafka tools recognize names with and without `.sh`. All receive
-  `--bootstrap-server`; consumers/producers receive their client config option,
-  and administrative tools receive `--command-config`, pointing at the private
-  generated Java properties file.
-- Kaskade `admin` and `consumer` receive a private INI file through
-  `--config-file`. Do not assume a Kaskade environment variable until Kaskade
-  implements that contract.
-- Interactive sessions support Bash, Zsh, and Fish. They load normal user startup
-  files, preserve normal history, neutralize aliases/functions/Fish abbreviations
-  for registered adapters, and restore the session shim path. Shims are private
-  and temporary; never install persistent aliases.
+- Sessions expose private librdkafka properties through `KCAT_CONFIG`; shims
+  preserve it and reject `-F`. kcat Avro deserializers receive the plain registry
+  URL through `-r`; explicit `-r` is rejected. Never put secrets in arguments.
+- Adapters recognize Apache Kafka's `.sh` commands and Confluent's unsuffixed
+  equivalents. All receive `--bootstrap-server`; consumers/producers receive
+  their config option and admin tools receive `--command-config`, using private
+  Java properties.
+- Confluent's Avro, JSON Schema, and Protobuf console producers and consumers
+  are unsuffixed. They receive the matching Kafka producer/consumer config file
+  and the profile's plain Schema Registry URL; connection overrides are rejected.
+- Kaskade 5 `admin` and `consumer` receive a private INI file through
+  `--config-file`; registry deserializers select a second private file with a
+  `[registry]` section. Do not assume a Kaskade environment variable until
+  Kaskade implements that contract.
+- Bash, Zsh, and Fish sessions preserve startup files and history, neutralize
+  adapter shadows, and restore the private temporary shim path. Never install
+  persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
 - `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata
-  with a bounded timeout; it does not depend on an installed external Kafka CLI.
+  and checks `/subjects` when Schema Registry is configured. Both use a bounded
+  timeout and do not depend on an installed external Kafka CLI.
 
 ## Sensitive Values and Output
 
 - Never expose sensitive values in arguments, fixtures, logs, output,
   diagnostics, tracebacks, or snapshots. Examples use conspicuously synthetic
   values and infrastructure.
-- Send command results to stdout and diagnostics to stderr. Styling respects
-  `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output; use text status labels
-  instead of emoji when styling is disabled.
+- Send results to stdout and diagnostics to stderr. Animate progress only on
+  colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output use
+  stable text labels. Styling carries no essential information.
 
 ## Tests, Scripts, and Sandbox
 
 - Tests and their fixtures live in `tests` and remain offline. Shared workflow
   helpers belong in `scripts/__init__.py`; other script modules are executable
   workflows.
-- The manual environment lives in `sandbox`, including Compose definitions,
-  versions, synthetic data, and population tools. Tests may inspect pinned image
-  versions and Compose structure, but sandbox code and test fixtures must not
-  import each other.
+- Keep Compose, versions, synthetic data, and population tools in `sandbox`.
+  Tests may inspect versions and Compose structure, but sandbox and test code
+  must not import each other.
 - `python -m sandbox` runs the adapter smoke workflow against an active sandbox
   with locally installed clients and optional shells. It is a pre-commit hook,
   not an offline or packaged E2E test.
-- `python -m scripts.verify_shell_contract` verifies Bash, Zsh, and Fish with
-  PTYs and generated fake clients. Assertions stay in Python; its temporary event
-  logs contain only safe metadata and are removed with their temporary directory.
+- `python -m scripts.verify_shell_contract` tests Bash, Zsh, and Fish through PTYs
+  and fake clients. Keep assertions in Python and delete safe-metadata event logs
+  with their temporary directory.
 
 ## Verification
 

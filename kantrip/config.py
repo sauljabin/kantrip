@@ -16,6 +16,8 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
+from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
+
 CONFIG_FILENAME = "config.yaml"
 SCHEMA_FILENAME = "profile.schema.json"
 
@@ -105,6 +107,7 @@ def add_profile(
     *,
     bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
     description: str | None = None,
+    schema_registry_url: str | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> Configuration:
     """Add a plaintext profile, creating configuration when necessary."""
@@ -124,6 +127,15 @@ def add_profile(
     }
     if description is not None:
         profile["description"] = description
+    if schema_registry_url is not None:
+        profile["schemaRegistry"] = {
+            "url": schema_registry_url,
+            "auth": {"type": "none"},
+        }
+        try:
+            plain_schema_registry_url(profile)
+        except SchemaRegistryProfileError as error:
+            raise ConfigurationError(str(error)) from error
     values["profiles"][profile_name] = profile
     _validate(values)
     _write_configuration(config_path, values)

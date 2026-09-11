@@ -10,12 +10,10 @@
 <a href="https://pypi.org/project/kantrip"><img alt="PyPI version" src="https://img.shields.io/pypi/v/kantrip?style=flat-square&logo=pypi&logoColor=white&label=pypi"></a>
 </p>
 
-Kantrip securely manages local Kafka profiles for command-line tools and compatible applications.
-
-Kantrip is in active pre-release development. The current CLI loads and validates
-profiles, displays their non-secret metadata, and opens plaintext profile sessions
-for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
-It can also verify broker connectivity directly from a profile.
+Kantrip securely manages plaintext Kafka profiles for kcat, the official Kafka
+CLIs, Kaskade, and compatible applications. This pre-release CLI validates and
+displays profiles, opens scoped sessions, and checks Kafka and Schema Registry
+connectivity.
 
 ## Features
 
@@ -34,9 +32,13 @@ It can also verify broker connectivity directly from a profile.
 
 ### CLI sessions
 
-- Native kcat configuration through a private, temporary `KCAT_CONFIG` file
-- Profile-aware official Apache Kafka commands, with and without `.sh`
-- Private client-file integration for Kaskade admin and consumer modes
+- Native kcat configuration through a private `KCAT_CONFIG`, with Schema
+  Registry injection for Avro
+- Profile-aware Apache Kafka `.sh` commands and the equivalent unsuffixed
+  Confluent Platform commands
+- Profile-aware Avro, JSON Schema, and Protobuf console clients for plain
+  Confluent Schema Registry connections
+- Private Kaskade 5 configuration for admin, consumer, and registry decoding
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Child exit-status preservation and automatic session cleanup
 
@@ -48,13 +50,14 @@ It can also verify broker connectivity directly from a profile.
 
 ## Roadmap
 
-Kantrip's MVP grows from today's plaintext local workflow in three steps:
+The MVP roadmap has three stages:
 
 1. Harden profile sessions and add local credential-store integration.
 2. Add TLS and authenticated Kafka profiles and adapters.
-3. Add Schema Registry, OAuth integration, and authenticated connectivity checks.
+3. Add authenticated Schema Registry, OAuth integration, and authenticated
+   connectivity checks.
 
-See the [MVP roadmap](MVP.md) for scope, ordering, and explicit non-goals.
+See the [MVP roadmap](MVP.md) for scope and non-goals.
 
 ## Quick start
 
@@ -87,23 +90,23 @@ kafka-topics --list
 exit
 ```
 
-`add` creates `~/.config/kantrip/config.yaml` when necessary and adds a plaintext
-profile for `localhost:9092`. Pass `--bootstrap-server HOST:PORT` to choose a
-different broker. Use `kantrip remove PROFILE` to remove one. `kantrip list`
-prints no profile rows when the configuration is absent or empty.
+`add` creates `~/.config/kantrip/config.yaml` and defaults to `localhost:9092`.
+Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a description, and
+`--schema-registry-url http://HOST:PORT` for a plain registry. Remove profiles
+with `kantrip remove PROFILE`; `list` shows both endpoints.
 
 ## Command compatibility
 
-See the [command compatibility guide](https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md)
-for supported tools, versions, features, and known limitations.
+See the [compatibility guide](https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md)
+for supported tools, versions, and limitations.
 
 ## Usage
 
-For configuration and usage examples, see the [Kantrip usage guide](https://github.com/sauljabin/kantrip/blob/main/USAGE.md).
+See the [usage guide](https://github.com/sauljabin/kantrip/blob/main/USAGE.md).
 
 ## Development
 
-For development instructions, see the [Kantrip development guide](https://github.com/sauljabin/kantrip/blob/main/DEVELOPMENT.md).
+See the [development guide](https://github.com/sauljabin/kantrip/blob/main/DEVELOPMENT.md).
 
 ## Releases
 
@@ -126,9 +129,8 @@ If Kantrip is useful to you, consider
 
 ## AI Assistance
 
-This project uses AI-assisted development tools. Some code and documentation
-may be generated or revised with AI assistance. All AI-assisted changes are
-reviewed and tested by the maintainer before they are included.
+The project uses AI-assisted development. The maintainer reviews and tests all
+AI-assisted changes before inclusion.
 
 ## Acknowledgements
 
