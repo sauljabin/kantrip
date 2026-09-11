@@ -29,25 +29,19 @@ class TestSandbox(unittest.TestCase):
         )
 
     def test_contains_only_the_supported_plaintext_kafka_cluster(self) -> None:
-        self.assertEqual({"kafka1", "kafka2", "kafka3", "schema-registry"}, set(self.services))
-        for name in ("kafka1", "kafka2", "kafka3"):
-            service = self.services[name]
-            protocols = service["environment"]["KAFKA_LISTENER_SECURITY_PROTOCOL_MAP"]
-            self.assertNotIn("SSL", protocols)
-            self.assertNotIn("SASL", protocols)
+        self.assertEqual({"kafka1", "schema-registry"}, set(self.services))
+        protocols = self.services["kafka1"]["environment"]["KAFKA_LISTENER_SECURITY_PROTOCOL_MAP"]
+        self.assertNotIn("SSL", protocols)
+        self.assertNotIn("SASL", protocols)
 
-    def test_exposes_brokers_on_standard_consecutive_host_ports(self) -> None:
-        for name, host_port, container_port in (
-            ("kafka1", 9092, 19092),
-            ("kafka2", 9093, 29092),
-            ("kafka3", 9094, 39092),
-        ):
-            service = self.services[name]
-            self.assertEqual([f"{host_port}:{container_port}"], service["ports"])
-            self.assertIn(
-                f"EXTERNAL://localhost:{host_port}",
-                service["environment"]["KAFKA_ADVERTISED_LISTENERS"],
-            )
+    def test_exposes_the_broker_on_standard_host_port(self) -> None:
+        service = self.services["kafka1"]
+        self.assertEqual(["9092:19092"], service["ports"])
+        self.assertIn(
+            "EXTERNAL://localhost:9092",
+            service["environment"]["KAFKA_ADVERTISED_LISTENERS"],
+        )
+        self.assertEqual("1", service["environment"]["KAFKA_DEFAULT_REPLICATION_FACTOR"])
 
     def test_contains_plain_schema_registry(self) -> None:
         registry = self.services["schema-registry"]

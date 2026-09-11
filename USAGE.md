@@ -57,8 +57,8 @@ Choose one or more broker addresses when needed:
 
 ```bash
 kantrip add development \
-  --bootstrap-server kafka-1.example.com:9092 \
-  --bootstrap-server kafka-2.example.com:9092 \
+  --bootstrap-servers kafka-1.example.com:9092,kafka-2.example.com:9092 \
+  --description 'Development cluster' \
   --schema-registry-url http://registry.example.com:8081
 ```
 
@@ -389,10 +389,8 @@ section with its URL. Explicit `-b`/`--bootstrap-servers`, `--kafka`,
 override that profile. Interactive sessions expose a temporary `kaskade` shim
 using the same behavior.
 
-This adapter supports Kaskade 5 and later. Kaskade 4 is not supported because it
-does not provide the required registry configuration-file contract. Kaskade 5
-supports Schema Registry-backed Avro and JSON Schema decoding, but not
-Schema Registry-backed Protobuf. The adapter does not set a Kaskade-specific
+This adapter supports Kaskade 5 and later, including Schema Registry-backed
+Avro, JSON Schema, and Protobuf decoding. It does not set a Kaskade-specific
 environment variable.
 
 ## Profile configuration

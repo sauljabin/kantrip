@@ -67,17 +67,28 @@ def error_console_from_context(context: cloup.Context) -> Console:
     return console
 
 
+def _split_bootstrap_servers(
+    context: click.Context, parameter: click.Parameter, value: str
+) -> tuple[str, ...]:
+    del context, parameter
+    servers = tuple(server.strip() for server in value.split(","))
+    if not servers or any(not server for server in servers):
+        raise click.BadParameter("must be a comma-separated list of host:port addresses")
+    return servers
+
+
 @cli.command("add")
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
-    "--bootstrap-server",
+    "-b",
+    "--bootstrap-servers",
     "bootstrap_servers",
-    multiple=True,
-    default=("localhost:9092",),
+    default="localhost:9092",
     show_default=True,
-    help="Kafka broker address; may be repeated.",
+    callback=_split_bootstrap_servers,
+    help="Comma-separated Kafka broker addresses.",
 )
-@cloup.option("--description", help="Optional profile description.")
+@cloup.option("-d", "--description", help="Optional profile description.")
 @cloup.option(
     "--schema-registry-url",
     help="Optional plain, unauthenticated Schema Registry URL.",

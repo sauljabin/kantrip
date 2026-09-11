@@ -35,11 +35,11 @@ are not supported.
 | `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Yes, profile-aware | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Yes, profile-aware | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kcat` / `kafkacat` | kcat | kcat 1.7+ | Metadata, produce, and consume | Yes, profile-aware for Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
-| `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Yes, profile-aware for Avro and JSON Schema | Uses a private INI file for `admin` and `consumer`; registry deserializers select a second private file containing `[registry]`. Explicit Kafka, config-file, and registry connection options are rejected. Kaskade 4 is unsupported. |
+| `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Yes, profile-aware for Avro, JSON Schema, and Protobuf | Uses a private INI file for `admin` and `consumer`; registry deserializers select a second private file containing `[registry]`. Explicit Kafka, config-file, and registry connection options are rejected. |
 
 “Profile-aware” means Kantrip maps the selected profile into the command. kcat
 supports Schema Registry-backed Avro decoding. Kaskade 5 supports registry-backed
-Avro and JSON Schema decoding, but not Schema Registry-backed Protobuf.
+Avro, JSON Schema, and Protobuf decoding.
 
 Schema-aware Confluent console commands, kcat Avro deserializers, and Kaskade 5
 registry deserializers require a profile `schemaRegistry` connection using an

@@ -95,7 +95,7 @@ or exported pre-release checkout can bootstrap before the first commit.
 The sandbox is a manual environment, not a test-fixture provider. Automated tests
 must not import it.
 
-Start its three-node plaintext Kafka cluster and Schema Registry:
+Start its single-node plaintext Kafka cluster and Schema Registry:
 
 ```bash
 docker compose --project-directory sandbox up -d
@@ -107,8 +107,8 @@ Stop it and remove its volumes:
 docker compose --project-directory sandbox down -v
 ```
 
-Kafka is available at `localhost:9092`, `localhost:9093`, and
-`localhost:9094`; Schema Registry is available at `http://localhost:8081`.
+Kafka is available at `localhost:9092`; Schema Registry is available at
+`http://localhost:8081`.
 The pinned Confluent image version lives in `sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
@@ -119,7 +119,7 @@ uv run --locked python -m sandbox
 uv run --locked python -m sandbox \
   --shell bash --shell zsh --shell fish
 uv run --locked python -m sandbox my-topic \
-  --profile sandbox --bootstrap-server localhost:9092 --keep-topic
+  --profile sandbox --bootstrap-servers localhost:9092 --keep-topic
 ```
 
 By default, the script checks Kafka and Schema Registry connectivity, creates
@@ -161,9 +161,7 @@ two records, and consume exactly those records:
 
 ```bash
 uv run kantrip add sandbox \
-  --bootstrap-server localhost:9092 \
-  --bootstrap-server localhost:9093 \
-  --bootstrap-server localhost:9094 \
+  --bootstrap-servers localhost:9092 \
   --schema-registry-url http://localhost:8081
 
 uv run kantrip exec sandbox -- kafka-topics --create \
@@ -224,17 +222,15 @@ uv run kantrip exec sandbox -- kcat \
 ```
 
 Kaskade 5+ reads the same URL from the generated private `[registry]` section.
-Select its registry deserializer for Avro or JSON Schema records:
+Select its registry deserializer for Avro, JSON Schema, or Protobuf records:
 
 ```bash
 uv run kantrip exec sandbox -- kaskade consumer \
   --topic kantrip-avro --earliest -v registry
 ```
 
-Kaskade 4 is not supported by this adapter because the required Schema Registry
-configuration-file contract starts with Kaskade 5. Kaskade 5 does not support
-Schema Registry-backed Protobuf decoding; use the Confluent Protobuf consumer
-for that topic.
+Use the same command with `--topic kantrip-json-schema` or
+`--topic kantrip-protobuf` to inspect the other registered formats.
 
 Additional quick checks for the other adapters are:
 

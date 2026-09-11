@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from kantrip import APP_VERSION
 from kantrip.cli import cli
+from kantrip.config import load_configuration
 from kantrip.ping import PingError, PingResult
 
 
@@ -59,13 +60,16 @@ class TestCli(unittest.TestCase):
                 [
                     "add",
                     "development",
-                    "--bootstrap-server",
-                    "broker.example.com:19092",
+                    "-b",
+                    "broker-1.example.com:9092,broker-2.example.com:9092",
+                    "-d",
+                    "Development cluster",
                     "--schema-registry-url",
                     "http://registry.example.com:8081",
                 ],
                 env=environment,
             )
+            profile = load_configuration(config_path).profile("development")
             listed = self.runner.invoke(cli, ["list"], env=environment)
             removed = self.runner.invoke(cli, ["remove", "development"], env=environment)
             empty = self.runner.invoke(cli, ["list"], env=environment)
@@ -73,10 +77,22 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, added.exit_code, added.output)
         self.assertIn("Profile", listed.output)
         self.assertIn("development", listed.output)
-        self.assertIn("http://registry.example.", listed.output)
-        self.assertIn("com:8081", listed.output)
+        self.assertIn("Development cluster", listed.output)
+        self.assertEqual(
+            ["broker-1.example.com:9092", "broker-2.example.com:9092"],
+            profile["kafka"]["bootstrapServers"],
+        )
+        self.assertEqual("http://registry.example.com:8081", profile["schemaRegistry"]["url"])
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
+
+    def test_add_rejects_empty_comma_separated_bootstrap_server(self) -> None:
+        result = self.runner.invoke(
+            cli, ["add", "invalid", "-b", "localhost:9092,"], env={"KANTRIP_CONFIG": "x"}
+        )
+
+        self.assertNotEqual(0, result.exit_code)
+        self.assertIn("comma-separated list of host:port addresses", result.output)
 
     def test_list_is_empty_when_configuration_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

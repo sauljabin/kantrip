@@ -94,10 +94,11 @@ exit
 ```
 
 `add` creates `~/.config/kantrip/config.yaml` when necessary and adds a plaintext
-profile for `localhost:9092`. Pass `--bootstrap-server HOST:PORT` to choose a
-different broker and `--schema-registry-url http://HOST:PORT` for an optional
-plain registry. Use `kantrip remove PROFILE` to remove one. `kantrip list` shows
-both endpoints and prints no rows when the configuration is absent or empty.
+profile for `localhost:9092`. Pass `-b HOST:PORT` or
+`--bootstrap-servers HOST:PORT,HOST:PORT` to choose one or more brokers, `-d` for
+a description, and `--schema-registry-url http://HOST:PORT` for an optional plain
+registry. Use `kantrip remove PROFILE` to remove one. `kantrip list` shows both
+endpoints and prints no rows when the configuration is absent or empty.
 
 ## Command compatibility
 

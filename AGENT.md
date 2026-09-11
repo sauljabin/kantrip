@@ -52,8 +52,8 @@
   `--command-config`, pointing at the private generated Java properties file.
 - Kaskade 5 `admin` and `consumer` receive a private INI file through
   `--config-file`; registry deserializers select a second private file with a
-  `[registry]` section. Kaskade 4 is unsupported. Do not assume a Kaskade
-  environment variable until Kaskade implements that contract.
+  `[registry]` section. Do not assume a Kaskade environment variable until
+  Kaskade implements that contract.
 - Interactive sessions support Bash, Zsh, and Fish. They load normal user startup
   files, preserve normal history, neutralize aliases/functions/Fish abbreviations
   for registered adapters, and restore the session shim path. Shims are private
