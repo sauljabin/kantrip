@@ -15,6 +15,7 @@ WHEEL_REQUIRED = {
 SDIST_REQUIRED = {
     "AGENT.md",
     "ARCHITECTURE.md",
+    "COMPATIBILITY.md",
     "DEVELOPMENT.md",
     "LICENSE",
     "README.md",

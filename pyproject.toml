@@ -69,6 +69,7 @@ packages = ["kantrip"]
 include = [
     "/AGENT.md",
     "/ARCHITECTURE.md",
+    "/COMPATIBILITY.md",
     "/DEVELOPMENT.md",
     "/LICENSE",
     "/README.md",
