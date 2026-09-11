@@ -1,38 +1,44 @@
 # Kantrip Usage
 
-Kantrip is in pre-release development. The current CLI can validate and inspect
-profiles and run plaintext profile sessions:
+Kantrip is in pre-release development. The current CLI can manage plaintext
+profiles and run profile sessions:
 
 ```bash
-kantrip config init
-kantrip config validate
+kantrip add local
 kantrip list
 kantrip show local
 kantrip exec local -- kcat -L
 ```
 
-Additional profile management, persistent selection, connectivity checks, and
-authenticated sessions are not implemented yet.
+Persistent selection, connectivity checks, and authenticated sessions are not
+implemented yet.
 
 ## First-run configuration
 
-Create a valid plaintext profile using the default local broker:
+Add a plaintext profile using the default local broker:
 
 ```bash
-kantrip config init
+kantrip add local
 ```
 
-Choose a different name or one or more broker addresses when needed:
+Choose one or more broker addresses when needed:
 
 ```bash
-kantrip config init --profile development \
+kantrip add development \
   --bootstrap-server kafka-1.example.com:9092 \
   --bootstrap-server kafka-2.example.com:9092
 ```
 
-The command follows the documented configuration lookup order and refuses to
-overwrite an existing file. If another command cannot find configuration, its
-error points to `config init` and the `KANTRIP_CONFIG` override.
+`add` follows the documented configuration lookup order, creates the file when
+necessary, and refuses to overwrite an existing profile. Remove a profile with:
+
+```bash
+kantrip remove development
+```
+
+`kantrip list` prints no profile rows and exits successfully when configuration
+does not exist or contains no profiles. Existing files are validated automatically
+whenever Kantrip reads or updates them.
 
 ## Profile workflow
 
@@ -47,6 +53,7 @@ subshell using `SHELL`, or `/bin/sh` when `SHELL` is unset:
 
 ```bash
 kantrip exec local
+kantrip current
 kcat -L
 exit
 ```
@@ -54,6 +61,10 @@ exit
 Kantrip never exports a selected profile into the parent shell. Background or
 detached child processes are not supported because they can outlive the temporary
 session.
+
+`kantrip current` prints the active profile name inside the session. Outside a
+session it reports that no profile is active. This is the command equivalent of
+reading `KANTRIP_PROFILE` directly.
 
 ### kcat
 

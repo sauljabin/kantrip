@@ -4,8 +4,9 @@ from pathlib import Path
 
 from kantrip.config import (
     ConfigurationError,
-    initialize_configuration,
+    add_profile,
     load_configuration,
+    remove_profile,
     resolve_config_path,
 )
 
@@ -63,26 +64,40 @@ class TestConfiguration(unittest.TestCase):
             with self.assertRaisesRegex(ConfigurationError, "profile 'missing' was not found"):
                 load_configuration(path).profile("missing")
 
-    def test_initializes_a_valid_local_profile_without_overwriting(self) -> None:
+    def test_adds_and_removes_profiles_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nested" / "config.yaml"
 
-            configuration = initialize_configuration(path)
+            configuration = add_profile("local", path)
 
             self.assertEqual(
                 ["localhost:9092"], configuration.profile("local")["kafka"]["bootstrapServers"]
             )
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
             self.assertEqual("local", next(iter(load_configuration(path).profiles)))
-            with self.assertRaisesRegex(ConfigurationError, "already exists"):
-                initialize_configuration(path)
 
-    def test_missing_configuration_suggests_first_run_command(self) -> None:
+            configuration = remove_profile("local", path)
+
+            self.assertEqual({}, configuration.profiles)
+            self.assertEqual({}, load_configuration(path).profiles)
+
+    def test_add_refuses_to_replace_an_existing_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
 
-            with self.assertRaisesRegex(ConfigurationError, "kantrip config init"):
-                load_configuration(path)
+            add_profile("local", path)
+
+            with self.assertRaisesRegex(ConfigurationError, "already exists"):
+                add_profile("local", path)
+
+    def test_missing_configuration_can_be_loaded_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+
+            configuration = load_configuration(path, missing_ok=True)
+
+            self.assertEqual({}, configuration.profiles)
+            self.assertFalse(path.exists())
 
 
 _VALID_CONFIG = """\

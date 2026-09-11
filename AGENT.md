@@ -62,8 +62,9 @@
 - The machine-readable profile schema lives in `schemas/`; examples live in
   `examples/`; test-owned fixtures live under their owning suite. Keep them
   synchronized.
-- `kantrip config init` owns first-run configuration creation and must never
-  overwrite an existing file.
+- `kantrip add` creates configuration when necessary, and profile additions and
+  removals are validated and atomic. Adding an existing profile must not overwrite
+  it; listing absent configuration behaves as an empty profile collection.
 - Application-facing values use `KAFKA_*` and `SCHEMA_REGISTRY_*`. Reserve
   `KANTRIP_*` for profile and session metadata owned by Kantrip.
 - The documented environment is injected only into supervised child processes.

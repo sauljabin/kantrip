@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import uuid
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -21,7 +23,6 @@ class ConfigurationError(ValueError):
     """Raised when Kantrip configuration cannot be loaded safely."""
 
 
-DEFAULT_PROFILE_NAME = "local"
 DEFAULT_BOOTSTRAP_SERVER = "localhost:9092"
 
 
@@ -66,16 +67,16 @@ def load_configuration(
     path: Path | None = None,
     *,
     environment: Mapping[str, str] | None = None,
+    missing_ok: bool = False,
 ) -> Configuration:
     """Load a YAML document and validate it against the bundled v1 schema."""
     config_path = path if path is not None else resolve_config_path(environment)
     try:
         contents = config_path.read_text(encoding="utf-8")
     except FileNotFoundError as error:
-        raise ConfigurationError(
-            f"no Kantrip configuration exists at {config_path}\n"
-            "Run 'kantrip config init' to create one, or set KANTRIP_CONFIG to another file."
-        ) from error
+        if missing_ok:
+            return Configuration(path=config_path, values={"version": 1, "profiles": {}})
+        raise ConfigurationError(f"configuration file was not found: {config_path}") from error
     except OSError as error:
         raise ConfigurationError(f"configuration file could not be read: {config_path}") from error
 
@@ -92,57 +93,99 @@ def load_configuration(
     if not isinstance(values, dict):
         raise ConfigurationError("configuration must be a YAML object")
 
+    _validate(values)
+
+    return Configuration(path=config_path, values=values)
+
+
+def add_profile(
+    profile_name: str,
+    path: Path | None = None,
+    *,
+    bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
+    description: str | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> Configuration:
+    """Add a plaintext profile, creating configuration when necessary."""
+    config_path = path if path is not None else resolve_config_path(environment)
+    configuration = load_configuration(config_path, missing_ok=True)
+    if profile_name in configuration.profiles:
+        raise ConfigurationError(f"profile '{profile_name}' already exists")
+
+    values = deepcopy(configuration.values)
+    profile: dict[str, Any] = {
+        "id": str(uuid.uuid4()),
+        "kafka": {
+            "bootstrapServers": list(bootstrap_servers),
+            "transport": "plaintext",
+            "auth": {"type": "none"},
+        },
+    }
+    if description is not None:
+        profile["description"] = description
+    values["profiles"][profile_name] = profile
+    _validate(values)
+    _write_configuration(config_path, values)
+    return Configuration(path=config_path, values=values)
+
+
+def remove_profile(
+    profile_name: str,
+    path: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> Configuration:
+    """Remove a profile and atomically persist the remaining configuration."""
+    config_path = path if path is not None else resolve_config_path(environment)
+    configuration = load_configuration(config_path, missing_ok=True)
+    if profile_name not in configuration.profiles:
+        raise ConfigurationError(f"profile '{profile_name}' was not found")
+
+    values = deepcopy(configuration.values)
+    del values["profiles"][profile_name]
+    _validate(values)
+    _write_configuration(config_path, values)
+    return Configuration(path=config_path, values=values)
+
+
+def _validate(values: dict[str, Any]) -> None:
     validator = Draft202012Validator(_load_schema(), format_checker=FormatChecker())
     errors = sorted(
         validator.iter_errors(values),
         key=lambda item: tuple(str(part) for part in item.absolute_path),
     )
-    if errors:
-        validation_error = errors[0]
-        location = ".".join(str(part) for part in validation_error.absolute_path) or "document root"
-        raise ConfigurationError(f"configuration does not match schema at {location}")
+    if not errors:
+        return
+    validation_error = errors[0]
+    location = ".".join(str(part) for part in validation_error.absolute_path) or "document root"
+    raise ConfigurationError(f"configuration does not match schema at {location}")
 
-    return Configuration(path=config_path, values=values)
 
-
-def initialize_configuration(
-    path: Path | None = None,
-    *,
-    profile_name: str = DEFAULT_PROFILE_NAME,
-    bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
-    environment: Mapping[str, str] | None = None,
-) -> Configuration:
-    """Create and validate a new plaintext configuration without overwriting files."""
-    config_path = path if path is not None else resolve_config_path(environment)
-    values: dict[str, Any] = {
-        "version": 1,
-        "profiles": {
-            profile_name: {
-                "id": str(uuid.uuid4()),
-                "description": "Local development",
-                "kafka": {
-                    "bootstrapServers": list(bootstrap_servers),
-                    "transport": "plaintext",
-                    "auth": {"type": "none"},
-                },
-            }
-        },
-    }
-    validator = Draft202012Validator(_load_schema(), format_checker=FormatChecker())
-    if not validator.is_valid(values):
-        raise ConfigurationError("the requested initial configuration is invalid")
+def _write_configuration(path: Path, values: dict[str, Any]) -> None:
+    """Atomically replace configuration with a private validated YAML document."""
+    temporary_path: Path | None = None
+    descriptor: int | None = None
 
     try:
-        config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as error:
-        raise ConfigurationError(f"configuration already exists: {config_path}") from error
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".config-", suffix=".tmp", dir=path.parent
+        )
+        temporary_path = Path(temporary_name)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            yaml.safe_dump(values, stream, sort_keys=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
     except OSError as error:
-        raise ConfigurationError(f"configuration could not be created: {config_path}") from error
-
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        yaml.safe_dump(values, stream, sort_keys=False)
-    return Configuration(path=config_path, values=values)
+        raise ConfigurationError(f"configuration could not be updated: {path}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 def _load_schema() -> dict[str, Any]:
@@ -156,7 +199,8 @@ __all__ = [
     "CONFIG_FILENAME",
     "Configuration",
     "ConfigurationError",
-    "initialize_configuration",
+    "add_profile",
     "load_configuration",
+    "remove_profile",
     "resolve_config_path",
 ]

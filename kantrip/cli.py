@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import click
@@ -9,7 +10,7 @@ import cloup
 import yaml
 
 from kantrip import APP_VERSION
-from kantrip.config import ConfigurationError, initialize_configuration, load_configuration
+from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
 from kantrip.console import Consoles, create_consoles
 from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, run_profile_session
@@ -44,29 +45,8 @@ def consoles_from_context(context: cloup.Context) -> Consoles:
     return consoles
 
 
-@cli.group("config", no_args_is_help=True)
-def config_group() -> None:
-    """Inspect Kantrip configuration."""
-
-
-@config_group.command("validate")
-def validate_config() -> None:
-    """Validate the resolved configuration file."""
-    try:
-        configuration = load_configuration()
-    except ConfigurationError as error:
-        raise click.ClickException(str(error)) from error
-    click.echo(f"Configuration is valid: {configuration.path}")
-
-
-@config_group.command("init")
-@cloup.option(
-    "--profile",
-    "profile_name",
-    default="local",
-    show_default=True,
-    help="Name of the initial profile.",
-)
+@cli.command("add")
+@cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
     "--bootstrap-server",
     "bootstrap_servers",
@@ -75,24 +55,40 @@ def validate_config() -> None:
     show_default=True,
     help="Kafka broker address; may be repeated.",
 )
-def initialize_config(profile_name: str, bootstrap_servers: tuple[str, ...]) -> None:
-    """Create a new plaintext configuration and initial profile."""
+@cloup.option("--description", help="Optional profile description.")
+def add_configured_profile(
+    profile_name: str,
+    bootstrap_servers: tuple[str, ...],
+    description: str | None,
+) -> None:
+    """Add a plaintext profile."""
     try:
-        configuration = initialize_configuration(
-            profile_name=profile_name,
+        configuration = add_profile(
+            profile_name,
             bootstrap_servers=bootstrap_servers,
+            description=description,
         )
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(f"Created configuration: {configuration.path}")
-    click.echo(f"Created profile: {profile_name}")
+    click.echo(f"Added profile '{profile_name}' to {configuration.path}")
+
+
+@cli.command("remove")
+@cloup.argument("profile_name", metavar="PROFILE")
+def remove_configured_profile(profile_name: str) -> None:
+    """Remove a profile."""
+    try:
+        configuration = remove_profile(profile_name)
+    except ConfigurationError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Removed profile '{profile_name}' from {configuration.path}")
 
 
 @cli.command("list")
 def list_profiles() -> None:
     """List configured profiles."""
     try:
-        configuration = load_configuration()
+        configuration = load_configuration(missing_ok=True)
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
     for name, profile in configuration.profiles.items():
@@ -105,10 +101,21 @@ def list_profiles() -> None:
 def show_profile(profile_name: str) -> None:
     """Show a profile without revealing credential references."""
     try:
-        profile = load_configuration().profile(profile_name)
+        profile = load_configuration(missing_ok=True).profile(profile_name)
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
     click.echo(yaml.safe_dump(redact_mapping(profile), sort_keys=False), nl=False)
+
+
+@cli.command("current")
+def current_profile() -> None:
+    """Show the profile active in the current Kantrip session."""
+    profile_name = os.environ.get("KANTRIP_PROFILE")
+    if not profile_name:
+        raise click.ClickException(
+            "no profile is active; run 'kantrip exec PROFILE' to start a profile session"
+        )
+    click.echo(profile_name)
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})
@@ -117,7 +124,7 @@ def show_profile(profile_name: str) -> None:
 def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
     """Run a command or interactive subshell with PROFILE."""
     try:
-        profile = load_configuration().profile(profile_name)
+        profile = load_configuration(missing_ok=True).profile(profile_name)
         exit_code = run_profile_session(profile_name, profile, command)
     except (ConfigurationError, SessionError) as error:
         raise click.ClickException(str(error)) from error

@@ -46,7 +46,7 @@ for kcat and compatible applications.
 
 ## Current limitations
 
-- Profile creation, selection, and secure-store integration are not implemented yet
+- Persistent profile selection and secure-store integration are not implemented yet
 - Execution currently supports only plaintext profiles without authentication
 - `kantrip ping` and credential-backed adapters are not available yet
 - Linux and macOS are the only planned MVP platforms
@@ -63,8 +63,7 @@ pipx install kantrip
 ### First profile session
 
 ```bash
-kantrip config init
-kantrip config validate
+kantrip add local
 kantrip list
 kantrip show local
 kantrip exec local -- kcat -L
@@ -74,13 +73,15 @@ Omit the command to work in a profile-scoped interactive subshell:
 
 ```bash
 kantrip exec local
+kantrip current
 kcat -L
 exit
 ```
 
-`config init` creates `~/.config/kantrip/config.yaml` with a plaintext `local`
+`add` creates `~/.config/kantrip/config.yaml` when necessary and adds a plaintext
 profile for `localhost:9092`. Pass `--bootstrap-server HOST:PORT` to choose a
-different broker. Kantrip never overwrites an existing configuration.
+different broker. Use `kantrip remove PROFILE` to remove one. `kantrip list`
+prints no profile rows when the configuration is absent or empty.
 
 ## Usage
 

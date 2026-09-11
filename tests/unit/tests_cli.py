@@ -29,36 +29,54 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, result.exit_code)
         self.assertIn(APP_VERSION, result.output)
 
-    def test_configuration_commands_use_resolved_file(self) -> None:
+    def test_profile_commands_use_resolved_file(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
             config_path.write_text(_VALID_CONFIG, encoding="utf-8")
             environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
 
-            validated = self.runner.invoke(cli, ["config", "validate"], env=environment)
             listed = self.runner.invoke(cli, ["list"], env=environment)
             shown = self.runner.invoke(cli, ["show", "local"], env=environment)
 
-        self.assertEqual(0, validated.exit_code, validated.output)
-        self.assertIn("Configuration is valid", validated.output)
         self.assertEqual("local\tLocal development\n", listed.output)
         self.assertEqual(0, shown.exit_code, shown.output)
         self.assertIn("bootstrapServers:", shown.output)
 
-    def test_config_init_creates_a_ready_local_profile(self) -> None:
+    def test_add_and_remove_manage_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "kantrip" / "config.yaml"
-            result = self.runner.invoke(
+            environment = {"KANTRIP_CONFIG": str(config_path)}
+            added = self.runner.invoke(
                 cli,
-                ["config", "init", "--bootstrap-server", "broker.example.com:19092"],
-                env={"KANTRIP_CONFIG": str(config_path)},
+                ["add", "development", "--bootstrap-server", "broker.example.com:19092"],
+                env=environment,
             )
+            listed = self.runner.invoke(cli, ["list"], env=environment)
+            removed = self.runner.invoke(cli, ["remove", "development"], env=environment)
+            empty = self.runner.invoke(cli, ["list"], env=environment)
 
-            contents = config_path.read_text(encoding="utf-8")
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual("development\n", listed.output)
+        self.assertEqual(0, removed.exit_code, removed.output)
+        self.assertEqual("", empty.output)
+
+    def test_list_is_empty_when_configuration_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "missing.yaml"
+
+            result = self.runner.invoke(cli, ["list"], env={"KANTRIP_CONFIG": str(config_path)})
 
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("Created profile: local", result.output)
-        self.assertIn("broker.example.com:19092", contents)
+        self.assertEqual("", result.output)
+
+    def test_current_reports_active_profile(self) -> None:
+        active = self.runner.invoke(cli, ["current"], env={"KANTRIP_PROFILE": "local"})
+        inactive = self.runner.invoke(cli, ["current"], env={"KANTRIP_PROFILE": ""})
+
+        self.assertEqual(0, active.exit_code, active.output)
+        self.assertEqual("local\n", active.output)
+        self.assertNotEqual(0, inactive.exit_code)
+        self.assertIn("no profile is active", inactive.output)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():
