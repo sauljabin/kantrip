@@ -99,6 +99,12 @@ If you use MesloLGS NF or another Nerd Font, you can use its magic-wand glyph
 format = '[󱡄 $output]($style) '
 ```
 
+For a Kafka-specific alternative, use the Nerd Font Kafka glyph (`U+F100F`):
+
+```toml
+format = '[󱀏 $output]($style) '
+```
+
 Browse the [Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet) for
 more glyphs you can use in its place.
 
@@ -136,6 +142,12 @@ instead:
 print -P -n '%F{magenta}󱡄 %f%F{cyan}'
 ```
 
+For a Kafka-specific alternative, use the Nerd Font Kafka glyph (`U+F100F`):
+
+```zsh
+print -P -n '%F{magenta}󱀏 %f%F{cyan}'
+```
+
 Themes that replace `PROMPT` after this code may need the snippet moved to the
 end of `~/.zshrc`.
 
@@ -161,6 +173,12 @@ instead:
 
 ```zsh
 p10k segment -f 5 -t "󱡄 ${KANTRIP_PROFILE}"
+```
+
+For a Kafka-specific alternative, use the Nerd Font Kafka glyph (`U+F100F`):
+
+```zsh
+p10k segment -f 5 -t "󱀏 ${KANTRIP_PROFILE}"
 ```
 
 Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
