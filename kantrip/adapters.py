@@ -49,11 +49,11 @@ KAFKA_EXECUTABLE_OPTIONS = {
     },
     **{
         executable: ("--bootstrap-server", "--producer.config")
-        for executable in KAFKA_CONSOLE_PRODUCER_EXECUTABLES | SCHEMA_REGISTRY_PRODUCER_EXECUTABLES
+        for executable in KAFKA_CONSOLE_PRODUCER_EXECUTABLES
     },
     **{
-        executable: ("--bootstrap-server", "--consumer.config")
-        for executable in SCHEMA_REGISTRY_CONSUMER_EXECUTABLES
+        executable: ("--bootstrap-server", "--command-config")
+        for executable in SCHEMA_REGISTRY_EXECUTABLES
     },
     **{
         executable: ("--bootstrap-server", "--command-config")
@@ -77,10 +77,12 @@ _KASKADE_CONNECTION_OPTIONS = (
     "-b",
 )
 _KAFKA_ALTERNATE_CONNECTION_OPTIONS = {
+    **{executable: ("--broker-list",) for executable in KAFKA_CONSOLE_PRODUCER_EXECUTABLES},
     **{
-        executable: ("--broker-list",)
-        for executable in KAFKA_CONSOLE_PRODUCER_EXECUTABLES | SCHEMA_REGISTRY_PRODUCER_EXECUTABLES
+        executable: ("--broker-list", "--producer.config")
+        for executable in SCHEMA_REGISTRY_PRODUCER_EXECUTABLES
     },
+    **{executable: ("--consumer.config",) for executable in SCHEMA_REGISTRY_CONSUMER_EXECUTABLES},
     **{
         executable: ("--zookeeper",)
         for executable in KAFKA_TOPICS_EXECUTABLES | KAFKA_CONSUMER_GROUPS_EXECUTABLES

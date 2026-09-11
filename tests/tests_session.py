@@ -190,12 +190,12 @@ class TestProfileSession(unittest.TestCase):
 
     def test_adapts_all_schema_registry_console_commands(self) -> None:
         adapters = {
-            "kafka-avro-console-consumer": "--consumer.config",
-            "kafka-avro-console-producer": "--producer.config",
-            "kafka-json-schema-console-consumer": "--consumer.config",
-            "kafka-json-schema-console-producer": "--producer.config",
-            "kafka-protobuf-console-consumer": "--consumer.config",
-            "kafka-protobuf-console-producer": "--producer.config",
+            "kafka-avro-console-consumer": "--command-config",
+            "kafka-avro-console-producer": "--command-config",
+            "kafka-json-schema-console-consumer": "--command-config",
+            "kafka-json-schema-console-producer": "--command-config",
+            "kafka-protobuf-console-consumer": "--command-config",
+            "kafka-protobuf-console-producer": "--command-config",
         }
         for executable, config_option in adapters.items():
             with self.subTest(executable=executable):
