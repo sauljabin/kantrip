@@ -50,6 +50,9 @@
   shared tools. All receive `--bootstrap-server`; consumers/producers receive
   their client config option, and administrative tools receive
   `--command-config`, pointing at the private generated Java properties file.
+- Confluent's Avro, JSON Schema, and Protobuf console producers and consumers
+  are unsuffixed. They receive the matching Kafka producer/consumer config file
+  and the profile's plain Schema Registry URL; connection overrides are rejected.
 - Kaskade 5 `admin` and `consumer` receive a private INI file through
   `--config-file`; registry deserializers select a second private file with a
   `[registry]` section. Do not assume a Kaskade environment variable until

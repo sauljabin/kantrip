@@ -26,10 +26,13 @@ kantrip doctor
 Doctor validates the resolved configuration against the bundled schema, checks
 that profile IDs are unique, warns about unsafe file permissions, verifies an
 active session and its adapter path, and discovers Kantrip, the interactive
-shell, kcat, Apache Kafka commands, and Kaskade on `PATH`. Missing optional
-clients and a missing first-run configuration are warnings; invalid
-configuration or inconsistent active-session state makes the command exit with
-status 1. Doctor performs only local checks.
+shell, kcat, Apache Kafka commands, all six Confluent Schema Registry console
+clients, and Kaskade on `PATH`. It also reports whether configured Schema
+Registry profiles can be used by the currently implemented plaintext adapter.
+Missing optional clients and a missing first-run configuration are warnings;
+invalid configuration, unsupported Schema Registry profile settings, or
+inconsistent active-session state makes the command exit with status 1. Doctor
+performs only local checks.
 
 ## Kafka and Schema Registry connectivity
 

@@ -23,6 +23,7 @@ from kantrip.adapters import (
     KAFKA_TOPICS_EXECUTABLES,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
+    SCHEMA_REGISTRY_EXECUTABLES,
 )
 from kantrip.config import (
     Configuration,
@@ -30,6 +31,7 @@ from kantrip.config import (
     load_configuration,
     resolve_config_path,
 )
+from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
 from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
@@ -63,6 +65,9 @@ _KAFKA_COMMAND_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
     ("configs", KAFKA_CONFIGS_EXECUTABLES),
     ("ACLs", KAFKA_ACLS_EXECUTABLES),
     ("broker API versions", KAFKA_BROKER_API_VERSIONS_EXECUTABLES),
+)
+_SCHEMA_REGISTRY_COMMAND_GROUPS = tuple(
+    frozenset({executable}) for executable in sorted(SCHEMA_REGISTRY_EXECUTABLES)
 )
 
 
@@ -133,6 +138,7 @@ def _check_configuration(
     checks.append(_check_config_file(path))
     checks.append(_check_profile_ids(configuration))
     checks.append(_check_profiles(configuration))
+    checks.extend(_check_schema_registry_profiles(configuration))
     return configuration, checks
 
 
@@ -166,7 +172,36 @@ def _check_profile_ids(configuration: Configuration) -> DoctorCheck:
 def _check_profiles(configuration: Configuration) -> DoctorCheck:
     if not configuration.profiles:
         return DoctorCheck("warning", "No profiles are configured")
-    return DoctorCheck("success", "All configured profiles are executable")
+    return DoctorCheck("success", "All configured Kafka profiles are executable")
+
+
+def _check_schema_registry_profiles(configuration: Configuration) -> list[DoctorCheck]:
+    configured = 0
+    checks: list[DoctorCheck] = []
+    for name, profile in configuration.profiles.items():
+        if "schemaRegistry" not in profile:
+            continue
+        configured += 1
+        try:
+            plain_schema_registry_url(profile)
+        except SchemaRegistryProfileError as error:
+            checks.append(
+                DoctorCheck(
+                    "error",
+                    f"Schema Registry profile '{name}' is not executable: {error}",
+                )
+            )
+    if checks:
+        return checks
+    if not configured:
+        return [DoctorCheck("success", "Schema Registry profiles: none configured")]
+    label = "profile" if configured == 1 else "profiles"
+    return [
+        DoctorCheck(
+            "success",
+            f"Schema Registry profiles: {configured} {label} configured and executable",
+        )
+    ]
 
 
 def _check_session(
@@ -245,6 +280,9 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
     return [
         _check_command_group("kcat", (KCAT_EXECUTABLES,), search_path),
         _check_kafka_commands(search_path),
+        _check_command_group(
+            "Schema Registry console", _SCHEMA_REGISTRY_COMMAND_GROUPS, search_path
+        ),
         _check_command_group("Kaskade", (KASKADE_EXECUTABLES,), search_path),
     ]
 
