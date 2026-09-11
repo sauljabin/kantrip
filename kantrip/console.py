@@ -96,10 +96,11 @@ def create_consoles(*, no_color: bool = False) -> Consoles:
 def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
     """Create the styled profile-list table."""
     table = Table(
-        box=box.ROUNDED,
+        box=box.HORIZONTALS,
         border_style="muted",
         header_style="heading",
-        show_lines=False,
+        show_edge=False,
+        show_lines=True,
     )
     table.add_column("Profile", style="primary", no_wrap=True)
     table.add_column("Description", style="foreground")

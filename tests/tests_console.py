@@ -61,6 +61,24 @@ class TestConsole(unittest.TestCase):
         self.assertIn("local", stream.getvalue())
         self.assertIn("Local development", stream.getvalue())
 
+    def test_profile_table_has_row_lines_without_outer_or_column_borders(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+        profiles = {
+            "local": {},
+            "test": {"description": "test"},
+            "sandbox": {},
+        }
+
+        console.print(create_profile_table(profiles))
+
+        output = stream.getvalue()
+        separators = [line for line in output.splitlines() if line and set(line) == {"─"}]
+        self.assertEqual(3, len(separators))
+        self.assertNotIn("│", output)
+        self.assertNotIn("╭", output)
+        self.assertNotIn("╰", output)
+
     def test_yaml_syntax_uses_color(self) -> None:
         stream = TerminalBuffer()
         console = create_console(stream=stream, environment={})
