@@ -70,9 +70,32 @@ reading `KANTRIP_PROFILE` directly.
 
 ## Displaying the active profile in your prompt
 
-Prompt integrations should read `KANTRIP_PROFILE`. It is available to an
-interactive shell opened by `kantrip exec PROFILE` and disappears when that
-session exits. Prompt code does not need to invoke Kantrip repeatedly.
+Prompt integrations should read `KANTRIP_PROFILE`. It is available only inside
+an interactive shell opened by `kantrip exec PROFILE`, and it disappears when
+that session exits. Prompt code does not need to invoke Kantrip repeatedly.
+
+Configure only the integration that renders your prompt:
+
+- Use **Starship** if Starship controls your prompt.
+- Use **Powerlevel10k** if Powerlevel10k controls your prompt, even when it is
+  installed through Oh My Zsh.
+- Use **Oh My Zsh** for a theme that uses the standard `PROMPT` variable.
+
+### Choose a display style
+
+The examples below use `kantrip:PROFILE` by default. You can keep that label or
+replace the indicated line with one of these compact alternatives:
+
+| Style | Reference | Requirement |
+| --- | --- | --- |
+| Magic-wand emoji | 🪄 | An emoji fallback font |
+| Kantrip magic staff | <img src="images/nf-md-magic-staff.svg" alt="Nerd Font magic staff glyph" width="48"> | MesloLGS NF or another Nerd Font with `nf-md-magic_staff` (`U+F1844`) |
+| Apache Kafka | <img src="images/nf-md-apache-kafka.svg" alt="Nerd Font Apache Kafka glyph" width="48"> | MesloLGS NF or another Nerd Font with `nf-md-apache_kafka` (`U+F100F`) |
+
+The Nerd Font characters may appear as boxes in GitHub code blocks because the
+site does not load Nerd Fonts. The images above show how they look in a
+compatible terminal. Browse the
+[Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet) for more glyphs.
 
 ### Starship
 
@@ -84,6 +107,27 @@ command = 'printf %s "$KANTRIP_PROFILE"'
 when = 'test -n "$KANTRIP_PROFILE"'
 format = '[kantrip:$output]($style) '
 style = 'bold purple'
+```
+
+To use a compact prefix, replace the `format` line with exactly one of the
+following alternatives.
+
+Magic-wand emoji:
+
+```toml
+format = '[🪄 $output]($style) '
+```
+
+Kantrip magic staff (`nf-md-magic_staff`):
+
+```toml
+format = '[󱡄 $output]($style) '
+```
+
+Apache Kafka (`nf-md-apache_kafka`):
+
+```toml
+format = '[󱀏 $output]($style) '
 ```
 
 Starship's default prompt includes custom modules. If you define a custom global
@@ -106,6 +150,27 @@ setopt prompt_subst
 PROMPT='$(kantrip_prompt_info)'"$PROMPT"
 ```
 
+To use a compact prefix, replace the first `print` command in
+`kantrip_prompt_info` with exactly one of the following alternatives.
+
+Magic-wand emoji:
+
+```zsh
+print -P -n '%F{magenta}🪄 %f%F{cyan}'
+```
+
+Kantrip magic staff (`nf-md-magic_staff`):
+
+```zsh
+print -P -n '%F{magenta}󱡄 %f%F{cyan}'
+```
+
+Apache Kafka (`nf-md-apache_kafka`):
+
+```zsh
+print -P -n '%F{magenta}󱀏 %f%F{cyan}'
+```
+
 Themes that replace `PROMPT` after this code may need the snippet moved to the
 end of `~/.zshrc`.
 
@@ -120,9 +185,45 @@ function prompt_kantrip() {
 }
 ```
 
+To use a compact prefix, replace the `p10k segment` line with exactly one of the
+following alternatives.
+
+Magic-wand emoji:
+
+```zsh
+p10k segment -f 5 -t "🪄 ${KANTRIP_PROFILE}"
+```
+
+Kantrip magic staff (`nf-md-magic_staff`):
+
+```zsh
+p10k segment -f 5 -t "󱡄 ${KANTRIP_PROFILE}"
+```
+
+Apache Kafka (`nf-md-apache_kafka`):
+
+```zsh
+p10k segment -f 5 -t "󱀏 ${KANTRIP_PROFILE}"
+```
+
 Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
-`POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file. Start a new shell, run
-`kantrip exec local`, and the segment will be visible until that subshell exits.
+`POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file.
+
+### Verify the prompt
+
+Start a new shell or reload the relevant prompt configuration, then run:
+
+```bash
+kantrip exec local
+```
+
+The active profile should appear in the prompt inside the new subshell. Run
+`exit` and confirm that it disappears when you return to the parent shell.
+
+## Supported command-line tools
+
+Kantrip configures supported Kafka tools inside `kantrip exec` while preventing
+command-line options from overriding the selected profile.
 
 ### kcat
 
