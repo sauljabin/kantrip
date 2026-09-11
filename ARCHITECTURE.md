@@ -1,76 +1,51 @@
 # Architecture Decisions
 
-This document records Kantrip's security decisions and application design.
-Implementation details belong in code and tests.
+This document records behavior implemented by Kantrip today. Planned design is
+kept in `MVP.md` until it is implemented.
 
-## Profiles and operating-system vaults
+## Plaintext profiles
 
-Profiles contain versioned, non-secret Kafka and Schema Registry metadata plus
-opaque references to credentials. Long-lived passwords, tokens, private keys,
-and other secret material live only in the macOS Keychain or a Linux Secret
-Service-compatible vault. Kantrip does not fall back to plaintext or locally
-encrypted secret files.
+Profiles contain non-secret Kafka broker metadata. The bundled schema accepts
+only plaintext transport without authentication, plus descriptions, labels, and
+Java or librdkafka client properties. Profile updates are schema-validated and
+atomically replace the configuration file with mode `0600`.
 
-Profile updates are validated and atomic. Profile names and paths are treated as
-untrusted input, and profile output never reveals resolved secrets or credential
-references.
+The configuration path follows `KANTRIP_CONFIG`, then `XDG_CONFIG_HOME`, then
+`~/.config/kantrip/config.yaml`. Profile names and paths are treated as untrusted
+input, and profile display passes through the redaction layer.
 
 ## Kantrip sessions
 
-`kantrip exec` creates a session for one selected profile and one supervised
-child process or interactive subshell. A session owns its private runtime
-directory, generated client configuration, injected environment, child process
-group, and cleanup lifecycle.
+`kantrip exec` runs one command or interactive Bash, Zsh, or Fish subshell for a
+selected profile. Nested sessions are rejected. Each session uses a randomly
+named temporary directory containing private generated client configuration and,
+for interactive shells, adapter shims. Python's temporary-directory lifecycle
+removes those artifacts when the supervised command returns.
 
-Session directories use random identifiers, restrictive permissions, ownership
-checks, and validated paths. The supervising Kantrip process forwards signals,
-preserves the child's exit status, and removes generated artifacts after the
-child exits. A bounded janitor removes verified stale sessions left by abnormal
-termination without deleting active sessions or paths outside Kantrip's runtime
-root.
+The child receives `KANTRIP_PROFILE`, `KANTRIP_SESSION_ID`, and
+`KANTRIP_SESSION_DIR`; the caller's parent environment is never modified. The
+child also receives the documented plaintext `KAFKA_*` and `KCAT_CONFIG` values.
 
-Foreground process supervision is the supported execution model. A child that
-detaches itself can outlive session cleanup and is therefore unsupported.
-Kantrip rejects nested sessions when the child environment already contains its
-active session marker.
+## Client adapters
 
-## Child environment
+Supported adapters inject the selected bootstrap servers and generated client
+configuration using each tool's native interface. kcat reads `KCAT_CONFIG`,
+official Kafka commands receive connection and properties-file arguments, and
+Kaskade `admin` and `consumer` receive a generated INI file. Options that would
+override the selected profile are rejected.
 
-Kantrip injects connection settings only into the supervised child process and
-its descendants; it never modifies the caller's parent shell. Application-facing
-settings use documented `KAFKA_*` and `SCHEMA_REGISTRY_*` variables. Kantrip
-reserves `KANTRIP_*` for session metadata.
+Interactive shells load the user's normal startup configuration and history.
+Kantrip then removes aliases, functions, and Fish abbreviations that shadow
+supported client names, restores the session shim directory at the front of
+`PATH`, and refreshes command lookup.
 
-Applications opt in to the child environment by reading the documented
-variables or generated configuration files. Command-line adapters may translate
-the same resolved session into native flags or configuration paths, but secrets
-are never placed in command arguments.
+## Diagnostics and output
 
-## Generated configuration
+`kantrip doctor` performs read-only local checks. It validates configuration,
+file permissions, profile IDs, runtime support, active-session state, shim-path
+precedence, and installed client commands without contacting Kafka.
 
-Some clients require properties, certificates, private keys, or executable
-shims. Kantrip materializes those artifacts only inside the session directory,
-creates secret-bearing files with restrictive permissions from the first write,
-and removes them with the session. User-provided source files are never cleanup
-targets.
-
-Interactive Bash, Zsh, and Fish sessions load the user's normal startup
-configuration before applying session controls. Bash and Zsh use session-owned
-startup files; Fish uses an init command after its normal configuration. The
-session removes child-shell aliases, functions, and abbreviations that shadow
-supported client names, restores its executable-shim directory at the front of
-`PATH`, and refreshes command lookup. This prevents startup-time path management
-or shell definitions from selecting an unadapted executable. Every supported
-shell remains attached to its normal user history location; the temporary
-session directory is never durable history storage.
-
-## Secret handling and diagnostics
-
-Resolved secrets remain in memory only as long as necessary to prepare and run
-a session. Kantrip classifies and redacts sensitive values before producing
-normal output, diagnostics, errors, tracebacks, or machine-readable results.
-Normal output and diagnostics remain separate, and neither may expose secrets.
-
-Kantrip executes children directly with argument arrays and does not interpolate
-commands through a shell. Unsupported authentication or adapter combinations
-fail before child launch instead of silently weakening security.
+Kantrip executes children directly with argument arrays. Normal command output
+and diagnostics remain separate, sensitive-looking values are redacted before
+presentation, and styling follows terminal capability, `NO_COLOR`, `TERM=dumb`,
+and `--no-color`.

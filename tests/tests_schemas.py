@@ -6,18 +6,15 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile-v1.schema.json"
-PROFILE_FIXTURE = Path(__file__).parent / "profiles" / "config-v1.yaml"
+PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile.schema.json"
 
 
 class TestProfileSchema(unittest.TestCase):
     def test_schema_is_a_valid_draft_2020_12_document(self) -> None:
         Draft202012Validator.check_schema(self._schema())
 
-    def test_unit_profile_fixture_matches_schema(self) -> None:
-        profile = yaml.safe_load(PROFILE_FIXTURE.read_text(encoding="utf-8"))
-
-        self._validator().validate(profile)
+    def test_programmatic_profile_matches_schema(self) -> None:
+        self._validator().validate(_profile_configuration())
 
     def test_documented_profile_example_matches_schema(self) -> None:
         example = yaml.safe_load(
@@ -26,19 +23,28 @@ class TestProfileSchema(unittest.TestCase):
 
         self._validator().validate(example)
 
-    def test_schema_registry_mtls_fields_match_schema(self) -> None:
-        profile = yaml.safe_load(PROFILE_FIXTURE.read_text(encoding="utf-8"))
-        profile_id = profile["profiles"]["unit-local"]["id"]
+    def test_schema_registry_is_not_accepted(self) -> None:
+        profile = _profile_configuration()
         profile["profiles"]["unit-local"]["schemaRegistry"] = {
             "url": "https://schema.example.com",
             "auth": {"type": "none"},
-            "tls": {
-                "certificateRef": f"keyring://profile/{profile_id}/schema-registry/certificate",
-                "privateKeyRef": f"keyring://profile/{profile_id}/schema-registry/private-key",
-            },
         }
 
-        self._validator().validate(profile)
+        self.assertFalse(self._validator().is_valid(profile))
+
+    def test_top_level_version_is_not_accepted(self) -> None:
+        profile = _profile_configuration()
+        profile["version"] = "0.1.0a0"
+
+        self.assertFalse(self._validator().is_valid(profile))
+
+    def test_authenticated_or_encrypted_profiles_are_not_accepted(self) -> None:
+        profile = _profile_configuration()
+        kafka = profile["profiles"]["unit-local"]["kafka"]
+        kafka["transport"] = "tls"
+        kafka["auth"] = {"type": "plain", "username": "synthetic"}
+
+        self.assertFalse(self._validator().is_valid(profile))
 
     @staticmethod
     def _schema() -> dict:
@@ -47,6 +53,23 @@ class TestProfileSchema(unittest.TestCase):
     @classmethod
     def _validator(cls) -> Draft202012Validator:
         return Draft202012Validator(cls._schema(), format_checker=FormatChecker())
+
+
+def _profile_configuration() -> dict:
+    return {
+        "profiles": {
+            "unit-local": {
+                "id": "018f8f13-7c21-7cee-8000-000000000010",
+                "description": "Synthetic unit profile",
+                "labels": {"environment": "test"},
+                "kafka": {
+                    "bootstrapServers": ["localhost:19092"],
+                    "transport": "plaintext",
+                    "auth": {"type": "none"},
+                },
+            }
+        }
+    }
 
 
 if __name__ == "__main__":

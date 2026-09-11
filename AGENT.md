@@ -10,29 +10,32 @@
   at or below 10; repository-wide Ruff `C901` runs in `scripts.analyze`, so use
   focused helpers instead of suppressions.
 - Importing `kantrip` must not create directories, open files, configure logging,
-  construct consoles, or contact credential stores or Kafka. Classify and redact
-  values before presentation, and keep command behavior independent from Rich.
+  construct consoles, or contact Kafka. Classify and redact values before
+  presentation, and keep command behavior independent from Rich.
 - Support Linux and macOS on Python 3.10 through 3.14. Keep paths, permissions,
-  signals, terminals, and shell documentation portable enough for later Windows
-  support without claiming Windows compatibility.
+  signals, terminals, and shell documentation portable.
+- Keep unimplemented product work in `MVP.md`, not in current feature docs,
+  schemas, examples, commands, or implementation comments.
 
 ## Profiles and Sessions
 
-- The versioned profile schema lives in `schemas/`, examples in `examples/`, and
-  test fixtures under their owning suite. A breaking schema change requires a new
-  version, migration guidance, synchronized fixtures/examples, and tests.
+- The profile schema lives in `schemas/`, examples in `examples/`, and synthetic
+  test data inside its owning test module. Keep it limited to implemented
+  behavior and synchronize examples, tests, and migration notes when it changes.
+  Schema filenames and configuration documents do not duplicate the application
+  version; the schema shipped by an application release is authoritative.
 - Treat the environment documented in `USAGE.md` as public API. Add variables
   compatibly; renames or semantic breaks require release and migration guidance.
-  Use `KAFKA_*` and `SCHEMA_REGISTRY_*` for application values and reserve
-  `KANTRIP_*` for Kantrip-owned profile/session metadata.
+  Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
+  Kantrip-owned profile/session metadata.
 - `kantrip add` creates missing configuration. Add/remove operations are validated
   and atomic, adding an existing profile never overwrites it, and listing missing
   configuration returns an empty collection.
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
-  session. Until credentials exist, execution accepts only `transport: plaintext`
-  with `auth.type: none`.
+  session. The schema and execution accept only `transport: plaintext` with
+  `auth.type: none`.
 
 ## Client Adapters and Shells
 
@@ -53,14 +56,11 @@
   and temporary; never install persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
 
-## Secrets and Output
+## Sensitive Values and Output
 
-- Long-lived secrets belong only in an approved operating-system credential
-  store; never add plaintext or locally encrypted file fallbacks.
-- Never expose passwords, tokens, keys, secret-bearing JAAS strings, or Registry
-  credentials in arguments, fixtures, logs, output, diagnostics, tracebacks, or
-  snapshots. Examples use conspicuously synthetic values and infrastructure;
-  profile output redacts secret references as well as resolved values.
+- Never expose sensitive values in arguments, fixtures, logs, output,
+  diagnostics, tracebacks, or snapshots. Examples use conspicuously synthetic
+  values and infrastructure.
 - Send command results to stdout and diagnostics to stderr. Styling respects
   `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output; use text status labels
   instead of emoji when styling is disabled.
@@ -74,8 +74,6 @@
   versions, synthetic data, and population tools. Tests may inspect pinned image
   versions and Compose structure, but sandbox code and test fixtures must not
   import each other.
-- Keep Apicurio on KafkaSQL storage. Create its journal and snapshot topics with
-  three replicas before starting the registry.
 - `python -m sandbox` runs the adapter smoke workflow against an active sandbox
   with locally installed clients and optional shells. It is a pre-commit hook,
   not an offline or packaged E2E test.

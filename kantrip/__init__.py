@@ -1,7 +1,7 @@
 """Kantrip package metadata.
 
 Importing this package is intentionally side-effect free. Runtime directories,
-logging, consoles, and secure stores are initialized only by command handlers.
+logging and consoles are initialized only by command handlers.
 """
 
 from importlib.metadata import PackageNotFoundError, version

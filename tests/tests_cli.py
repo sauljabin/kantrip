@@ -83,6 +83,41 @@ class TestCli(unittest.TestCase):
         self.assertNotEqual(0, inactive.exit_code)
         self.assertIn("no profile is active", inactive.output)
 
+    def test_doctor_uses_readable_status_markers_without_color(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.chmod(0o600)
+
+            with patch("kantrip.cli.run_doctor") as run:
+                from kantrip.doctor import DoctorCheck, DoctorReport
+
+                run.return_value = DoctorReport(
+                    (
+                        DoctorCheck("success", "configuration is valid"),
+                        DoctorCheck("warning", "kcat was not found"),
+                    )
+                )
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "doctor"],
+                    env={"KANTRIP_CONFIG": str(config_path)},
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("[passed] configuration is valid", result.output)
+        self.assertIn("[warning] kcat was not found", result.output)
+
+    def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
+        with patch("kantrip.cli.run_doctor") as run:
+            from kantrip.doctor import DoctorCheck, DoctorReport
+
+            run.return_value = DoctorReport((DoctorCheck("error", "configuration is invalid"),))
+            result = self.runner.invoke(cli, ["--no-color", "doctor"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("[failed] configuration is invalid", result.output)
+
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
@@ -130,7 +165,6 @@ class TestCli(unittest.TestCase):
 
 
 _VALID_CONFIG = """\
-version: 1
 profiles:
   local:
     id: 018f8f13-7c21-7cee-8000-000000000001

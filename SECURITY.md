@@ -26,23 +26,21 @@ Include the following when it is safe to do so:
 
 - The affected Kantrip version or commit.
 - Operating system, Python version, installation method, Kafka distribution,
-  and authentication mechanism.
+  and affected command.
 - A concise description of the vulnerability and its likely impact.
 - Reproduction steps or a minimal proof of concept using test credentials and
   test infrastructure.
-- Whether credentials, generated files, environment variables, command
-  arguments, logs, or private infrastructure details may have been exposed.
+- Whether generated files, environment variables, command arguments, logs, or
+  private infrastructure details may have been exposed.
 - Any known mitigations and your preferred name for advisory credit.
 
-Never send real passwords, tokens, private keys, certificates, AWS credentials,
-production records, or private broker details. Replace them with synthetic
-values.
+Never send production records, credentials from another system, or private
+broker details. Replace them with synthetic values.
 
-Security-sensitive examples include credential-store exposure, secret leakage
-through arguments or diagnostics, unsafe temporary-file cleanup, symlink or
-path traversal, command or shim injection, profile-confusion bugs, broken
-TLS/SASL/OAuth validation, and dependency vulnerabilities with a demonstrated
-impact on Kantrip.
+Security-sensitive examples include profile-value leakage through arguments or
+diagnostics, unsafe temporary-file cleanup, symlink or path traversal, command
+or shim injection, profile-confusion bugs, and dependency vulnerabilities with
+a demonstrated impact on Kantrip.
 
 ## Handling and disclosure
 
