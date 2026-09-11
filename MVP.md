@@ -24,7 +24,8 @@ documentation together.
 
 ## 3. Connectivity and registry integration
 
-- Add `kantrip ping` for explicit broker connectivity and authentication checks.
+- Extend `kantrip ping` to cover authenticated profiles as those transports are
+  implemented.
 - Add Schema Registry profiles and tested mappings for Confluent-compatible and
   Apicurio endpoints.
 - Add OAuth support, including the generic client-credentials flow and Strimzi

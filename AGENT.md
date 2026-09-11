@@ -55,6 +55,8 @@
   for registered adapters, and restore the session shim path. Shims are private
   and temporary; never install persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
+- `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata
+  with a bounded timeout; it does not depend on an installed external Kafka CLI.
 
 ## Sensitive Values and Output
 
