@@ -355,10 +355,9 @@ kantrip exec local -- kafka-protobuf-console-consumer --topic orders --from-begi
 ```
 
 Each command receives the selected Kafka bootstrap servers, the private Java
-client file through `--command-config`, and `schema.registry.url`. Explicit
-connection flags and `bootstrap.servers` or `schema.registry.url` properties are
-rejected. The same behavior is available through Bash, Zsh, and Fish interactive
-sessions.
+client file, and `schema.registry.url`. Explicit connection flags and
+`bootstrap.servers` or `schema.registry.url` properties are rejected. The same
+behavior is available through Bash, Zsh, and Fish interactive sessions.
 
 These commands require the plain `schemaRegistry` profile section documented
 below. A missing section, authentication, HTTPS, or TLS metadata produces an

@@ -168,7 +168,7 @@ def smoke(
                 _check(
                     console,
                     f"validate the Schema Registry adapter with {executable}",
-                    _kantrip(profile, executable, "--help"),
+                    _kantrip(profile, *_schema_registry_probe(executable)),
                     smoke_environment,
                 )
             for executable in installed["topics"]:
@@ -365,7 +365,10 @@ def _shell_commands(
     )
     commands.extend(f"{executable} --version" for executable in installed["acls"])
     commands.extend(executable for executable in installed["broker API versions"])
-    commands.extend(f"{executable} --help" for executable in installed["Schema Registry console"])
+    commands.extend(
+        " ".join(_schema_registry_probe(executable))
+        for executable in installed["Schema Registry console"]
+    )
     commands.extend(f"{executable} -L" for executable in kcat_executables)
     commands.extend(("kaskade admin --help", "kaskade consumer --help"))
     return commands
@@ -402,6 +405,11 @@ def _kantrip(profile: str, executable: str, *arguments: str) -> list[str]:
         executable,
         *arguments,
     ]
+
+
+def _schema_registry_probe(executable: str) -> tuple[str, str]:
+    """Return a side-effect-free Schema Registry adapter command that exits successfully."""
+    return executable, "--version"
 
 
 def _check(
