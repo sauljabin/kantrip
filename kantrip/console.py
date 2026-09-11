@@ -119,6 +119,7 @@ def create_status_text(console: Console, status: StatusKind, message: str) -> Te
 __all__ = [
     "ARCANA_COLORS",
     "ARCANA_THEME",
+    "StatusKind",
     "colors_enabled",
     "create_console",
     "create_profile_table",

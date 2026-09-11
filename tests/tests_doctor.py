@@ -71,6 +71,37 @@ class TestDoctor(unittest.TestCase):
             )
         )
 
+    def test_names_a_missing_schema_registry_console_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.chmod(0o600)
+            environment = {
+                "KANTRIP_CONFIG": str(config_path),
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            def installed_without_protobuf_consumer(
+                name: str, path: str | None = None
+            ) -> str | None:
+                if name == "kafka-protobuf-console-consumer":
+                    return None
+                return _installed_tool(name, path)
+
+            with patch(
+                "kantrip.doctor.shutil.which",
+                side_effect=installed_without_protobuf_consumer,
+            ):
+                report = run_doctor(environment)
+
+        self.assertTrue(
+            any(
+                "missing: kafka-protobuf-console-consumer" in check.message
+                for check in report.checks
+            )
+        )
+
     def test_active_session_allows_a_benign_path_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

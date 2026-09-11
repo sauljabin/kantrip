@@ -124,6 +124,7 @@ class TestCli(unittest.TestCase):
                 run.return_value = DoctorReport(
                     (
                         DoctorCheck("success", "configuration is valid"),
+                        DoctorCheck("success", "resolved executable path", verbose_only=True),
                         DoctorCheck("warning", "kcat was not found"),
                     )
                 )
@@ -134,8 +135,25 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Kantrip Doctor", result.output)
+        self.assertIn("System", result.output)
         self.assertIn("[passed] configuration is valid", result.output)
         self.assertIn("[warning] kcat was not found", result.output)
+        self.assertNotIn("resolved executable path", result.output)
+        self.assertIn("[warning] Healthy with 1 warning", result.output)
+
+    def test_doctor_verbose_shows_detailed_checks(self) -> None:
+        with patch("kantrip.cli.run_doctor") as run:
+            from kantrip.doctor import DoctorCheck, DoctorReport
+
+            run.return_value = DoctorReport(
+                (DoctorCheck("success", "resolved executable path", verbose_only=True),)
+            )
+            result = self.runner.invoke(cli, ["--no-color", "doctor", "--verbose"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("[passed] resolved executable path", result.output)
+        self.assertIn("[passed] Healthy", result.output)
 
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
         with patch("kantrip.cli.run_doctor") as run:
@@ -146,6 +164,7 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] configuration is invalid", result.output)
+        self.assertIn("[failed] Unhealthy with 1 error", result.output)
 
     def test_ping_reports_kafka_connectivity(self) -> None:
         with self.runner.isolated_filesystem():

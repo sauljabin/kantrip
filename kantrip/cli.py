@@ -10,10 +10,13 @@ import click
 import cloup
 import yaml
 from rich.console import Console
+from rich.padding import Padding
+from rich.text import Text
 
 from kantrip import APP_VERSION
 from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
 from kantrip.console import (
+    StatusKind,
     create_console,
     create_profile_table,
     create_status_text,
@@ -160,15 +163,50 @@ def current_profile() -> None:
 
 
 @cli.command("doctor")
+@cloup.option(
+    "--verbose",
+    is_flag=True,
+    help="Show every diagnostic, including resolved paths and profile IDs.",
+)
 @cloup.pass_context
-def doctor(context: cloup.Context) -> None:
+def doctor(context: cloup.Context, verbose: bool) -> None:
     """Check Kantrip's local configuration and command environment."""
     console = console_from_context(context)
     report = run_doctor()
-    for check in report.checks:
-        console.print(create_status_text(console, check.status, check.message))
+    console.print(Text("Kantrip Doctor", style="heading"))
+    for section, checks in report.sections(verbose=verbose):
+        console.print()
+        console.print(Text(section, style="heading"))
+        for check in checks:
+            console.print(
+                Padding(
+                    create_status_text(console, check.status, check.message),
+                    (0, 0, 0, 2),
+                    expand=False,
+                )
+            )
+    console.print()
+    if report.error_count:
+        summary_status: StatusKind = "error"
+        summary = _doctor_summary("Unhealthy", report.error_count, report.warning_count)
+    elif report.warning_count:
+        summary_status = "warning"
+        summary = _doctor_summary("Healthy", 0, report.warning_count)
+    else:
+        summary_status = "success"
+        summary = "Healthy"
+    console.print(create_status_text(console, summary_status, summary))
     if not report.healthy:
         raise click.exceptions.Exit(1)
+
+
+def _doctor_summary(label: str, errors: int, warnings: int) -> str:
+    details: list[str] = []
+    if errors:
+        details.append(f"{errors} error{'s' if errors != 1 else ''}")
+    if warnings:
+        details.append(f"{warnings} warning{'s' if warnings != 1 else ''}")
+    return f"{label} with {', '.join(details)}"
 
 
 @cli.command("ping")

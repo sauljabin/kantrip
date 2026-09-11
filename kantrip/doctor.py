@@ -43,6 +43,8 @@ class DoctorCheck:
 
     status: CheckStatus
     message: str
+    section: str = "System"
+    verbose_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,25 @@ class DoctorReport:
     def healthy(self) -> bool:
         """Return whether no check found a condition that prevents safe use."""
         return all(check.status != "error" for check in self.checks)
+
+    @property
+    def warning_count(self) -> int:
+        """Return the number of warning checks."""
+        return sum(check.status == "warning" for check in self.checks)
+
+    @property
+    def error_count(self) -> int:
+        """Return the number of failed checks."""
+        return sum(check.status == "error" for check in self.checks)
+
+    def sections(self, *, verbose: bool = False) -> tuple[tuple[str, tuple[DoctorCheck, ...]], ...]:
+        """Group visible checks in their stable presentation order."""
+        grouped: dict[str, list[DoctorCheck]] = {}
+        for check in self.checks:
+            if check.verbose_only and not verbose:
+                continue
+            grouped.setdefault(check.section, []).append(check)
+        return tuple((name, tuple(checks)) for name, checks in grouped.items())
 
 
 _KAFKA_COMMAND_GROUPS: tuple[tuple[str, frozenset[str]], ...] = (
@@ -74,7 +95,7 @@ _SCHEMA_REGISTRY_COMMAND_GROUPS = tuple(
 def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
     """Inspect Kantrip's local environment without contacting configured services."""
     env = os.environ if environment is None else environment
-    checks = [
+    system_checks = [
         DoctorCheck("success", f"Kantrip {APP_VERSION}"),
         _check_python(),
         _check_platform(),
@@ -82,10 +103,19 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
         _check_shell(env),
     ]
     configuration, config_checks = _check_configuration(env)
-    checks.extend(config_checks)
-    checks.extend(_check_session(configuration, env))
-    checks.extend(_check_commands(env))
+    checks = [
+        *_assign_section("System", system_checks),
+        *_assign_section("Configuration", config_checks),
+        *_assign_section("Session", _check_session(configuration, env)),
+        *_assign_section("Clients", _check_commands(env)),
+    ]
     return DoctorReport(tuple(checks))
+
+
+def _assign_section(section: str, checks: Sequence[DoctorCheck]) -> list[DoctorCheck]:
+    return [
+        DoctorCheck(check.status, check.message, section, check.verbose_only) for check in checks
+    ]
 
 
 def _check_platform() -> DoctorCheck:
@@ -105,7 +135,7 @@ def _check_cli(environment: Mapping[str, str]) -> DoctorCheck:
     executable = shutil.which("kantrip", path=environment.get("PATH"))
     if executable is None:
         return DoctorCheck("warning", "kantrip executable was not found on PATH")
-    return DoctorCheck("success", f"kantrip executable: {executable}")
+    return DoctorCheck("success", f"kantrip executable: {executable}", verbose_only=True)
 
 
 def _check_shell(environment: Mapping[str, str]) -> DoctorCheck:
@@ -166,7 +196,7 @@ def _check_profile_ids(configuration: Configuration) -> DoctorCheck:
     ids = [str(profile["id"]) for profile in configuration.profiles.values()]
     if len(ids) != len(set(ids)):
         return DoctorCheck("error", "Configuration contains duplicate profile IDs")
-    return DoctorCheck("success", "Profile IDs are unique")
+    return DoctorCheck("success", "Profile IDs are unique", verbose_only=True)
 
 
 def _check_profiles(configuration: Configuration) -> DoctorCheck:
@@ -310,17 +340,19 @@ def _check_command_group(
     alternatives: Sequence[frozenset[str]],
     search_path: str | None,
 ) -> DoctorCheck:
-    installed = [
-        resolved
-        for names in alternatives
-        if (resolved := _find_first(names, search_path)) is not None
-    ]
+    resolved = [(names, _find_first(names, search_path)) for names in alternatives]
+    installed = [path for _, path in resolved if path is not None]
+    missing = [" / ".join(sorted(names)) for names, path in resolved if path is None]
     if not installed:
-        return DoctorCheck("warning", f"{label} commands were not found on PATH")
+        return DoctorCheck(
+            "warning",
+            f"{label} commands were not found on PATH; missing: {', '.join(missing)}",
+        )
     if len(installed) != len(alternatives):
         return DoctorCheck(
             "warning",
-            f"{label}: {len(installed)}/{len(alternatives)} command groups installed",
+            f"{label}: {len(installed)}/{len(alternatives)} command groups installed; "
+            f"missing: {', '.join(missing)}",
         )
     if len(installed) == 1:
         return DoctorCheck("success", f"{label}: {installed[0]}")
