@@ -26,7 +26,7 @@ Doctor groups local checks under System, Configuration, Session, and Clients,
 names missing commands, and summarizes health. It validates configuration,
 permissions, profile IDs, registry support, active-session state, and the
 installed shell, kcat, Kafka, Confluent Schema Registry, and Kaskade commands.
-Use `-v` or `--verbose` for executable paths and individual checks.
+Use `--verbose` for executable paths and individual checks.
 
 Missing optional clients or first-run configuration produce warnings. Invalid
 configuration, unsupported registry settings, or inconsistent session state

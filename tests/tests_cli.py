@@ -155,6 +155,12 @@ class TestCli(unittest.TestCase):
         self.assertIn("└─ [passed] resolved executable path", result.output)
         self.assertIn("[passed] Healthy", result.output)
 
+    def test_doctor_rejects_verbose_shorthand(self) -> None:
+        result = self.runner.invoke(cli, ["doctor", "-v"])
+
+        self.assertNotEqual(0, result.exit_code)
+        self.assertIn("No such option '-v'", result.output)
+
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
         with patch("kantrip.cli.run_doctor") as run:
             from kantrip.doctor import DoctorCheck, DoctorReport
