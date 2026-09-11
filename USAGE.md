@@ -74,6 +74,13 @@ Prompt integrations should read `KANTRIP_PROFILE`. It is available to an
 interactive shell opened by `kantrip exec PROFILE` and disappears when that
 session exits. Prompt code does not need to invoke Kantrip repeatedly.
 
+Nerd Font glyph references from the
+[Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet):
+
+| Kantrip (`nf-md-magic_staff`) | Kafka (`nf-md-apache_kafka`) |
+| --- | --- |
+| <img src="images/nf-md-magic-staff.svg" alt="Nerd Font magic staff glyph" width="72"> | <img src="images/nf-md-apache-kafka.svg" alt="Nerd Font Apache Kafka glyph" width="72"> |
+
 ### Starship
 
 Add a custom module to `~/.config/starship.toml`:
@@ -92,14 +99,15 @@ For a more compact prompt with a magic wand, use this `format` instead:
 format = '[🪄 $output]($style) '
 ```
 
-If you use MesloLGS NF or another Nerd Font, you can use its magic-wand glyph
-(`U+F1844`) instead:
+If you use MesloLGS NF or another Nerd Font, you can use its
+`nf-md-magic_staff` glyph (`U+F1844`) instead:
 
 ```toml
 format = '[󱡄 $output]($style) '
 ```
 
-For a Kafka-specific alternative, use the Nerd Font Kafka glyph (`U+F100F`):
+For a Kafka-specific alternative, use the Nerd Font `nf-md-apache_kafka` glyph
+(`U+F100F`):
 
 ```toml
 format = '[󱀏 $output]($style) '
@@ -135,14 +143,15 @@ As a magic-wand alternative, replace the first `print` command in
 print -P -n '%F{magenta}🪄 %f%F{cyan}'
 ```
 
-With MesloLGS NF or another Nerd Font, use its magic-wand glyph (`U+F1844`)
-instead:
+With MesloLGS NF or another Nerd Font, use its `nf-md-magic_staff` glyph
+(`U+F1844`) instead:
 
 ```zsh
 print -P -n '%F{magenta}󱡄 %f%F{cyan}'
 ```
 
-For a Kafka-specific alternative, use the Nerd Font Kafka glyph (`U+F100F`):
+For a Kafka-specific alternative, use the Nerd Font `nf-md-apache_kafka` glyph
+(`U+F100F`):
 
 ```zsh
 print -P -n '%F{magenta}󱀏 %f%F{cyan}'
@@ -168,14 +177,15 @@ For a compact magic-wand segment, use this `p10k segment` line instead:
 p10k segment -f 5 -t "🪄 ${KANTRIP_PROFILE}"
 ```
 
-With MesloLGS NF or another Nerd Font, use its magic-wand glyph (`U+F1844`)
-instead:
+With MesloLGS NF or another Nerd Font, use its `nf-md-magic_staff` glyph
+(`U+F1844`) instead:
 
 ```zsh
 p10k segment -f 5 -t "󱡄 ${KANTRIP_PROFILE}"
 ```
 
-For a Kafka-specific alternative, use the Nerd Font Kafka glyph (`U+F100F`):
+For a Kafka-specific alternative, use the Nerd Font `nf-md-apache_kafka` glyph
+(`U+F100F`):
 
 ```zsh
 p10k segment -f 5 -t "󱀏 ${KANTRIP_PROFILE}"
