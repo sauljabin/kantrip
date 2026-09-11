@@ -61,7 +61,7 @@ class TestConsole(unittest.TestCase):
         self.assertIn("local", stream.getvalue())
         self.assertIn("Local development", stream.getvalue())
 
-    def test_profile_table_has_row_lines_without_outer_or_column_borders(self) -> None:
+    def test_profile_table_has_spacing_without_borders_or_lines(self) -> None:
         stream = io.StringIO()
         console = create_console(stream=stream, environment={})
         profiles = {
@@ -73,19 +73,19 @@ class TestConsole(unittest.TestCase):
         console.print(create_profile_table(profiles))
 
         output = stream.getvalue()
-        separators = [line for line in output.splitlines() if line and set(line) == {"─"}]
-        self.assertEqual(3, len(separators))
-        self.assertTrue(all(len(line) == console.width for line in separators))
         self.assertRegex(output, r"local\s+-")
         self.assertRegex(output, r"sandbox\s+-")
+        self.assertNotIn("─", output)
         self.assertNotIn("│", output)
         self.assertNotIn("╭", output)
         self.assertNotIn("╰", output)
 
         table = create_profile_table(profiles)
-        self.assertTrue(table.expand)
+        self.assertFalse(table.expand)
         self.assertEqual("heading", table.header_style)
         self.assertEqual("secondary", table.columns[0].style)
+        self.assertEqual(12, table.columns[0].min_width)
+        self.assertEqual(20, table.columns[1].min_width)
 
     def test_yaml_syntax_uses_color(self) -> None:
         stream = TerminalBuffer()

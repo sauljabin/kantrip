@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import IO, Any
 
-from rich import box
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
@@ -96,15 +95,11 @@ def create_consoles(*, no_color: bool = False) -> Consoles:
 def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
     """Create the styled profile-list table."""
     table = Table(
-        box=box.HORIZONTALS,
-        border_style="muted",
-        expand=True,
+        box=None,
         header_style="heading",
-        show_edge=False,
-        show_lines=True,
     )
-    table.add_column("Profile", style="secondary", no_wrap=True)
-    table.add_column("Description", style="foreground")
+    table.add_column("Profile", style="secondary", no_wrap=True, min_width=12)
+    table.add_column("Description", style="foreground", min_width=20)
     for name, profile in profiles.items():
         table.add_row(name, str(profile.get("description") or "-"))
     return table
