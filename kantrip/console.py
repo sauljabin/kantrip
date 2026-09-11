@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from typing import IO, Any, Literal
 
 from rich.console import Console
@@ -116,6 +117,17 @@ def create_status_text(console: Console, status: StatusKind, message: str) -> Te
     return Text(f"{marker} {message}", style=style)
 
 
+@contextmanager
+def show_progress(console: Console, message: str) -> Iterator[None]:
+    """Show an animated status on colored terminals and a stable line otherwise."""
+    if console.color_system is None:
+        console.print(create_status_text(console, "progress", message))
+        yield
+        return
+    with console.status(message, spinner="dots", spinner_style="primary"):
+        yield
+
+
 __all__ = [
     "ARCANA_COLORS",
     "ARCANA_THEME",
@@ -125,4 +137,5 @@ __all__ = [
     "create_profile_table",
     "create_status_text",
     "create_yaml_syntax",
+    "show_progress",
 ]

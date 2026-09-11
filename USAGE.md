@@ -52,7 +52,9 @@ kantrip ping local
 the profile contains `schemaRegistry`, it also requests the registry's
 `/subjects` endpoint and reports the subject count. It does not require an
 external Kafka CLI. Both requests use a five-second timeout by default; set a
-different limit with `--timeout SECONDS`.
+different limit with `--timeout SECONDS`. Interactive colored output shows a
+spinner while the checks run. `--no-color`, `NO_COLOR`, and non-interactive
+output use a stable `[running]` line instead.
 
 ## First-run configuration
 

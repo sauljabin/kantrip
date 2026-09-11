@@ -134,8 +134,9 @@ groups, configs, ACLs, broker API, and all six Schema Registry console adapters.
 It also lists the topic with kcat, validates the Kaskade adapter, and deletes the
 topic. At least one executable variant for every Apache Kafka command and all
 six Confluent Schema Registry console commands must be installed. The check uses
-styled emoji output in a terminal and text status labels when styling is
-disabled, including in CI or when `--no-color` is passed.
+an animated spinner for running steps and styled emoji for results in a colored
+terminal. It uses stable text status labels when styling is disabled, including
+in CI or when `--no-color` is passed.
 
 Pass Apicurio's Confluent-compatible URL as shown above to run the same adapter
 workflow against Apicurio instead.

@@ -21,6 +21,7 @@ from kantrip.console import (
     create_profile_table,
     create_status_text,
     create_yaml_syntax,
+    show_progress,
 )
 from kantrip.doctor import run_doctor
 from kantrip.ping import PingError, ping_profile
@@ -234,8 +235,8 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
     console = console_from_context(context)
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
-        console.print(create_status_text(console, "progress", f"Checking profile '{profile_name}'"))
-        result = ping_profile(profile, timeout=timeout)
+        with show_progress(console, f"Checking profile '{profile_name}'"):
+            result = ping_profile(profile, timeout=timeout)
     except ConfigurationError as error:
         error_console = error_console_from_context(context)
         error_console.print(create_status_text(error_console, "error", str(error)))

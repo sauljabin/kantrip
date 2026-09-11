@@ -1,5 +1,6 @@
 import io
 import unittest
+from unittest.mock import patch
 
 from kantrip.console import (
     ARCANA_COLORS,
@@ -9,6 +10,7 @@ from kantrip.console import (
     create_profile_table,
     create_status_text,
     create_yaml_syntax,
+    show_progress,
 )
 
 
@@ -149,6 +151,29 @@ class TestConsole(unittest.TestCase):
         self.assertIn("⚠️ example", stream.getvalue())
         self.assertIn("❌ example", stream.getvalue())
         self.assertIn("\x1b[", stream.getvalue())
+
+    def test_progress_is_a_stable_line_without_color(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+
+        with show_progress(console, "checking connectivity"):
+            pass
+
+        self.assertEqual("[running] checking connectivity\n", stream.getvalue())
+
+    def test_progress_uses_a_spinner_with_color(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        with (
+            patch.object(console, "status", wraps=console.status) as status,
+            show_progress(console, "checking connectivity"),
+        ):
+            pass
+
+        status.assert_called_once_with(
+            "checking connectivity", spinner="dots", spinner_style="primary"
+        )
 
 
 if __name__ == "__main__":

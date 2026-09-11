@@ -26,7 +26,7 @@ from kantrip.adapters import (
     KCAT_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
 )
-from kantrip.console import create_console, create_status_text
+from kantrip.console import create_console, create_status_text, show_progress
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
 
@@ -307,7 +307,6 @@ def _check_shell(
     environment: Mapping[str, str],
 ) -> None:
     label = f"exercise adapters in {shell_name}"
-    console.print(create_status_text(console, "progress", label))
     shell_environment = dict(environment)
     shell_environment["SHELL"] = shell
     commands = _shell_commands(
@@ -323,12 +322,13 @@ def _check_shell(
     ]
     checked.append("exit")
     try:
-        status, output = run_terminal(
-            (sys.executable, "-m", "kantrip.cli", "exec", profile),
-            checked,
-            environment=shell_environment,
-            timeout=120,
-        )
+        with show_progress(console, label):
+            status, output = run_terminal(
+                (sys.executable, "-m", "kantrip.cli", "exec", profile),
+                checked,
+                environment=shell_environment,
+                timeout=120,
+            )
     except TerminalTimeout as error:
         raise SmokeFailure(f"{label} failed: {error}") from error
     if status or any(marker not in output for marker in markers):
@@ -420,15 +420,15 @@ def _check(
     *,
     input_text: str | None = None,
 ) -> str:
-    console.print(create_status_text(console, "progress", label))
-    result = subprocess.run(
-        command,
-        env=environment,
-        capture_output=True,
-        text=True,
-        input=input_text,
-        check=False,
-    )
+    with show_progress(console, label):
+        result = subprocess.run(
+            command,
+            env=environment,
+            capture_output=True,
+            text=True,
+            input=input_text,
+            check=False,
+        )
     output = f"{result.stdout}{result.stderr}"
     if result.returncode:
         details = output.strip() or f"command exited with status {result.returncode}"
