@@ -35,13 +35,13 @@ release authorization, requesting it only if absent.
   GitHub Releases as the canonical changelog; do not add a maintained changelog
   or a static version field.
 
-## Alpha Release — Pre-release Review
+## Pre-release — Focused Review
 
-- [ ] Confirm the release uses the next unused `vMAJOR.MINOR.PATCHaN` tag and is
-  intentionally not production-ready. Record the unstable or incomplete areas
-  that need tester feedback.
+- [ ] Confirm the release uses the next unused PEP 440 `aN`, `bN`, or `rcN` tag
+  for its stage and is intentionally not production-ready. Record the unstable
+  or incomplete areas that need tester feedback.
 - [ ] Review the README, usage guide, command-compatibility matrix, examples, and
-  security guidance for claims affected by this alpha.
+  security guidance for claims affected by this prerelease.
 - [ ] Run focused manual sandbox checks for changed adapters and shell behavior.
   Record unavailable external clients or Docker rather than claiming a pass.
 - [ ] Confirm the GitHub release will be marked as a prerelease and that install
