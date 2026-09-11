@@ -45,6 +45,9 @@
 - `kafka-topics` and `kafka-topics.sh` inject `--bootstrap-server` and a generated
   Java `--command-config`. Interactive subshells expose session-owned executable
   shims for installed variants; never create persistent aliases.
+- Kaskade currently receives a private INI file through its command-level
+  `--config-file` option for `admin` and `consumer`. Do not set or assume a
+  Kaskade-specific environment variable until Kaskade implements that contract.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` already identifies an active
   parent session. Sessions must never be nested.
 - Until credential-backed sessions are implemented, execution accepts only

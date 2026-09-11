@@ -13,6 +13,7 @@ from typing import Any, TextIO
 
 from kantrip.adapters import (
     KAFKA_TOPICS_EXECUTABLES,
+    KASKADE_EXECUTABLES,
     AdapterError,
     create_subshell_shims,
     prepare_command,
@@ -54,8 +55,13 @@ def run_profile_session(
         session_directory = Path(directory)
         kcat_config_path = session_directory / "kcat.conf"
         java_config_path = session_directory / "kafka.properties"
+        kaskade_config_path = session_directory / "kaskade.ini"
         _write_private_file(kcat_config_path, _render_properties(kcat_properties))
         _write_private_file(java_config_path, _render_properties(java_properties))
+        _write_private_file(
+            kaskade_config_path,
+            f"[kafka]\n{_render_properties(kcat_properties)}",
+        )
 
         child_environment = env | {
             "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
@@ -73,12 +79,14 @@ def run_profile_session(
                     arguments,
                     bootstrap_servers=kcat_properties["bootstrap.servers"],
                     java_config_path=java_config_path,
+                    kaskade_config_path=kaskade_config_path,
                 )
             else:
                 shim_directory = create_subshell_shims(
                     session_directory / "bin",
                     bootstrap_servers=kcat_properties["bootstrap.servers"],
                     java_config_path=java_config_path,
+                    kaskade_config_path=kaskade_config_path,
                     environment=env,
                 )
                 if shim_directory is not None:
@@ -107,6 +115,10 @@ def _validate_executable(executable: str, environment: Mapping[str, str]) -> Non
             raise SessionError(
                 f"command '{executable_name}' was not found; install the Apache Kafka CLI "
                 "and ensure its bin directory is on PATH"
+            )
+        if executable_name in KASKADE_EXECUTABLES:
+            raise SessionError(
+                "command 'kaskade' was not found; install it and ensure its executable is on PATH"
             )
         raise SessionError(f"command '{executable}' was not found")
 

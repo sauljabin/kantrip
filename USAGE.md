@@ -170,6 +170,32 @@ exit
 The shims exist only inside that session and are removed on exit. Kantrip does
 not install the Kafka CLI or create persistent shell aliases.
 
+### Kaskade
+
+Kaskade's current `admin` and `consumer` commands accept an explicitly selected
+INI client file. Kantrip generates that private file and inserts
+`--config-file` after the Kaskade command:
+
+```bash
+kantrip exec local -- kaskade admin
+kantrip exec local -- kaskade consumer --topic orders
+```
+
+For example, the first command is prepared conceptually as:
+
+```bash
+kaskade admin --config-file /tmp/kantrip-SESSION/kaskade.ini
+```
+
+The temporary INI contains the selected profile's Kafka client properties.
+Explicit `-b`/`--bootstrap-servers`, `--kafka`, and `--config-file` options are
+rejected because they could override that profile. Interactive sessions expose a
+temporary `kaskade` shim using the same behavior.
+
+This adapter is a compatibility bridge for Kaskade's current CLI. It does not set
+a Kaskade-specific environment variable. Kantrip can move to direct environment
+integration after Kaskade defines and implements that contract.
+
 ## Profile configuration
 
 Profile metadata is YAML validated against
@@ -261,6 +287,10 @@ disabled when:
 - `NO_COLOR` is present in the environment.
 - `TERM=dumb`.
 - The destination stream is not a terminal.
+
+`kantrip list` displays configured profiles in a table with styled headers and
+profile names. `kantrip show PROFILE` syntax-highlights its redacted YAML. Both
+remain readable without ANSI color when styling is disabled.
 
 Secret classification occurs before values reach Rich. Styling never changes
 exit statuses or becomes necessary to interpret an error.

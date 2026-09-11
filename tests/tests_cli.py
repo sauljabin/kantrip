@@ -38,7 +38,11 @@ class TestCli(unittest.TestCase):
             listed = self.runner.invoke(cli, ["list"], env=environment)
             shown = self.runner.invoke(cli, ["show", "local"], env=environment)
 
-        self.assertEqual("local\tLocal development\n", listed.output)
+        self.assertIn("Profile", listed.output)
+        self.assertIn("Description", listed.output)
+        self.assertIn("local", listed.output)
+        self.assertIn("Local development", listed.output)
+        self.assertNotIn("\x1b[", listed.output)
         self.assertEqual(0, shown.exit_code, shown.output)
         self.assertIn("bootstrapServers:", shown.output)
 
@@ -56,7 +60,8 @@ class TestCli(unittest.TestCase):
             empty = self.runner.invoke(cli, ["list"], env=environment)
 
         self.assertEqual(0, added.exit_code, added.output)
-        self.assertEqual("development\n", listed.output)
+        self.assertIn("Profile", listed.output)
+        self.assertIn("development", listed.output)
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
 

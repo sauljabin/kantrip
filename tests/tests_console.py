@@ -1,7 +1,14 @@
 import io
 import unittest
 
-from kantrip.console import ARCANA_COLORS, ARCANA_THEME, colors_enabled, create_console
+from kantrip.console import (
+    ARCANA_COLORS,
+    ARCANA_THEME,
+    colors_enabled,
+    create_console,
+    create_profile_table,
+    create_yaml_syntax,
+)
 
 
 class TerminalBuffer(io.StringIO):
@@ -42,6 +49,26 @@ class TestConsole(unittest.TestCase):
         console.print("magic", style="primary")
 
         self.assertIn("\x1b[", stream.getvalue())
+
+    def test_profile_table_uses_color_and_contains_profile_data(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        console.print(create_profile_table({"local": {"description": "Local development"}}))
+
+        self.assertIn("\x1b[", stream.getvalue())
+        self.assertIn("Profile", stream.getvalue())
+        self.assertIn("local", stream.getvalue())
+        self.assertIn("Local development", stream.getvalue())
+
+    def test_yaml_syntax_uses_color(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+
+        console.print(create_yaml_syntax("transport: plaintext\n"), end="")
+
+        self.assertIn("\x1b[", stream.getvalue())
+        self.assertIn("transport", stream.getvalue())
 
 
 if __name__ == "__main__":

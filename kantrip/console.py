@@ -6,9 +6,12 @@ import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import IO
+from typing import IO, Any
 
+from rich import box
 from rich.console import Console
+from rich.syntax import Syntax
+from rich.table import Table
 from rich.theme import Theme
 
 ARCANA_COLORS = {
@@ -88,3 +91,35 @@ def create_consoles(*, no_color: bool = False) -> Consoles:
         out=create_console(no_color=no_color),
         err=create_console(stderr=True, no_color=no_color),
     )
+
+
+def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
+    """Create the styled profile-list table."""
+    table = Table(
+        box=box.ROUNDED,
+        border_style="muted",
+        header_style="heading",
+        show_lines=False,
+    )
+    table.add_column("Profile", style="primary", no_wrap=True)
+    table.add_column("Description", style="foreground")
+    for name, profile in profiles.items():
+        table.add_row(name, str(profile.get("description", "")))
+    return table
+
+
+def create_yaml_syntax(contents: str) -> Syntax:
+    """Create syntax-colored YAML without a forced background."""
+    return Syntax(contents, "yaml", theme="ansi_dark", background_color="default")
+
+
+__all__ = [
+    "ARCANA_COLORS",
+    "ARCANA_THEME",
+    "Consoles",
+    "colors_enabled",
+    "create_console",
+    "create_consoles",
+    "create_profile_table",
+    "create_yaml_syntax",
+]

@@ -128,12 +128,14 @@ uv run kantrip add sandbox --bootstrap-server localhost:19092
 uv run kantrip exec sandbox -- kcat -L
 uv run kantrip exec sandbox -- kafka-topics --list
 uv run kantrip exec sandbox -- kafka-topics.sh --list
+uv run kantrip exec sandbox -- kaskade admin
+uv run kantrip exec sandbox -- kaskade consumer --topic orders
 ```
 
-The final command is useful with Apache Kafka distributions that retain the
-`.sh` executable suffix. Kantrip supplies the selected bootstrap servers and
-temporary client configuration, so do not repeat `--bootstrap-server`, `-F`, or
-`--command-config` in these commands.
+The `kafka-topics.sh` form is useful with Apache Kafka distributions that retain
+the executable suffix. Kantrip supplies the selected bootstrap servers and
+temporary client configuration, so do not repeat `--bootstrap-server`, `-F`,
+`--command-config`, or Kaskade connection options in these commands.
 
 ## Architecture and security
 

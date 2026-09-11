@@ -14,7 +14,7 @@ Kantrip securely manages local Kafka profiles for command-line tools and compati
 
 Kantrip is in active pre-release development. The current CLI loads and validates
 profiles, displays their non-secret metadata, and opens plaintext profile sessions
-for kcat, the Apache Kafka topic CLI, and compatible applications.
+for kcat, the Apache Kafka topic CLI, Kaskade, and compatible applications.
 
 ## Features
 
@@ -36,6 +36,7 @@ for kcat, the Apache Kafka topic CLI, and compatible applications.
 
 - Native kcat configuration through a private, temporary `KCAT_CONFIG` file
 - Profile-aware `kafka-topics` and `kafka-topics.sh` commands
+- Private client-file integration for Kaskade admin and consumer modes
 - Interactive subshells and one-off command execution
 - Child exit-status preservation and automatic session cleanup
 
@@ -69,6 +70,7 @@ kantrip list
 kantrip show local
 kantrip exec local -- kcat -L
 kantrip exec local -- kafka-topics --list
+kantrip exec local -- kaskade admin
 ```
 
 Omit the command to work in a profile-scoped interactive subshell:

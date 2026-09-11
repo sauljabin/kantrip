@@ -11,7 +11,12 @@ import yaml
 
 from kantrip import APP_VERSION
 from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
-from kantrip.console import Consoles, create_consoles
+from kantrip.console import (
+    Consoles,
+    create_consoles,
+    create_profile_table,
+    create_yaml_syntax,
+)
 from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
@@ -85,26 +90,28 @@ def remove_configured_profile(profile_name: str) -> None:
 
 
 @cli.command("list")
-def list_profiles() -> None:
+@cloup.pass_context
+def list_profiles(context: cloup.Context) -> None:
     """List configured profiles."""
     try:
         configuration = load_configuration(missing_ok=True)
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
-    for name, profile in configuration.profiles.items():
-        description = profile.get("description")
-        click.echo(f"{name}\t{description}" if description else name)
+    if configuration.profiles:
+        consoles_from_context(context).out.print(create_profile_table(configuration.profiles))
 
 
 @cli.command("show")
 @cloup.argument("profile_name", metavar="PROFILE")
-def show_profile(profile_name: str) -> None:
+@cloup.pass_context
+def show_profile(context: cloup.Context, profile_name: str) -> None:
     """Show a profile without revealing credential references."""
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(yaml.safe_dump(redact_mapping(profile), sort_keys=False), nl=False)
+    contents = yaml.safe_dump(redact_mapping(profile), sort_keys=False)
+    consoles_from_context(context).out.print(create_yaml_syntax(contents), end="")
 
 
 @cli.command("current")

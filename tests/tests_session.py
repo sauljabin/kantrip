@@ -156,6 +156,86 @@ class TestProfileSession(unittest.TestCase):
             ):
                 run_profile_session("local", self.profile, ["kafka-topics", option], environment={})
 
+    def test_adapts_kaskade_admin_and_consumer_with_a_private_ini_file(self) -> None:
+        for command, command_arguments in (
+            ("admin", []),
+            ("consumer", ["--topic", "orders"]),
+        ):
+            with self.subTest(command=command):
+                observed: dict[str, object] = {}
+
+                def inspect_run(
+                    arguments: list[str],
+                    *,
+                    _observed: dict[str, object] = observed,
+                    **options: object,
+                ) -> subprocess.CompletedProcess:
+                    environment = options["env"]
+                    assert isinstance(environment, dict)
+                    config_path = Path(arguments[3])
+                    _observed["arguments"] = arguments
+                    _observed["contents"] = config_path.read_text(encoding="utf-8")
+                    _observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
+                    _observed["environment"] = environment
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                with (
+                    patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+                    patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                ):
+                    run_profile_session(
+                        "local",
+                        self.profile,
+                        ["kaskade", command, *command_arguments],
+                        environment={},
+                    )
+
+                arguments = observed["arguments"]
+                assert isinstance(arguments, list)
+                self.assertEqual(["kaskade", command, "--config-file"], arguments[:3])
+                self.assertEqual("kaskade.ini", Path(arguments[3]).name)
+                self.assertEqual(command_arguments, arguments[4:])
+                self.assertEqual(
+                    "[kafka]\n"
+                    "bootstrap.servers=localhost:9092,localhost:9093\n"
+                    "client.id=kantrip\n"
+                    "enable.idempotence=true\n"
+                    "security.protocol=PLAINTEXT\n",
+                    observed["contents"],
+                )
+                self.assertEqual(0o600, observed["mode"])
+                environment = observed["environment"]
+                assert isinstance(environment, dict)
+                self.assertNotIn("KASKADE_CLIENT_CONFIG", environment)
+
+    def test_kaskade_cannot_override_profile_connection_options(self) -> None:
+        for option in (
+            "-bother:9092",
+            "--bootstrap-servers=other:9092",
+            "--config-file=other.ini",
+            "--kafka=bootstrap.servers=other:9092",
+        ):
+            with (
+                self.subTest(option=option),
+                patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+                self.assertRaisesRegex(SessionError, "cannot override"),
+            ):
+                run_profile_session(
+                    "local", self.profile, ["kaskade", "admin", option], environment={}
+                )
+
+    def test_kaskade_root_options_are_not_adapted(self) -> None:
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+            patch(
+                "kantrip.session.subprocess.run",
+                return_value=subprocess.CompletedProcess(["kaskade", "--help"], 0),
+            ) as run,
+        ):
+            run_profile_session("local", self.profile, ["kaskade", "--help"], environment={})
+
+        self.assertEqual(["kaskade", "--help"], run.call_args.args[0])
+
     def test_interactive_shell_contains_kafka_topics_shims(self) -> None:
         observed: dict[str, object] = {}
 
@@ -196,6 +276,41 @@ class TestProfileSession(unittest.TestCase):
             self.assertIn("--bootstrap-server localhost:9092,localhost:9093", contents)
             self.assertIn("--command-config", contents)
         self.assertEqual({"kafka-topics": 0o700, "kafka-topics.sh": 0o700}, observed["modes"])
+        directory = observed["directory"]
+        assert isinstance(directory, Path)
+        self.assertFalse(directory.exists())
+
+    def test_interactive_shell_contains_a_kaskade_shim(self) -> None:
+        observed: dict[str, object] = {}
+
+        def find_executable(executable: str, **options: object) -> str | None:
+            if executable == sys.executable:
+                return sys.executable
+            if executable == "kaskade":
+                return "/opt/bin/kaskade"
+            return None
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            shim_path = Path(environment["PATH"].split(":", 1)[0]) / "kaskade"
+            observed["directory"] = shim_path.parent
+            observed["contents"] = shim_path.read_text(encoding="utf-8")
+            observed["mode"] = stat.S_IMODE(shim_path.stat().st_mode)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", side_effect=find_executable),
+            patch("kantrip.adapters.shutil.which", side_effect=find_executable),
+            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local", self.profile, [], environment={"SHELL": sys.executable, "PATH": "/bin"}
+            )
+
+        self.assertIn("exec /opt/bin/kaskade", observed["contents"])
+        self.assertIn("--config-file", observed["contents"])
+        self.assertEqual(0o700, observed["mode"])
         directory = observed["directory"]
         assert isinstance(directory, Path)
         self.assertFalse(directory.exists())
