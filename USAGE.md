@@ -251,12 +251,20 @@ supported:
 
 ```bash
 kantrip exec local -- kafka-topics --list
-kantrip exec local -- kafka-topics.sh --describe --topic orders
+kantrip exec local -- kafka-console-producer --topic orders
+kantrip exec local -- kafka-console-consumer.sh --topic orders --from-beginning
+kantrip exec local -- kafka-consumer-groups --list
+kantrip exec local -- kafka-configs --describe --entity-type topics --entity-name orders
+kantrip exec local -- kafka-acls --list
+kantrip exec local -- kafka-broker-api-versions
 ```
 
-Kantrip injects the selected profile through `--bootstrap-server` and a private
-Java `--command-config` file. Supplying either connection option explicitly is
-rejected because it would override the selected profile.
+Kantrip injects `--bootstrap-server` and a private Java client-properties file.
+Console consumers receive `--consumer.config`, console producers receive
+`--producer.config`, and administrative commands receive `--command-config`.
+Supplying an injected or legacy connection option explicitly is rejected because
+it could override the selected profile. Executable names with and without `.sh`
+are supported.
 
 An interactive session creates temporary executable shims for whichever variants
 are installed before the session starts, so the same commands work without
@@ -265,6 +273,7 @@ repeating `kantrip exec`:
 ```bash
 kantrip exec local
 kafka-topics --list
+kafka-console-consumer --topic orders --from-beginning
 exit
 ```
 

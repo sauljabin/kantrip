@@ -14,7 +14,7 @@ Kantrip securely manages local Kafka profiles for command-line tools and compati
 
 Kantrip is in active pre-release development. The current CLI loads and validates
 profiles, displays their non-secret metadata, and opens plaintext profile sessions
-for kcat, the Apache Kafka topic CLI, Kaskade, and compatible applications.
+for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
 
 ## Features
 
@@ -35,7 +35,7 @@ for kcat, the Apache Kafka topic CLI, Kaskade, and compatible applications.
 ### CLI sessions
 
 - Native kcat configuration through a private, temporary `KCAT_CONFIG` file
-- Profile-aware `kafka-topics` and `kafka-topics.sh` commands
+- Profile-aware official Apache Kafka commands, with and without `.sh`
 - Private client-file integration for Kaskade admin and consumer modes
 - Interactive subshells and one-off command execution
 - Child exit-status preservation and automatic session cleanup
@@ -87,6 +87,11 @@ exit
 profile for `localhost:9092`. Pass `--bootstrap-server HOST:PORT` to choose a
 different broker. Use `kantrip remove PROFILE` to remove one. `kantrip list`
 prints no profile rows when the configuration is absent or empty.
+
+## Command compatibility
+
+See the [command compatibility guide](https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md)
+for supported tools, versions, features, and known limitations.
 
 ## Usage
 

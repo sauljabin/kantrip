@@ -18,7 +18,18 @@ from rich.console import Console
 from kantrip.console import create_console
 
 DEFAULT_BOOTSTRAP_SERVERS = ("localhost:19092",)
-KAFKA_TOPICS_EXECUTABLES = ("kafka-topics", "kafka-topics.sh")
+KAFKA_COMMANDS = {
+    "topics": ("kafka-topics", "kafka-topics.sh"),
+    "producer": ("kafka-console-producer", "kafka-console-producer.sh"),
+    "consumer": ("kafka-console-consumer", "kafka-console-consumer.sh"),
+    "groups": ("kafka-consumer-groups", "kafka-consumer-groups.sh"),
+    "configs": ("kafka-configs", "kafka-configs.sh"),
+    "acls": ("kafka-acls", "kafka-acls.sh"),
+    "broker API versions": (
+        "kafka-broker-api-versions",
+        "kafka-broker-api-versions.sh",
+    ),
+}
 
 
 class SmokeFailure(RuntimeError):
@@ -75,8 +86,12 @@ def smoke(
     environment: Mapping[str, str],
 ) -> None:
     """Run the adapter smoke checks with an isolated Kantrip configuration."""
-    installed_topics = _installed_topic_commands(environment)
-    _require_command("kafka-topics or kafka-topics.sh", bool(installed_topics))
+    installed = {
+        adapter: _installed_commands(executables, environment)
+        for adapter, executables in KAFKA_COMMANDS.items()
+    }
+    for adapter, executables in installed.items():
+        _require_command(f"Kafka {adapter} CLI", bool(executables))
     _require_command("kcat", shutil.which("kcat", path=environment.get("PATH")) is not None)
     _require_command("kaskade", shutil.which("kaskade", path=environment.get("PATH")) is not None)
 
@@ -84,7 +99,7 @@ def smoke(
         smoke_environment = dict(environment)
         smoke_environment["KANTRIP_CONFIG"] = str(Path(directory) / "config.yaml")
         _add_profile(console, profile, bootstrap_servers, smoke_environment)
-        creator = installed_topics[0]
+        creator = installed["topics"][0]
         created = False
         try:
             _check(
@@ -104,10 +119,7 @@ def smoke(
                 smoke_environment,
             )
             created = True
-            for executable in KAFKA_TOPICS_EXECUTABLES:
-                if executable not in installed_topics:
-                    console.print(f"[warning]⏭  {executable} is not installed; skipping variant[/]")
-                    continue
+            for executable in installed["topics"]:
                 output = _check(
                     console,
                     f"list topics with {executable}",
@@ -115,6 +127,60 @@ def smoke(
                     smoke_environment,
                 )
                 _require_topic(topic, output, executable)
+            _check(
+                console,
+                f"produce a record with {installed['producer'][0]}",
+                _kantrip(profile, installed["producer"][0], "--topic", topic),
+                smoke_environment,
+                input_text="kantrip smoke record\n",
+            )
+            output = _check(
+                console,
+                f"consume a record with {installed['consumer'][0]}",
+                _kantrip(
+                    profile,
+                    installed["consumer"][0],
+                    "--topic",
+                    topic,
+                    "--from-beginning",
+                    "--max-messages",
+                    "1",
+                ),
+                smoke_environment,
+            )
+            _require_topic("kantrip smoke record", output, installed["consumer"][0])
+            _check(
+                console,
+                f"list groups with {installed['groups'][0]}",
+                _kantrip(profile, installed["groups"][0], "--list"),
+                smoke_environment,
+            )
+            _check(
+                console,
+                f"describe topic configs with {installed['configs'][0]}",
+                _kantrip(
+                    profile,
+                    installed["configs"][0],
+                    "--describe",
+                    "--entity-type",
+                    "topics",
+                    "--entity-name",
+                    topic,
+                ),
+                smoke_environment,
+            )
+            _check(
+                console,
+                f"validate the ACL adapter with {installed['acls'][0]}",
+                _kantrip(profile, installed["acls"][0], "--version"),
+                smoke_environment,
+            )
+            _check(
+                console,
+                f"inspect APIs with {installed['broker API versions'][0]}",
+                _kantrip(profile, installed["broker API versions"][0]),
+                smoke_environment,
+            )
             output = _check(
                 console,
                 "list topics with kcat",
@@ -134,12 +200,12 @@ def smoke(
                 _delete_topic(console, profile, creator, topic, smoke_environment)
 
 
-def _installed_topic_commands(environment: Mapping[str, str]) -> tuple[str, ...]:
+def _installed_commands(
+    executables: Sequence[str], environment: Mapping[str, str]
+) -> tuple[str, ...]:
     path = environment.get("PATH")
     return tuple(
-        executable
-        for executable in KAFKA_TOPICS_EXECUTABLES
-        if shutil.which(executable, path=path) is not None
+        executable for executable in executables if shutil.which(executable, path=path) is not None
     )
 
 
@@ -178,6 +244,8 @@ def _check(
     label: str,
     command: Sequence[str],
     environment: Mapping[str, str],
+    *,
+    input_text: str | None = None,
 ) -> str:
     console.print(f"[primary]🧪 {label}[/]")
     result = subprocess.run(
@@ -185,6 +253,7 @@ def _check(
         env=environment,
         capture_output=True,
         text=True,
+        input=input_text,
         check=False,
     )
     output = f"{result.stdout}{result.stderr}"
