@@ -62,7 +62,7 @@ suite, and manual-environment utilities remain under `sandbox`.
 ## Schema and application environment
 
 The profile JSON Schema lives in `schemas/`. Synthetic user-facing examples live
-in `examples/`. Test-owned fixture copies live under `tests/unit` and must never
+in `examples/`. Test-owned fixture copies live under `tests` and must never
 contain real credentials or infrastructure details.
 
 Application environment variables are documented in `USAGE.md`. When a variable

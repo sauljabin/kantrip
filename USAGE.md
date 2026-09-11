@@ -61,7 +61,8 @@ exit
 
 Kantrip never exports a selected profile into the parent shell. Background or
 detached child processes are not supported because they can outlive the temporary
-session.
+session. Sessions cannot be nested: exit the current `kantrip exec` subshell
+before starting another one.
 
 `kantrip current` prints the active profile name inside the session. Outside a
 session it reports that no profile is active. This is the command equivalent of

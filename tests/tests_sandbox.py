@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
 SANDBOX_COMPOSE = PROJECT_ROOT / "sandbox" / "compose.yml"
 

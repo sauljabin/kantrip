@@ -23,6 +23,13 @@ class SessionError(RuntimeError):
     """Raised when a profile session cannot be prepared or started."""
 
 
+def ensure_session_available(environment: Mapping[str, str] | None = None) -> None:
+    """Reject attempts to create a session below an existing Kantrip session."""
+    env = os.environ if environment is None else environment
+    if env.get("KANTRIP_SESSION_ID"):
+        raise SessionError("a Kantrip session is already active; exit it before starting another")
+
+
 def run_profile_session(
     profile_name: str,
     profile: Mapping[str, Any],
@@ -32,6 +39,8 @@ def run_profile_session(
 ) -> int:
     """Run a command or interactive shell in a temporary profile session."""
     env = dict(os.environ if environment is None else environment)
+    ensure_session_available(env)
+
     executable = command[0] if command else env.get("SHELL", "/bin/sh")
     arguments = list(command) if command else [executable]
 
@@ -153,4 +162,4 @@ def _write_private_file(path: Path, contents: str) -> None:
         stream.write(contents)
 
 
-__all__ = ["SessionError", "run_profile_session"]
+__all__ = ["SessionError", "ensure_session_available", "run_profile_session"]

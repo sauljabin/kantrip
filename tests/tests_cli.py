@@ -91,6 +91,16 @@ class TestCli(unittest.TestCase):
         self.assertEqual(17, result.exit_code, result.output)
         self.assertEqual(("kcat", "-L"), run.call_args.args[2])
 
+    def test_exec_rejects_a_nested_session(self) -> None:
+        result = self.runner.invoke(
+            cli,
+            ["exec", "local"],
+            env={"KANTRIP_SESSION_ID": "existing-session"},
+        )
+
+        self.assertNotEqual(0, result.exit_code)
+        self.assertIn("session is already active", result.output)
+
     def test_import_has_no_filesystem_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)

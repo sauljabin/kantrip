@@ -73,6 +73,26 @@ class TestProfileSession(unittest.TestCase):
 
         self.assertEqual([sys.executable], run.call_args.args[0])
 
+    def test_rejects_a_nested_kantrip_session_before_launch(self) -> None:
+        with (
+            patch("kantrip.session.shutil.which") as which,
+            patch("kantrip.session.subprocess.run") as run,
+            self.assertRaisesRegex(SessionError, "session is already active"),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                [],
+                environment={
+                    "KANTRIP_PROFILE": "development",
+                    "KANTRIP_SESSION_ID": "existing-session",
+                    "SHELL": sys.executable,
+                },
+            )
+
+        which.assert_not_called()
+        run.assert_not_called()
+
     def test_adapts_both_kafka_topics_executable_names(self) -> None:
         for executable in ("kafka-topics", "kafka-topics.sh"):
             with self.subTest(executable=executable):

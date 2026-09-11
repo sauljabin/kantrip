@@ -13,7 +13,7 @@ from kantrip import APP_VERSION
 from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
 from kantrip.console import Consoles, create_consoles
 from kantrip.redaction import redact_mapping
-from kantrip.session import SessionError, run_profile_session
+from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
 
@@ -124,6 +124,7 @@ def current_profile() -> None:
 def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
     """Run a command or interactive subshell with PROFILE."""
     try:
+        ensure_session_available()
         profile = load_configuration(missing_ok=True).profile(profile_name)
         exit_code = run_profile_session(profile_name, profile, command)
     except (ConfigurationError, SessionError) as error:

@@ -31,6 +31,8 @@ root.
 
 Foreground process supervision is the supported execution model. A child that
 detaches itself can outlive session cleanup and is therefore unsupported.
+Kantrip rejects nested sessions when the child environment already contains its
+active session marker.
 
 ## Child environment
 

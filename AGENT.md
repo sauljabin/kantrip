@@ -45,6 +45,8 @@
 - `kafka-topics` and `kafka-topics.sh` inject `--bootstrap-server` and a generated
   Java `--command-config`. Interactive subshells expose session-owned executable
   shims for installed variants; never create persistent aliases.
+- Reject `kantrip exec` when `KANTRIP_SESSION_ID` already identifies an active
+  parent session. Sessions must never be nested.
 - Until credential-backed sessions are implemented, execution accepts only
   profiles with `transport: plaintext` and `auth.type: none`.
 
@@ -76,7 +78,7 @@
 
 ## Tests, Scripts, and Sandbox
 
-- Unit tests and their fixtures live in `tests/unit` and remain offline.
+- Tests and their domain-owned fixtures live in `tests` and remain offline.
 - The manual environment lives entirely in `sandbox`, including Compose files,
   versions, generated synthetic material, and population tools. Tests may read
   pinned image versions and assert Compose structure, but must not import sandbox

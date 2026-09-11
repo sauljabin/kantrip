@@ -8,7 +8,7 @@ from scripts import CommandProcessor
 @cloup.command()
 def main() -> None:
     commands = {
-        "executing tests": "python -m unittest discover -v -s tests/unit -t .",
+        "executing tests": "python -m unittest discover -v -s tests -t .",
     }
     CommandProcessor(commands).run()
 
