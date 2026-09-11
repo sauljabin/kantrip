@@ -106,11 +106,15 @@ class TestConsole(unittest.TestCase):
         stream = io.StringIO()
         console = create_console(stream=stream, environment={})
 
-        for status in ("progress", "success", "cleanup", "warning"):
+        for status in ("progress", "success", "cleanup", "warning", "error"):
             console.print(create_status_text(console, status, "example"))
 
         self.assertEqual(
-            "[running] example\n" "[passed] example\n" "[cleanup] example\n" "[warning] example\n",
+            "[running] example\n"
+            "[passed] example\n"
+            "[cleanup] example\n"
+            "[warning] example\n"
+            "[failed] example\n",
             stream.getvalue(),
         )
 
@@ -118,9 +122,12 @@ class TestConsole(unittest.TestCase):
         stream = TerminalBuffer()
         console = create_console(stream=stream, environment={})
 
-        console.print(create_status_text(console, "success", "example"))
+        for status in ("success", "warning", "error"):
+            console.print(create_status_text(console, status, "example"))
 
         self.assertIn("✅ example", stream.getvalue())
+        self.assertIn("⚠️ example", stream.getvalue())
+        self.assertIn("❌ example", stream.getvalue())
         self.assertIn("\x1b[", stream.getvalue())
 
 

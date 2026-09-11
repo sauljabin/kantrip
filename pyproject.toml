@@ -5,7 +5,7 @@ description = "Kantrip securely manages local Kafka profiles for command-line to
 authors = [{ name = "Saúl Piña", email = "sauljabin@gmail.com" }]
 license = "MIT"
 readme = "README.md"
-keywords = ["kafka", "credentials", "profiles", "cli", "kantrip"]
+keywords = ["kafka", "configuration", "profiles", "cli", "kantrip"]
 classifiers = [
     "Environment :: Console",
     "Operating System :: MacOS",
@@ -72,6 +72,7 @@ include = [
     "/COMPATIBILITY.md",
     "/DEVELOPMENT.md",
     "/LICENSE",
+    "/MVP.md",
     "/README.md",
     "/SECURITY.md",
     "/THREAT_MODEL.md",

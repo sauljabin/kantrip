@@ -56,6 +56,18 @@ class TestConfiguration(unittest.TestCase):
             with self.assertRaisesRegex(ConfigurationError, r"profiles\.local\.kafka\.transport"):
                 load_configuration(path)
 
+    def test_reports_unknown_root_field_without_echoing_its_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text("version: secret-value\nprofiles: {}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ConfigurationError, r"document root: unknown field: version"
+            ) as raised:
+                load_configuration(path)
+
+            self.assertNotIn("secret-value", str(raised.exception))
+
     def test_unknown_profile_is_an_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
@@ -101,7 +113,6 @@ class TestConfiguration(unittest.TestCase):
 
 
 _VALID_CONFIG = """\
-version: 1
 profiles:
   local:
     id: 018f8f13-7c21-7cee-8000-000000000001

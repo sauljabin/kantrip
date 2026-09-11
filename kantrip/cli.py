@@ -8,15 +8,17 @@ from typing import Any
 import click
 import cloup
 import yaml
+from rich.console import Console
 
 from kantrip import APP_VERSION
 from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
 from kantrip.console import (
-    Consoles,
-    create_consoles,
+    create_console,
     create_profile_table,
+    create_status_text,
     create_yaml_syntax,
 )
+from kantrip.doctor import run_doctor
 from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
@@ -38,16 +40,16 @@ EPILOG = "More information at https://github.com/sauljabin/kantrip."
 def cli(context: cloup.Context, no_color: bool) -> None:
     """Kantrip securely manages local Kafka profiles for command-line tools and compatible applications."""
     context.ensure_object(dict)
-    context.obj["consoles"] = create_consoles(no_color=no_color)
+    context.obj["console"] = create_console(no_color=no_color)
 
 
-def consoles_from_context(context: cloup.Context) -> Consoles:
-    """Return the consoles initialized for the current invocation."""
+def console_from_context(context: cloup.Context) -> Console:
+    """Return the console initialized for the current invocation."""
     obj: dict[str, Any] = context.ensure_object(dict)
-    consoles = obj.get("consoles")
-    if not isinstance(consoles, Consoles):
-        raise TypeError("Kantrip consoles have not been initialized")
-    return consoles
+    console = obj.get("console")
+    if not isinstance(console, Console):
+        raise TypeError("Kantrip console has not been initialized")
+    return console
 
 
 @cli.command("add")
@@ -98,20 +100,20 @@ def list_profiles(context: cloup.Context) -> None:
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
     if configuration.profiles:
-        consoles_from_context(context).out.print(create_profile_table(configuration.profiles))
+        console_from_context(context).print(create_profile_table(configuration.profiles))
 
 
 @cli.command("show")
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.pass_context
 def show_profile(context: cloup.Context, profile_name: str) -> None:
-    """Show a profile without revealing credential references."""
+    """Show a profile with sensitive-looking values redacted."""
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
     contents = yaml.safe_dump(redact_mapping(profile), sort_keys=False)
-    consoles_from_context(context).out.print(create_yaml_syntax(contents), end="")
+    console_from_context(context).print(create_yaml_syntax(contents), end="")
 
 
 @cli.command("current")
@@ -123,6 +125,18 @@ def current_profile() -> None:
             "no profile is active; run 'kantrip exec PROFILE' to start a profile session"
         )
     click.echo(profile_name)
+
+
+@cli.command("doctor")
+@cloup.pass_context
+def doctor(context: cloup.Context) -> None:
+    """Check Kantrip's local configuration and command environment."""
+    console = console_from_context(context)
+    report = run_doctor()
+    for check in report.checks:
+        console.print(create_status_text(console, check.status, check.message))
+    if not report.healthy:
+        raise click.exceptions.Exit(1)
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})

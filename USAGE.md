@@ -5,13 +5,30 @@ profiles and run profile sessions:
 
 ```bash
 kantrip add local
+kantrip doctor
 kantrip list
 kantrip show local
 kantrip exec local -- kcat -L
 ```
 
-Persistent selection, connectivity checks, and authenticated sessions are not
-implemented yet.
+Planned capabilities are tracked separately in the [MVP roadmap](MVP.md).
+
+## Local diagnostics
+
+Run `kantrip doctor` to inspect the installation without opening a Kafka
+connection:
+
+```bash
+kantrip doctor
+```
+
+Doctor validates the resolved configuration against the bundled schema, checks
+that profile IDs are unique, warns about unsafe file permissions, verifies an
+active session and its adapter path, and discovers Kantrip, the interactive
+shell, kcat, Apache Kafka commands, and Kaskade on `PATH`. Missing optional
+clients and a missing first-run configuration are warnings; invalid
+configuration or inconsistent active-session state makes the command exit with
+status 1. Doctor performs only local checks.
 
 ## First-run configuration
 
@@ -250,8 +267,8 @@ Kantrip reports a command-not-found error when an explicit executable is missing
 It does not install external tools. The kcat `-F` option is rejected because it
 would override the selected profile.
 
-Only profiles with `transport: plaintext` and `auth.type: none` can currently be
-executed. Other valid profiles can still be listed and displayed safely.
+The profile schema accepts only `transport: plaintext` with `auth.type: none`,
+so every valid profile can be executed.
 
 ### Kafka topics
 
@@ -318,26 +335,30 @@ Explicit `-b`/`--bootstrap-servers`, `--kafka`, and `--config-file` options are
 rejected because they could override that profile. Interactive sessions expose a
 temporary `kaskade` shim using the same behavior.
 
-This adapter is a compatibility bridge for Kaskade's current CLI. It does not set
-a Kaskade-specific environment variable. Kantrip can move to direct environment
-integration after Kaskade defines and implements that contract.
+This adapter uses Kaskade's current CLI contract and does not set a
+Kaskade-specific environment variable.
 
 ## Profile configuration
 
 Profile metadata is YAML validated against
-[`schemas/profile-v1.schema.json`](https://github.com/sauljabin/kantrip/blob/main/schemas/profile-v1.schema.json).
+[`schemas/profile.schema.json`](https://github.com/sauljabin/kantrip/blob/main/schemas/profile.schema.json).
 A synthetic example is available at
 [`examples/config.yaml`](https://github.com/sauljabin/kantrip/blob/main/examples/config.yaml).
 
-Planned configuration lookup order is:
+Configuration lookup order is:
 
 1. `KANTRIP_CONFIG`.
 2. `$XDG_CONFIG_HOME/kantrip/config.yaml`.
 3. `~/.config/kantrip/config.yaml`.
 
-Profile YAML stores only non-secret metadata and operating-system credential
-references. Passwords, tokens, private keys, secret-bearing JAAS strings, and
-keystore passwords are rejected as literal profile fields.
+Profile YAML stores plaintext broker metadata only. Authentication, TLS, and
+Schema Registry fields are rejected by the current schema.
+
+The configuration document does not contain a separate version field. The
+schema bundled with each Kantrip application release is authoritative, so
+upgrades do not require rewriting a version value in every configuration.
+If an early alpha configuration reports `unknown field: version`, remove its
+top-level `version: 1` line. See `MVP.md` for the complete alpha cleanup note.
 
 ## Application environment from `kantrip exec`
 
@@ -346,8 +367,8 @@ its descendants. The variables Kantrip may set are listed below.
 
 Kafka clients share configuration-property names but do not define one
 cross-language environment-variable standard. Kantrip therefore uses generic
-`KAFKA_*` and `SCHEMA_REGISTRY_*` names for settings an application may consume.
-Only Kantrip-specific session metadata uses `KANTRIP_*`.
+`KAFKA_*` names for settings an application may consume. Kantrip-specific
+session metadata uses `KANTRIP_*`.
 
 Applications must opt in to these variables. Kantrip also generates
 client-specific property files and adapters may pass those files or the
@@ -358,37 +379,10 @@ appropriate flags directly to supported tools.
 | Variable | Meaning |
 | --- | --- |
 | `KAFKA_BOOTSTRAP_SERVERS` | Comma-separated broker addresses |
-| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL` |
+| `KAFKA_SECURITY_PROTOCOL` | Always `PLAINTEXT` for a valid current profile |
 | `KAFKA_JAVA_CONFIG_FILE` | Generated Java Kafka properties path |
 | `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Generated librdkafka properties path |
-| `KAFKA_SASL_MECHANISM` | Present when SASL is configured |
-| `KAFKA_SASL_USERNAME` | Present when the mechanism uses a username |
-| `KAFKA_SASL_PASSWORD` | Present when the mechanism uses a password |
-| `KAFKA_OAUTH_TOKEN_ENDPOINT` | Present when OAuth token acquisition is configured |
-| `KAFKA_OAUTH_CLIENT_ID` | Present when OAuth client identity is configured |
-| `KAFKA_OAUTH_CLIENT_SECRET` | Present when OAuth client credentials are used |
-| `KAFKA_OAUTH_ACCESS_TOKEN` | Present when a fixed or acquired token is used |
-| `KAFKA_SSL_CA_LOCATION` | Materialized or referenced CA bundle path |
-| `KAFKA_SSL_CERTIFICATE_LOCATION` | Materialized client certificate path |
-| `KAFKA_SSL_KEY_LOCATION` | Materialized client private-key path |
-| `KAFKA_SSL_KEY_PASSWORD` | Present when the private key is encrypted |
-
-### Schema Registry variables
-
-These variables are present only when the selected profile configures Schema
-Registry.
-
-| Variable | Meaning |
-| --- | --- |
-| `SCHEMA_REGISTRY_CONFIG_FILE` | Generated Schema Registry properties path |
-| `SCHEMA_REGISTRY_URL` | Registry URL |
-| `SCHEMA_REGISTRY_USERNAME` | Present for basic authentication |
-| `SCHEMA_REGISTRY_PASSWORD` | Present for basic authentication |
-| `SCHEMA_REGISTRY_TOKEN` | Present for bearer authentication |
-| `SCHEMA_REGISTRY_SSL_CA_LOCATION` | Materialized or referenced CA bundle path |
-| `SCHEMA_REGISTRY_SSL_CERTIFICATE_LOCATION` | Materialized client certificate path |
-| `SCHEMA_REGISTRY_SSL_KEY_LOCATION` | Materialized client private-key path |
-| `SCHEMA_REGISTRY_SSL_KEY_PASSWORD` | Present when the private key is encrypted |
+| `KCAT_CONFIG` | Generated librdkafka properties path read natively by kcat |
 
 ### Kantrip session metadata
 
@@ -398,11 +392,9 @@ Registry.
 | `KANTRIP_SESSION_ID` | Opaque session identifier |
 | `KANTRIP_SESSION_DIR` | Private temporary session directory |
 
-Secret values are intentionally child-only. A user-selected child can read
-them; Kantrip protects them at rest and from shell history, not from the process
-the user explicitly launches. Applications should prefer their native generated
-file where practical, fall back to the documented variables, and never log the
-resolved environment or generated properties.
+Applications should prefer their native generated file where practical, fall
+back to the documented variables, and avoid logging the complete environment or
+generated properties.
 
 ## Output and color
 
@@ -418,5 +410,5 @@ disabled when:
 profile names. `kantrip show PROFILE` syntax-highlights its redacted YAML. Both
 remain readable without ANSI color when styling is disabled.
 
-Secret classification occurs before values reach Rich. Styling never changes
-exit statuses or becomes necessary to interpret an error.
+Sensitive-looking values are classified before they reach Rich. Styling never
+changes exit statuses or becomes necessary to interpret an error.

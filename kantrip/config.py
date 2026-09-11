@@ -14,9 +14,10 @@ from typing import Any, cast
 
 import yaml
 from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError
 
 CONFIG_FILENAME = "config.yaml"
-SCHEMA_FILENAME = "profile-v1.schema.json"
+SCHEMA_FILENAME = "profile.schema.json"
 
 
 class ConfigurationError(ValueError):
@@ -69,13 +70,13 @@ def load_configuration(
     environment: Mapping[str, str] | None = None,
     missing_ok: bool = False,
 ) -> Configuration:
-    """Load a YAML document and validate it against the bundled v1 schema."""
+    """Load a YAML document and validate it against the bundled schema."""
     config_path = path if path is not None else resolve_config_path(environment)
     try:
         contents = config_path.read_text(encoding="utf-8")
     except FileNotFoundError as error:
         if missing_ok:
-            return Configuration(path=config_path, values={"version": 1, "profiles": {}})
+            return Configuration(path=config_path, values={"profiles": {}})
         raise ConfigurationError(f"configuration file was not found: {config_path}") from error
     except OSError as error:
         raise ConfigurationError(f"configuration file could not be read: {config_path}") from error
@@ -158,7 +159,25 @@ def _validate(values: dict[str, Any]) -> None:
         return
     validation_error = errors[0]
     location = ".".join(str(part) for part in validation_error.absolute_path) or "document root"
-    raise ConfigurationError(f"configuration does not match schema at {location}")
+    detail = _validation_detail(validation_error)
+    suffix = f": {detail}" if detail else ""
+    raise ConfigurationError(f"configuration does not match schema at {location}{suffix}")
+
+
+def _validation_detail(error: ValidationError) -> str | None:
+    """Describe structural errors without including configuration values."""
+    if error.validator == "additionalProperties" and isinstance(error.instance, dict):
+        properties = error.schema.get("properties", {})
+        unknown = sorted(str(key) for key in error.instance if key not in properties)
+        if unknown:
+            label = "field" if len(unknown) == 1 else "fields"
+            return f"unknown {label}: {', '.join(unknown)}"
+    if error.validator == "required" and isinstance(error.instance, dict):
+        missing = sorted(str(key) for key in error.validator_value if key not in error.instance)
+        if missing:
+            label = "field" if len(missing) == 1 else "fields"
+            return f"missing required {label}: {', '.join(missing)}"
+    return None
 
 
 def _write_configuration(path: Path, values: dict[str, Any]) -> None:

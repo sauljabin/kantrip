@@ -18,19 +18,17 @@ for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
 
 ## Features
 
-### Secure profile model
+### Plaintext profiles
 
-- Versioned, non-secret Kafka profile schema
-- Operating-system credential-store references instead of plaintext secrets
-- Explicit TLS, SASL, OAuth, Schema Registry, Strimzi, and MSK IAM models
-- Classified values and safe diagnostic redaction
+- Schema-validated YAML configuration with atomic profile updates
+- Multiple bootstrap servers, descriptions, labels, and client properties
+- `add`, `remove`, `list`, and redacted `show` commands
 
-### Application environment
+### Local diagnostics
 
-- Child-process `KAFKA_*` and `SCHEMA_REGISTRY_*` variables
-- Java, librdkafka, and Schema Registry configuration paths
-- Child-only credential exposure with no parent-shell export
-- Explicit opt-in for compatible applications
+- Configuration, permissions, profile, platform, shell, and session checks
+- Installed-command discovery for Kantrip's supported adapters
+- Colored status output with plain-text and `NO_COLOR` support
 
 ### CLI sessions
 
@@ -46,13 +44,15 @@ for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
 - Clean stdout/stderr separation
 - `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY behavior
 
-## Current limitations
+## Roadmap
 
-- Persistent profile selection and secure-store integration are not implemented yet
-- Execution currently supports only plaintext profiles without authentication
-- `kantrip ping` and credential-backed adapters are not available yet
-- Linux and macOS are the only planned MVP platforms
-- No Docker distribution or hosted service is planned
+Kantrip's MVP grows from today's plaintext local workflow in three steps:
+
+1. Harden profile sessions and add local credential-store integration.
+2. Add TLS and authenticated Kafka profiles and adapters.
+3. Add `kantrip ping`, followed by Schema Registry and OAuth integration.
+
+See the [MVP roadmap](MVP.md) for scope, ordering, and explicit non-goals.
 
 ## Quick start
 
@@ -66,6 +66,7 @@ pipx install kantrip
 
 ```bash
 kantrip add local
+kantrip doctor
 kantrip list
 kantrip show local
 kantrip exec local -- kcat -L

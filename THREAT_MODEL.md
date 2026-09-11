@@ -1,70 +1,58 @@
 # Threat Model
 
-Kantrip protects local Kafka connection profiles and temporary client sessions
-on a developer workstation. It reduces accidental credential exposure; it does
-not defend against a fully compromised user account, kernel, terminal, child
-process, credential store, or administrator.
+Kantrip protects plaintext Kafka profile metadata and temporary client sessions
+on a developer workstation. It reduces profile confusion and accidental local
+exposure; it does not defend against a compromised user account, kernel,
+terminal, child process, Kafka installation, or administrator.
 
 ## Protected assets
 
-- Kafka, OAuth, Schema Registry, TLS private-key, and MSK-related credentials.
-- The association between credentials, brokers, and environment names.
-- Generated client configuration, certificates, keys, and session metadata.
-- Command arguments, shell history, logs, diagnostics, and terminal transcripts.
+- The association between profile names and Kafka brokers.
+- Generated client properties, executable shims, and session metadata.
+- Command arguments, shell history, diagnostics, and terminal transcripts.
 
 ## Trust boundaries
 
-- The operating-system credential store holds long-lived local secrets.
-- Kantrip resolves secrets and supervises a child explicitly selected by the
-  user. That child is trusted to read its injected environment and files.
-- Generated session directories are trusted only after owner, mode, marker,
-  random identifier, and path-boundary validation.
-- Kafka brokers, registries, OAuth providers, callback JARs, and external tools
-  remain separate systems with their own trust and update models.
+- The configuration file and selected profile are untrusted input until schema
+  validation succeeds.
+- A child explicitly selected by the user is trusted to read its injected
+  environment and generated files.
+- Kafka brokers and installed command-line tools remain separate systems with
+  their own trust and update models.
 
 ## Primary threats
 
-- Secrets written to profile YAML, command arguments, shell history, logs,
-  tracebacks, Rich renderables, errors, or issue reports.
-- Production credentials combined accidentally with development brokers.
-- Symlink, path traversal, wrong-owner, unsafe-runtime-root, or recursive-cleanup
-  errors deleting or exposing user files.
-- Temporary files surviving normal exit or an unclean termination indefinitely.
+- Profile values reaching logs, tracebacks, errors, or terminal output without
+  redaction.
 - Malicious profile names, generated shims, executable resolution, or command
   interpolation changing the selected process.
 - User startup aliases, functions, abbreviations, or `PATH` changes bypassing a
   profile adapter inside an interactive session.
-- Unsupported client adapters silently dropping authentication or exposing a
-  credential through process arguments.
-- A pre-authentication Kafka `ApiVersions` response being mistaken for proof of
-  valid SASL credentials.
+- Connection arguments overriding the profile selected by the user.
+- Temporary generated files remaining after a normal session.
 
-## Required controls
+## Implemented controls
 
-- Store long-lived secrets only in approved operating-system credential stores.
-- Keep literal secret flags out of the CLI and reject classified profile fields.
-- Use argument arrays and direct process execution without shell interpolation.
-- Create runtime directories as `0700` and secret-bearing files as `0600`
-  without following symlinks.
-- Validate exact cleanup targets and use random session identifiers independent
-  of profile display names.
-- Remove normal-session artifacts immediately and use bounded stale-session
-  cleanup after crashes.
-- Preserve explicit adapter capability failures instead of weakening a security
-  requirement for compatibility.
-- Load normal Bash, Zsh, or Fish configuration, then remove supported-client
-  shadows and restore session-owned shims only in the supervised child shell.
-- Redact before rendering and keep Rich tracebacks from displaying locals.
+- Validate every loaded or updated profile against the bundled schema.
+- Atomically write configuration with mode `0600` and generated session files
+  with restrictive permissions.
+- Use random session identifiers and Python-owned temporary directories.
+- Execute argument arrays directly without shell interpolation.
+- Reject nested sessions and adapter connection overrides.
+- Load supported shell configuration, then remove supported-client shadows and
+  restore session-owned shims in the child shell.
+- Redact sensitive-looking fields before normal presentation.
 
 ## Accepted limitations
 
-- A user-selected child process and its descendants can read the environment and
-  files Kantrip gives them.
-- Detached descendants may retain inherited environment values; detached and
-  background execution is outside the MVP.
+- A user-selected child and its descendants can read the environment and files
+  Kantrip gives them.
+- Detached descendants can outlive normal temporary-directory cleanup; detached
+  and background execution is unsupported.
 - Unlinking files does not guarantee forensic erasure on SSD, copy-on-write,
   journaled, or snapshotting filesystems.
-- A compromised user account, credential store, runtime, or dependency can
-  bypass Kantrip's local controls.
+- A compromised user account, runtime, dependency, broker, or client executable
+  can bypass Kantrip's local controls.
 
-Report suspected control failures privately according to `SECURITY.md`.
+Future threat-model extensions are tracked with their features in `MVP.md`.
+Report suspected failures of implemented controls according to `SECURITY.md`.

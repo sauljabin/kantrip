@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import IO, Any, Literal
 
 from rich.console import Console
@@ -15,8 +14,6 @@ from rich.text import Text
 from rich.theme import Theme
 
 ARCANA_COLORS = {
-    "background": "#071426",
-    "surface": "#0B2340",
     "primary": "#3B82F6",
     "secondary": "#22D3EE",
     "accent": "#60A5FA",
@@ -28,8 +25,6 @@ ARCANA_COLORS = {
 
 ARCANA_THEME = Theme(
     {
-        "background": f"on {ARCANA_COLORS['background']}",
-        "surface": f"on {ARCANA_COLORS['surface']}",
         "primary": ARCANA_COLORS["primary"],
         "secondary": ARCANA_COLORS["secondary"],
         "accent": ARCANA_COLORS["accent"],
@@ -42,21 +37,14 @@ ARCANA_THEME = Theme(
     }
 )
 
-StatusKind = Literal["progress", "success", "cleanup", "warning"]
+StatusKind = Literal["progress", "success", "cleanup", "warning", "error"]
 STATUS_PRESENTATION: dict[StatusKind, tuple[str, str, str]] = {
     "progress": ("primary", "🧪", "running"),
     "success": ("success", "✅", "passed"),
     "cleanup": ("muted", "🧹", "cleanup"),
     "warning": ("warning", "⚠️", "warning"),
+    "error": ("error", "❌", "failed"),
 }
-
-
-@dataclass(frozen=True)
-class Consoles:
-    """Normal-output and diagnostic consoles with identical color policy."""
-
-    out: Console
-    err: Console
 
 
 def colors_enabled(
@@ -76,12 +64,11 @@ def colors_enabled(
 def create_console(
     *,
     stream: IO[str] | None = None,
-    stderr: bool = False,
     no_color: bool = False,
     environment: Mapping[str, str] | None = None,
 ) -> Console:
     """Create a Rich console without modifying global terminal state."""
-    target = stream if stream is not None else (sys.stderr if stderr else sys.stdout)
+    target = stream if stream is not None else sys.stdout
     color = colors_enabled(target, no_color=no_color, environment=environment)
     return Console(
         file=target,
@@ -90,14 +77,6 @@ def create_console(
         force_terminal=color,
         no_color=not color,
         highlight=False,
-    )
-
-
-def create_consoles(*, no_color: bool = False) -> Consoles:
-    """Create stdout and stderr consoles for one CLI invocation."""
-    return Consoles(
-        out=create_console(no_color=no_color),
-        err=create_console(stderr=True, no_color=no_color),
     )
 
 
@@ -129,10 +108,8 @@ def create_status_text(console: Console, status: StatusKind, message: str) -> Te
 __all__ = [
     "ARCANA_COLORS",
     "ARCANA_THEME",
-    "Consoles",
     "colors_enabled",
     "create_console",
-    "create_consoles",
     "create_profile_table",
     "create_status_text",
     "create_yaml_syntax",

@@ -64,7 +64,7 @@ command is intentionally separate from the offline test suite.
 
 The profile JSON Schema lives in `schemas/`. Synthetic user-facing examples live
 in `examples/`. Test-owned fixture copies live under `tests` and must never
-contain real credentials or infrastructure details.
+contain private infrastructure details.
 
 Application environment variables are documented in `USAGE.md`. When a variable
 changes, update the usage and architecture documentation and the relevant tests
@@ -94,8 +94,7 @@ or exported pre-release checkout can bootstrap before the first commit.
 The sandbox is a manual environment, not a test-fixture provider. Automated tests
 must not import it.
 
-Start its three-node Kafka cluster, Kafka-backed Apicurio Registry, and Confluent
-Schema Registry:
+Start its three-node plaintext Kafka cluster:
 
 ```bash
 docker compose --project-directory sandbox up -d
@@ -108,18 +107,7 @@ docker compose --project-directory sandbox down -v
 ```
 
 Kafka is available at `localhost:19092`, `localhost:29092`, and
-`localhost:39092`. Confluent Schema Registry is at `http://localhost:18081` and
-Apicurio's compatibility API is at `http://localhost:18082/apis/ccompat/v7`.
-Its native v3 API is at `http://localhost:18082/apis/registry/v3`. Pinned image
-versions live in `sandbox/.env`.
-
-Apicurio uses its KafkaSQL storage backend. The one-shot `apicurio-topics`
-service creates its journal and snapshot topics with three replicas before the
-registry starts, so `docker compose up -d` is the complete startup sequence.
-
-The initial topology is plaintext infrastructure only. Authentication work
-extends this one authoritative topology with synthetic TLS, SASL, OAuth, and
-identity-provider material instead of introducing unrelated Compose files.
+`localhost:39092`. The pinned Kafka image version lives in `sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
 adapter smoke checks:
@@ -207,6 +195,7 @@ authorizer and a suitably authorized principal.
 ## Architecture and security
 
 - Stable design decisions: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- Planned MVP work: [`MVP.md`](MVP.md)
 - Assets, threats, controls, and limitations: [`THREAT_MODEL.md`](THREAT_MODEL.md)
 - Private vulnerability reporting: [`SECURITY.md`](SECURITY.md)
 

@@ -36,22 +36,16 @@ class CommandProcessor:
     def __init__(
         self,
         commands: Mapping[str, str],
-        rollback: Mapping[str, str] | None = None,
     ) -> None:
         self.commands = commands
-        self.rollback = {} if rollback is None else rollback
         self.console = Console()
 
-    def run(self) -> str:
-        output = ""
+    def run(self) -> None:
         for name, command in self.commands.items():
             result = self.execute_command(name, command)
             if result.returncode:
                 self._report_failure(name, command, result)
-                self._run_rollback()
                 raise SystemExit(result.returncode)
-            output += result.stdout
-        return output
 
     def _report_failure(
         self,
@@ -64,13 +58,6 @@ class CommandProcessor:
             f'[bold blue]"{name}" ([bold yellow]{command}[/])[/]:\n'
             f"[red]{result.stdout}{result.stderr}[/]\n"
         )
-
-    def _run_rollback(self) -> None:
-        if not self.rollback:
-            return
-        self.console.print("[bold yellow]Rolling back:[/]")
-        for name, command in self.rollback.items():
-            self.execute_command(name, command)
 
     def execute_command(self, name: str, command: str) -> subprocess.CompletedProcess[str]:
         self.console.print()
