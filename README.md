@@ -63,7 +63,7 @@ pipx install kantrip
 ### First profile session
 
 ```bash
-export KANTRIP_CONFIG="$PWD/examples/config.yaml"
+kantrip config init
 kantrip config validate
 kantrip list
 kantrip show local
@@ -77,6 +77,10 @@ kantrip exec local
 kcat -L
 exit
 ```
+
+`config init` creates `~/.config/kantrip/config.yaml` with a plaintext `local`
+profile for `localhost:9092`. Pass `--bootstrap-server HOST:PORT` to choose a
+different broker. Kantrip never overwrites an existing configuration.
 
 ## Usage
 

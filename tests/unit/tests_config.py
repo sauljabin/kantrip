@@ -2,7 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kantrip.config import ConfigurationError, load_configuration, resolve_config_path
+from kantrip.config import (
+    ConfigurationError,
+    initialize_configuration,
+    load_configuration,
+    resolve_config_path,
+)
 
 
 class TestConfiguration(unittest.TestCase):
@@ -57,6 +62,27 @@ class TestConfiguration(unittest.TestCase):
 
             with self.assertRaisesRegex(ConfigurationError, "profile 'missing' was not found"):
                 load_configuration(path).profile("missing")
+
+    def test_initializes_a_valid_local_profile_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nested" / "config.yaml"
+
+            configuration = initialize_configuration(path)
+
+            self.assertEqual(
+                ["localhost:9092"], configuration.profile("local")["kafka"]["bootstrapServers"]
+            )
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual("local", next(iter(load_configuration(path).profiles)))
+            with self.assertRaisesRegex(ConfigurationError, "already exists"):
+                initialize_configuration(path)
+
+    def test_missing_configuration_suggests_first_run_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+
+            with self.assertRaisesRegex(ConfigurationError, "kantrip config init"):
+                load_configuration(path)
 
 
 _VALID_CONFIG = """\

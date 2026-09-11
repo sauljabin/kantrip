@@ -45,6 +45,21 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, shown.exit_code, shown.output)
         self.assertIn("bootstrapServers:", shown.output)
 
+    def test_config_init_creates_a_ready_local_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "kantrip" / "config.yaml"
+            result = self.runner.invoke(
+                cli,
+                ["config", "init", "--bootstrap-server", "broker.example.com:19092"],
+                env={"KANTRIP_CONFIG": str(config_path)},
+            )
+
+            contents = config_path.read_text(encoding="utf-8")
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Created profile: local", result.output)
+        self.assertIn("broker.example.com:19092", contents)
+
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")

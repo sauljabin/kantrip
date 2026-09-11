@@ -9,7 +9,7 @@ import cloup
 import yaml
 
 from kantrip import APP_VERSION
-from kantrip.config import ConfigurationError, load_configuration
+from kantrip.config import ConfigurationError, initialize_configuration, load_configuration
 from kantrip.console import Consoles, create_consoles
 from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, run_profile_session
@@ -57,6 +57,35 @@ def validate_config() -> None:
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
     click.echo(f"Configuration is valid: {configuration.path}")
+
+
+@config_group.command("init")
+@cloup.option(
+    "--profile",
+    "profile_name",
+    default="local",
+    show_default=True,
+    help="Name of the initial profile.",
+)
+@cloup.option(
+    "--bootstrap-server",
+    "bootstrap_servers",
+    multiple=True,
+    default=("localhost:9092",),
+    show_default=True,
+    help="Kafka broker address; may be repeated.",
+)
+def initialize_config(profile_name: str, bootstrap_servers: tuple[str, ...]) -> None:
+    """Create a new plaintext configuration and initial profile."""
+    try:
+        configuration = initialize_configuration(
+            profile_name=profile_name,
+            bootstrap_servers=bootstrap_servers,
+        )
+    except ConfigurationError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Created configuration: {configuration.path}")
+    click.echo(f"Created profile: {profile_name}")
 
 
 @cli.command("list")

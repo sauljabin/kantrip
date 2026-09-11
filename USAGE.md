@@ -4,14 +4,35 @@ Kantrip is in pre-release development. The current CLI can validate and inspect
 profiles and run plaintext profile sessions:
 
 ```bash
+kantrip config init
 kantrip config validate
 kantrip list
 kantrip show local
 kantrip exec local -- kcat -L
 ```
 
-Profile creation, persistent selection, connectivity checks, and authenticated
-sessions are not implemented yet.
+Additional profile management, persistent selection, connectivity checks, and
+authenticated sessions are not implemented yet.
+
+## First-run configuration
+
+Create a valid plaintext profile using the default local broker:
+
+```bash
+kantrip config init
+```
+
+Choose a different name or one or more broker addresses when needed:
+
+```bash
+kantrip config init --profile development \
+  --bootstrap-server kafka-1.example.com:9092 \
+  --bootstrap-server kafka-2.example.com:9092
+```
+
+The command follows the documented configuration lookup order and refuses to
+overwrite an existing file. If another command cannot find configuration, its
+error points to `config init` and the `KANTRIP_CONFIG` override.
 
 ## Profile workflow
 

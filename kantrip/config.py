@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,10 @@ SCHEMA_FILENAME = "profile-v1.schema.json"
 
 class ConfigurationError(ValueError):
     """Raised when Kantrip configuration cannot be loaded safely."""
+
+
+DEFAULT_PROFILE_NAME = "local"
+DEFAULT_BOOTSTRAP_SERVER = "localhost:9092"
 
 
 @dataclass(frozen=True)
@@ -67,7 +72,10 @@ def load_configuration(
     try:
         contents = config_path.read_text(encoding="utf-8")
     except FileNotFoundError as error:
-        raise ConfigurationError(f"configuration file was not found: {config_path}") from error
+        raise ConfigurationError(
+            f"no Kantrip configuration exists at {config_path}\n"
+            "Run 'kantrip config init' to create one, or set KANTRIP_CONFIG to another file."
+        ) from error
     except OSError as error:
         raise ConfigurationError(f"configuration file could not be read: {config_path}") from error
 
@@ -97,6 +105,46 @@ def load_configuration(
     return Configuration(path=config_path, values=values)
 
 
+def initialize_configuration(
+    path: Path | None = None,
+    *,
+    profile_name: str = DEFAULT_PROFILE_NAME,
+    bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
+    environment: Mapping[str, str] | None = None,
+) -> Configuration:
+    """Create and validate a new plaintext configuration without overwriting files."""
+    config_path = path if path is not None else resolve_config_path(environment)
+    values: dict[str, Any] = {
+        "version": 1,
+        "profiles": {
+            profile_name: {
+                "id": str(uuid.uuid4()),
+                "description": "Local development",
+                "kafka": {
+                    "bootstrapServers": list(bootstrap_servers),
+                    "transport": "plaintext",
+                    "auth": {"type": "none"},
+                },
+            }
+        },
+    }
+    validator = Draft202012Validator(_load_schema(), format_checker=FormatChecker())
+    if not validator.is_valid(values):
+        raise ConfigurationError("the requested initial configuration is invalid")
+
+    try:
+        config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise ConfigurationError(f"configuration already exists: {config_path}") from error
+    except OSError as error:
+        raise ConfigurationError(f"configuration could not be created: {config_path}") from error
+
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        yaml.safe_dump(values, stream, sort_keys=False)
+    return Configuration(path=config_path, values=values)
+
+
 def _load_schema() -> dict[str, Any]:
     packaged_path = Path(__file__).parent / "schemas" / SCHEMA_FILENAME
     source_path = Path(__file__).parents[1] / "schemas" / SCHEMA_FILENAME
@@ -108,6 +156,7 @@ __all__ = [
     "CONFIG_FILENAME",
     "Configuration",
     "ConfigurationError",
+    "initialize_configuration",
     "load_configuration",
     "resolve_config_path",
 ]
