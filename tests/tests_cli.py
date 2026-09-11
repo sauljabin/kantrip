@@ -10,6 +10,7 @@ from click.testing import CliRunner
 
 from kantrip import APP_VERSION
 from kantrip.cli import cli
+from kantrip.ping import PingError, PingResult
 
 
 class TestCli(unittest.TestCase):
@@ -117,6 +118,44 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] configuration is invalid", result.output)
+
+    def test_ping_reports_kafka_connectivity(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                return_value=PingResult(broker_count=2),
+            ) as ping:
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "ping", "local", "--timeout", "1.5"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("[running] Checking Kafka profile 'local'", result.output)
+        self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
+        ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5)
+
+    def test_ping_exits_nonzero_when_kafka_is_unreachable(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                side_effect=PingError("the Kafka cluster did not return metadata"),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "ping", "local"],
+                    env=environment,
+                )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("[failed] Could not connect to Kafka for profile 'local'", result.stderr)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():

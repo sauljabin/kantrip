@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 import click
@@ -19,6 +20,7 @@ from kantrip.console import (
     create_yaml_syntax,
 )
 from kantrip.doctor import run_doctor
+from kantrip.ping import PingError, ping_profile
 from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
@@ -41,6 +43,10 @@ def cli(context: cloup.Context, no_color: bool) -> None:
     """Kantrip securely manages local Kafka profiles for command-line tools and compatible applications."""
     context.ensure_object(dict)
     context.obj["console"] = create_console(no_color=no_color)
+    context.obj["error_console"] = create_console(
+        stream=sys.stderr,
+        no_color=no_color,
+    )
 
 
 def console_from_context(context: cloup.Context) -> Console:
@@ -49,6 +55,15 @@ def console_from_context(context: cloup.Context) -> Console:
     console = obj.get("console")
     if not isinstance(console, Console):
         raise TypeError("Kantrip console has not been initialized")
+    return console
+
+
+def error_console_from_context(context: cloup.Context) -> Console:
+    """Return the diagnostic console initialized for the current invocation."""
+    obj: dict[str, Any] = context.ensure_object(dict)
+    console = obj.get("error_console")
+    if not isinstance(console, Console):
+        raise TypeError("Kantrip diagnostic console has not been initialized")
     return console
 
 
@@ -137,6 +152,49 @@ def doctor(context: cloup.Context) -> None:
         console.print(create_status_text(console, check.status, check.message))
     if not report.healthy:
         raise click.exceptions.Exit(1)
+
+
+@cli.command("ping")
+@cloup.argument("profile_name", metavar="PROFILE")
+@cloup.option(
+    "--timeout",
+    type=click.FloatRange(min=0.1),
+    default=5.0,
+    show_default=True,
+    help="Maximum time in seconds for the connectivity check.",
+)
+@cloup.pass_context
+def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
+    """Check whether PROFILE can connect to Kafka."""
+    console = console_from_context(context)
+    try:
+        profile = load_configuration(missing_ok=True).profile(profile_name)
+        console.print(
+            create_status_text(console, "progress", f"Checking Kafka profile '{profile_name}'")
+        )
+        result = ping_profile(profile, timeout=timeout)
+    except ConfigurationError as error:
+        error_console = error_console_from_context(context)
+        error_console.print(create_status_text(error_console, "error", str(error)))
+        raise click.exceptions.Exit(1) from error
+    except PingError as error:
+        error_console = error_console_from_context(context)
+        error_console.print(
+            create_status_text(
+                error_console,
+                "error",
+                f"Could not connect to Kafka for profile '{profile_name}': {error}",
+            )
+        )
+        raise click.exceptions.Exit(1) from error
+    console.print(
+        create_status_text(
+            console,
+            "success",
+            f"Connected to Kafka ({result.broker_count} broker"
+            f"{'s' if result.broker_count != 1 else ''})",
+        )
+    )
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})

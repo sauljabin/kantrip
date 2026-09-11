@@ -8,6 +8,7 @@ kantrip add local
 kantrip doctor
 kantrip list
 kantrip show local
+kantrip ping local
 kantrip exec local -- kcat -L
 ```
 
@@ -29,6 +30,21 @@ shell, kcat, Apache Kafka commands, and Kaskade on `PATH`. Missing optional
 clients and a missing first-run configuration are warnings; invalid
 configuration or inconsistent active-session state makes the command exit with
 status 1. Doctor performs only local checks.
+
+## Kafka connectivity
+
+Check that at least one bootstrap server in a profile accepts a Kafka protocol
+request:
+
+```bash
+kantrip ping local
+```
+
+`ping` uses the Confluent Kafka Admin client to request cluster metadata and
+succeeds when Kafka returns a valid response. It does not require kcat or the
+Apache Kafka CLI. The check uses a five-second timeout by default; set a
+different limit with `--timeout SECONDS`. Output uses colored status lines and
+emoji in a capable terminal, and readable text markers when styling is disabled.
 
 ## First-run configuration
 

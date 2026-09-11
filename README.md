@@ -15,6 +15,7 @@ Kantrip securely manages local Kafka profiles for command-line tools and compati
 Kantrip is in active pre-release development. The current CLI loads and validates
 profiles, displays their non-secret metadata, and opens plaintext profile sessions
 for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
+It can also verify broker connectivity directly from a profile.
 
 ## Features
 
@@ -27,6 +28,7 @@ for kcat, the official Apache Kafka CLIs, Kaskade, and compatible applications.
 ### Local diagnostics
 
 - Configuration, permissions, profile, platform, shell, and session checks
+- Explicit Kafka protocol connectivity checks with `ping`
 - Installed-command discovery for Kantrip's supported adapters
 - Colored status output with plain-text and `NO_COLOR` support
 
@@ -50,7 +52,7 @@ Kantrip's MVP grows from today's plaintext local workflow in three steps:
 
 1. Harden profile sessions and add local credential-store integration.
 2. Add TLS and authenticated Kafka profiles and adapters.
-3. Add `kantrip ping`, followed by Schema Registry and OAuth integration.
+3. Add Schema Registry, OAuth integration, and authenticated connectivity checks.
 
 See the [MVP roadmap](MVP.md) for scope, ordering, and explicit non-goals.
 
@@ -69,6 +71,7 @@ kantrip add local
 kantrip doctor
 kantrip list
 kantrip show local
+kantrip ping local
 kantrip exec local -- kcat -L
 kantrip exec local -- kafka-topics --list
 kantrip exec local -- kaskade admin
