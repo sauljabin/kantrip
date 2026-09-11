@@ -96,7 +96,7 @@ subject to Apache Kafka's normal client/broker compatibility. Both unsuffixed
 commands and the `.sh` variants shipped in Apache Kafka distributions are
 supported.
 
-| Supported command | CLI version | Kafka | Confluent Schema Registry | Apicurio Registry | Important information |
+| Supported command | CLI version | Kafka | Confluent Schema Registry | Apicurio Registry | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `kafka-console-consumer[.sh]` | Apache Kafka 2.6–4.3 | Consume records | — | — | Injects `--bootstrap-server` and `--consumer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
 | `kafka-console-producer[.sh]` | Apache Kafka 2.6–4.3 | Produce records | — | — | Injects `--bootstrap-server` and `--producer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |

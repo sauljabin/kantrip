@@ -161,10 +161,7 @@ uv run kantrip exec sandbox -- kafka-console-consumer \
 ```
 
 Replace any official Kafka command with its `.sh` form when using an Apache Kafka
-distribution that retains the suffix. Kantrip supplies the selected bootstrap
-servers and temporary client configuration, so do not repeat
-`--bootstrap-server`, `--consumer.config`, `--producer.config`,
-`--command-config`, or a legacy connection option.
+distribution that retains the suffix.
 
 Additional quick checks for the other adapters are:
 
