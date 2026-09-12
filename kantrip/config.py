@@ -16,7 +16,11 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
-from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
+from kantrip.registry import (
+    CONFLUENT_PROVIDER,
+    RegistryProfileError,
+    plain_registry_connection,
+)
 
 CONFIG_FILENAME = "config.yaml"
 SCHEMA_FILENAME = "profile.schema.json"
@@ -97,6 +101,7 @@ def load_configuration(
         raise ConfigurationError("configuration must be a YAML object")
 
     _validate(values)
+    _normalize_and_validate_registries(values)
 
     return Configuration(path=config_path, values=values)
 
@@ -107,7 +112,8 @@ def add_profile(
     *,
     bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
     description: str | None = None,
-    schema_registry_url: str | None = None,
+    registry_provider: str | None = None,
+    registry_url: str | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> Configuration:
     """Add a plaintext profile, creating configuration when necessary."""
@@ -127,14 +133,18 @@ def add_profile(
     }
     if description is not None:
         profile["description"] = description
-    if schema_registry_url is not None:
-        profile["schemaRegistry"] = {
-            "url": schema_registry_url,
-            "auth": {"type": "none"},
+    if registry_provider is not None and registry_url is None:
+        raise ConfigurationError("--registry-provider requires --registry-url")
+    if registry_url is not None:
+        provider = registry_provider or CONFLUENT_PROVIDER
+        property_name = "apicurio.registry.url" if provider == "apicurio" else "schema.registry.url"
+        profile["registry"] = {
+            "provider": provider,
+            property_name: registry_url,
         }
         try:
-            plain_schema_registry_url(profile)
-        except SchemaRegistryProfileError as error:
+            plain_registry_connection(profile)
+        except RegistryProfileError as error:
             raise ConfigurationError(str(error)) from error
     values["profiles"][profile_name] = profile
     _validate(values)
@@ -174,6 +184,21 @@ def _validate(values: dict[str, Any]) -> None:
     detail = _validation_detail(validation_error)
     suffix = f": {detail}" if detail else ""
     raise ConfigurationError(f"configuration does not match schema at {location}{suffix}")
+
+
+def _normalize_and_validate_registries(values: dict[str, Any]) -> None:
+    """Materialize the Confluent default and validate executable registry URLs."""
+    profiles = values.get("profiles", {})
+    for name, profile in profiles.items():
+        registry = profile.get("registry")
+        if isinstance(registry, dict) and "provider" not in registry:
+            registry["provider"] = CONFLUENT_PROVIDER
+        try:
+            plain_registry_connection(profile)
+        except RegistryProfileError as error:
+            raise ConfigurationError(
+                f"registry profile '{name}' is not executable: {error}"
+            ) from error
 
 
 def _validation_detail(error: ValidationError) -> str | None:

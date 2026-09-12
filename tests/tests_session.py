@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.adapters import SCHEMA_REGISTRY_EXECUTABLES, create_subshell_shims
+from kantrip.registry import RegistryConnection
 from kantrip.session import SessionError, run_profile_session
 
 
@@ -23,9 +24,9 @@ class TestProfileSession(unittest.TestCase):
                     "librdkafka": {"enable.idempotence": True},
                 },
             },
-            "schemaRegistry": {
-                "url": "http://registry.invalid:8081",
-                "auth": {"type": "none"},
+            "registry": {
+                "provider": "confluent",
+                "schema.registry.url": "http://registry.invalid:8081",
             },
         }
 
@@ -279,40 +280,47 @@ class TestProfileSession(unittest.TestCase):
             run.assert_not_called()
 
     def test_schema_registry_command_requires_registry_configuration(self) -> None:
-        del self.profile["schemaRegistry"]
+        del self.profile["registry"]
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
             patch("kantrip.session.subprocess.run") as run,
-            self.assertRaisesRegex(SessionError, "requires a schemaRegistry section"),
+            self.assertRaisesRegex(SessionError, "requires a registry section"),
         ):
             run_profile_session(
                 "local", self.profile, ["kafka-avro-console-consumer"], environment={}
             )
         run.assert_not_called()
 
-    def test_secure_schema_registry_profile_is_rejected_before_launch(self) -> None:
-        self.profile["schemaRegistry"] = {
-            "url": "https://registry.invalid",
-            "auth": {"type": "basic"},
+    def test_secure_registry_profile_is_rejected_before_launch(self) -> None:
+        self.profile["registry"] = {
+            "provider": "confluent",
+            "schema.registry.url": "https://registry.invalid",
         }
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
             patch("kantrip.session.subprocess.run") as run,
-            self.assertRaisesRegex(SessionError, "authenticated or TLS-secured"),
+            self.assertRaisesRegex(SessionError, "supports only an http:// registry URL"),
         ):
             run_profile_session(
                 "local", self.profile, ["kafka-protobuf-console-consumer"], environment={}
             )
         run.assert_not_called()
 
-    def test_registry_shims_reject_missing_and_secure_profiles_without_launching_clients(
+    def test_registry_shims_reject_missing_and_native_profiles_without_launching_clients(
         self,
     ) -> None:
-        for registry_error, expected in (
-            (None, "requires a schemaRegistry section"),
-            ("secure Schema Registry settings are unsupported", "secure Schema Registry"),
+        for registry, expected in (
+            (None, "requires a registry section"),
+            (
+                RegistryConnection(
+                    "apicurio",
+                    "http://registry.invalid/apis/registry/v3",
+                    "apicurio.registry.url",
+                ),
+                "supports only Confluent-compatible registry profiles",
+            ),
         ):
-            with self.subTest(registry_error=registry_error), tempfile.TemporaryDirectory() as root:
+            with self.subTest(registry=registry), tempfile.TemporaryDirectory() as root:
                 root_path = Path(root)
                 client_path = root_path / "client"
                 client_path.write_text("#!/bin/sh\nprintf CLIENT_LAUNCHED\n", encoding="utf-8")
@@ -332,7 +340,7 @@ class TestProfileSession(unittest.TestCase):
                         kaskade_config_path=root_path / "kaskade.ini",
                         kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                         environment={"PATH": str(root_path)},
-                        schema_registry_error=registry_error,
+                        registry=registry,
                     )
 
                 for executable in SCHEMA_REGISTRY_EXECUTABLES:
@@ -344,7 +352,7 @@ class TestProfileSession(unittest.TestCase):
                     self.assertNotIn("CLIENT_LAUNCHED", result.stdout)
 
     def test_missing_registry_does_not_inherit_registry_environment(self) -> None:
-        del self.profile["schemaRegistry"]
+        del self.profile["registry"]
         observed: dict[str, str] = {}
 
         def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
@@ -362,6 +370,8 @@ class TestProfileSession(unittest.TestCase):
                 self.profile,
                 ["kcat", "-L"],
                 environment={
+                    "APICURIO_REGISTRY_URL": "http://apicurio.invalid",
+                    "APICURIO_REGISTRY_CONFIG_FILE": "/tmp/apicurio.properties",
                     "SCHEMA_REGISTRY_URL": "http://other.invalid",
                     "SCHEMA_REGISTRY_CONFIG_FILE": "/tmp/other.properties",
                 },
@@ -369,6 +379,8 @@ class TestProfileSession(unittest.TestCase):
 
         self.assertNotIn("SCHEMA_REGISTRY_URL", observed)
         self.assertNotIn("SCHEMA_REGISTRY_CONFIG_FILE", observed)
+        self.assertNotIn("APICURIO_REGISTRY_URL", observed)
+        self.assertNotIn("APICURIO_REGISTRY_CONFIG_FILE", observed)
 
     def test_adapts_kaskade_admin_and_consumer_with_a_private_ini_file(self) -> None:
         for command, command_arguments in (
@@ -454,22 +466,91 @@ class TestProfileSession(unittest.TestCase):
             "enable.idempotence=true\n"
             "security.protocol=PLAINTEXT\n"
             "\n[registry]\n"
+            "provider=confluent\n"
             "url=http://registry.invalid:8081\n",
             observed["contents"],
         )
         self.assertEqual(0o600, observed["mode"])
 
-    def test_registry_deserializers_require_supported_profile_registry(self) -> None:
+    def test_kaskade_uses_native_apicurio_registry_configuration(self) -> None:
+        self.profile["registry"] = {
+            "provider": "apicurio",
+            "apicurio.registry.url": "http://registry.invalid/apis/registry/v3",
+        }
+        observed: dict[str, object] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            config_path = Path(arguments[3])
+            registry_config_path = Path(environment["APICURIO_REGISTRY_CONFIG_FILE"])
+            observed["contents"] = config_path.read_text(encoding="utf-8")
+            observed["registry_contents"] = registry_config_path.read_text(encoding="utf-8")
+            observed["environment"] = environment
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kaskade", "consumer", "--topic", "orders", "-v", "registry"],
+                environment={"SCHEMA_REGISTRY_URL": "http://inherited.invalid"},
+            )
+
+        self.assertIn(
+            "provider=apicurio\napicurio.registry.url="
+            "http://registry.invalid/apis/registry/v3\n",
+            observed["contents"],
+        )
+        self.assertEqual(
+            "apicurio.registry.url=http://registry.invalid/apis/registry/v3\n",
+            observed["registry_contents"],
+        )
+        environment = observed["environment"]
+        assert isinstance(environment, dict)
+        self.assertEqual(
+            "http://registry.invalid/apis/registry/v3",
+            environment["APICURIO_REGISTRY_URL"],
+        )
+        self.assertNotIn("SCHEMA_REGISTRY_URL", environment)
+
+    def test_confluent_only_adapters_reject_native_apicurio_profiles(self) -> None:
+        self.profile["registry"] = {
+            "provider": "apicurio",
+            "apicurio.registry.url": "http://registry.invalid/apis/registry/v3",
+        }
+        for command in (
+            ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
+            ["kafka-avro-console-consumer", "--topic", "orders"],
+        ):
+            with (
+                self.subTest(command=command),
+                patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
+                patch("kantrip.session.subprocess.run") as run,
+                self.assertRaisesRegex(
+                    SessionError, "supports only Confluent-compatible registry profiles"
+                ),
+            ):
+                run_profile_session("local", self.profile, command, environment={})
+            run.assert_not_called()
+
+    def test_registry_deserializers_require_a_plain_profile_registry(self) -> None:
         commands = (
             ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
             ["kaskade", "consumer", "-t", "orders", "-v", "registry"],
         )
         for command in commands:
             for registry, expected in (
-                (None, "requires a schemaRegistry section"),
+                (None, "requires a registry section"),
                 (
-                    {"url": "https://registry.invalid", "auth": {"type": "basic"}},
-                    "authenticated or TLS-secured",
+                    {
+                        "provider": "confluent",
+                        "schema.registry.url": "https://registry.invalid",
+                    },
+                    "supports only an http:// registry URL",
                 ),
             ):
                 with (
@@ -479,14 +560,14 @@ class TestProfileSession(unittest.TestCase):
                     self.assertRaisesRegex(SessionError, expected),
                 ):
                     if registry is None:
-                        del self.profile["schemaRegistry"]
+                        del self.profile["registry"]
                     else:
-                        self.profile["schemaRegistry"] = registry
+                        self.profile["registry"] = registry
                     run_profile_session("local", self.profile, command, environment={})
                 run.assert_not_called()
-                self.profile["schemaRegistry"] = {
-                    "url": "http://registry.invalid:8081",
-                    "auth": {"type": "none"},
+                self.profile["registry"] = {
+                    "provider": "confluent",
+                    "schema.registry.url": "http://registry.invalid:8081",
                 }
 
     def test_kaskade_cannot_override_profile_connection_options(self) -> None:

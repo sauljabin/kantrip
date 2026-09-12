@@ -21,7 +21,12 @@ from kantrip.adapters import (
     create_subshell_shims,
     prepare_command,
 )
-from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
+from kantrip.registry import (
+    APICURIO_PROVIDER,
+    RegistryConnection,
+    RegistryProfileError,
+    plain_registry_connection,
+)
 from kantrip.shells import ShellError, prepare_interactive_shell, resolve_interactive_shell
 
 
@@ -58,7 +63,10 @@ def run_profile_session(
     _validate_kcat_arguments(arguments)
     kcat_properties = _client_properties(profile, "librdkafka")
     java_properties = _client_properties(profile, "java")
-    schema_registry_url, schema_registry_error = _schema_registry_connection(profile)
+    try:
+        registry = plain_registry_connection(profile)
+    except RegistryProfileError as error:
+        raise SessionError(str(error)) from error
 
     session_id = secrets.token_hex(16)
     with tempfile.TemporaryDirectory(prefix=f"kantrip-{session_id}-") as directory:
@@ -67,7 +75,7 @@ def run_profile_session(
         java_config_path = session_directory / "kafka.properties"
         kaskade_config_path = session_directory / "kaskade.ini"
         kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
-        schema_registry_config_path = session_directory / "schema-registry.properties"
+        registry_config_path = session_directory / "registry.properties"
         write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
         write_exclusive_text(java_config_path, _render_properties(java_properties), mode=0o600)
         write_exclusive_text(
@@ -75,16 +83,16 @@ def run_profile_session(
             f"[kafka]\n{_render_properties(kcat_properties)}",
             mode=0o600,
         )
-        if schema_registry_url is not None:
+        if registry is not None:
             write_exclusive_text(
                 kaskade_registry_config_path,
                 f"[kafka]\n{_render_properties(kcat_properties)}"
-                f"\n[registry]\nurl={schema_registry_url}\n",
+                f"\n[registry]\n{_render_kaskade_registry(registry)}",
                 mode=0o600,
             )
             write_exclusive_text(
-                schema_registry_config_path,
-                _render_properties({"schema.registry.url": schema_registry_url}),
+                registry_config_path,
+                _render_properties({registry.property_name: registry.url}),
                 mode=0o600,
             )
 
@@ -98,13 +106,19 @@ def run_profile_session(
             "KANTRIP_SESSION_ID": session_id,
             "KCAT_CONFIG": str(kcat_config_path),
         }
-        child_environment.pop("SCHEMA_REGISTRY_CONFIG_FILE", None)
-        child_environment.pop("SCHEMA_REGISTRY_URL", None)
-        if schema_registry_url is not None:
+        for name in (
+            "APICURIO_REGISTRY_CONFIG_FILE",
+            "APICURIO_REGISTRY_URL",
+            "SCHEMA_REGISTRY_CONFIG_FILE",
+            "SCHEMA_REGISTRY_URL",
+        ):
+            child_environment.pop(name, None)
+        if registry is not None:
+            prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
             child_environment.update(
                 {
-                    "SCHEMA_REGISTRY_CONFIG_FILE": str(schema_registry_config_path),
-                    "SCHEMA_REGISTRY_URL": schema_registry_url,
+                    f"{prefix}_REGISTRY_CONFIG_FILE": str(registry_config_path),
+                    f"{prefix}_REGISTRY_URL": registry.url,
                 }
             )
         try:
@@ -115,8 +129,7 @@ def run_profile_session(
                     java_config_path=java_config_path,
                     kaskade_config_path=kaskade_config_path,
                     kaskade_registry_config_path=kaskade_registry_config_path,
-                    schema_registry_url=schema_registry_url,
-                    schema_registry_error=schema_registry_error,
+                    registry=registry,
                 )
             else:
                 shim_directory = create_subshell_shims(
@@ -126,8 +139,7 @@ def run_profile_session(
                     kaskade_config_path=kaskade_config_path,
                     kaskade_registry_config_path=kaskade_registry_config_path,
                     environment=env,
-                    schema_registry_url=schema_registry_url,
-                    schema_registry_error=schema_registry_error,
+                    registry=registry,
                 )
                 child_environment["PATH"] = (
                     f"{shim_directory}{os.pathsep}{env.get('PATH', os.defpath)}"
@@ -202,11 +214,10 @@ def _client_properties(profile: Mapping[str, Any], client: str) -> dict[str, str
     return properties
 
 
-def _schema_registry_connection(profile: Mapping[str, Any]) -> tuple[str | None, str | None]:
-    try:
-        return plain_schema_registry_url(profile), None
-    except SchemaRegistryProfileError as error:
-        return None, str(error)
+def _render_kaskade_registry(registry: RegistryConnection) -> str:
+    if registry.provider == APICURIO_PROVIDER:
+        return f"provider=apicurio\napicurio.registry.url={registry.url}\n"
+    return f"provider=confluent\nurl={registry.url}\n"
 
 
 def _property_value(value: object) -> str:

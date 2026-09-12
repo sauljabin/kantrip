@@ -23,24 +23,58 @@ class TestProfileSchema(unittest.TestCase):
 
         self._validator().validate(example)
 
-    def test_plain_schema_registry_is_accepted(self) -> None:
+    def test_plain_confluent_registry_is_accepted_with_default_provider(self) -> None:
+        profile = _profile_configuration()
+        profile["profiles"]["unit-local"]["registry"] = {
+            "schema.registry.url": "http://schema.example.com",
+        }
+
+        self.assertTrue(self._validator().is_valid(profile))
+
+    def test_plain_apicurio_registry_is_accepted(self) -> None:
+        profile = _profile_configuration()
+        profile["profiles"]["unit-local"]["registry"] = {
+            "provider": "apicurio",
+            "apicurio.registry.url": "http://schema.example.com/apis/registry/v3",
+        }
+
+        self.assertTrue(self._validator().is_valid(profile))
+
+    def test_registry_provider_and_url_property_must_match(self) -> None:
+        for registry in (
+            {"provider": "confluent", "apicurio.registry.url": "http://registry.example.com"},
+            {"provider": "apicurio", "schema.registry.url": "http://registry.example.com"},
+            {
+                "provider": "apicurio",
+                "schema.registry.url": "http://registry.example.com",
+                "apicurio.registry.url": "http://registry.example.com/apis/registry/v3",
+            },
+        ):
+            with self.subTest(registry=registry):
+                profile = _profile_configuration()
+                profile["profiles"]["unit-local"]["registry"] = registry
+                self.assertFalse(self._validator().is_valid(profile))
+
+    def test_secure_or_credentialed_registry_urls_are_rejected(self) -> None:
+        for url in (
+            "https://registry.example.com",
+            "http://user:secret@registry.example.com",
+            "http://registry.example.com?token=synthetic",
+            "http://registry.example.com#fragment",
+        ):
+            with self.subTest(url=url):
+                profile = _profile_configuration()
+                profile["profiles"]["unit-local"]["registry"] = {"schema.registry.url": url}
+                self.assertFalse(self._validator().is_valid(profile))
+
+    def test_legacy_schema_registry_contract_is_rejected(self) -> None:
         profile = _profile_configuration()
         profile["profiles"]["unit-local"]["schemaRegistry"] = {
-            "url": "https://schema.example.com",
+            "url": "http://schema.example.com",
             "auth": {"type": "none"},
         }
 
-        self.assertTrue(self._validator().is_valid(profile))
-
-    def test_secure_schema_registry_metadata_is_accepted_for_actionable_exec_errors(self) -> None:
-        profile = _profile_configuration()
-        profile["profiles"]["unit-local"]["schemaRegistry"] = {
-            "url": "https://schema.example.com",
-            "auth": {"type": "basic", "credentialRef": "env:SCHEMA_CREDENTIALS"},
-            "tls": {"caRef": "file:/etc/ssl/registry-ca.pem"},
-        }
-
-        self.assertTrue(self._validator().is_valid(profile))
+        self.assertFalse(self._validator().is_valid(profile))
 
     def test_top_level_version_is_not_accepted(self) -> None:
         profile = _profile_configuration()

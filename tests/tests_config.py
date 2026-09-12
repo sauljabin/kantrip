@@ -93,26 +93,66 @@ class TestConfiguration(unittest.TestCase):
             self.assertEqual({}, configuration.profiles)
             self.assertEqual({}, load_configuration(path).profiles)
 
-    def test_adds_a_plain_schema_registry_connection(self) -> None:
+    def test_adds_a_confluent_registry_connection_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
 
-            configuration = add_profile("local", path, schema_registry_url="http://localhost:8081")
+            configuration = add_profile("local", path, registry_url="http://localhost:8081")
 
         self.assertEqual(
             {
-                "url": "http://localhost:8081",
-                "auth": {"type": "none"},
+                "provider": "confluent",
+                "schema.registry.url": "http://localhost:8081",
             },
-            configuration.profile("local")["schemaRegistry"],
+            configuration.profile("local")["registry"],
         )
 
-    def test_add_rejects_a_secure_schema_registry_url(self) -> None:
+    def test_adds_an_apicurio_registry_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+
+            configuration = add_profile(
+                "local",
+                path,
+                registry_provider="apicurio",
+                registry_url="http://localhost:8082/apis/registry/v3",
+            )
+
+        self.assertEqual(
+            {
+                "provider": "apicurio",
+                "apicurio.registry.url": "http://localhost:8082/apis/registry/v3",
+            },
+            configuration.profile("local")["registry"],
+        )
+
+    def test_load_defaults_an_omitted_registry_provider_to_confluent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(
+                _VALID_CONFIG + "    registry:\n      schema.registry.url: http://localhost:8081\n",
+                encoding="utf-8",
+            )
+
+            profile = load_configuration(path).profile("local")
+
+        self.assertEqual("confluent", profile["registry"]["provider"])
+
+    def test_add_rejects_a_secure_registry_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.yaml"
 
             with self.assertRaisesRegex(ConfigurationError, "supports only an http://"):
-                add_profile("local", path, schema_registry_url="https://registry.example.com")
+                add_profile("local", path, registry_url="https://registry.example.com")
+
+            self.assertFalse(path.exists())
+
+    def test_add_rejects_a_registry_provider_without_a_url(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+
+            with self.assertRaisesRegex(ConfigurationError, "requires --registry-url"):
+                add_profile("local", path, registry_provider="apicurio")
 
             self.assertFalse(path.exists())
 

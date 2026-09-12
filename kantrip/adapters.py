@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from kantrip._files import write_exclusive_text
+from kantrip.registry import CONFLUENT_PROVIDER, RegistryConnection
 
 KASKADE_EXECUTABLES = frozenset({"kaskade"})
 KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
@@ -107,8 +108,7 @@ def prepare_command(
     java_config_path: Path,
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
-    schema_registry_url: str | None = None,
-    schema_registry_error: str | None = None,
+    registry: RegistryConnection | None = None,
 ) -> list[str]:
     """Inject profile connection options for a supported explicit command."""
     prepared = list(arguments)
@@ -122,13 +122,8 @@ def prepare_command(
         _reject_kafka_overrides(executable, prepared[1:], kafka_options)
         registry_arguments: list[str] = []
         if executable in SCHEMA_REGISTRY_EXECUTABLES:
-            if schema_registry_error is not None:
-                raise AdapterError(schema_registry_error)
-            if schema_registry_url is None:
-                raise AdapterError(
-                    f"{executable} requires a schemaRegistry section in the selected Kantrip profile"
-                )
-            registry_arguments = ["--property", f"schema.registry.url={schema_registry_url}"]
+            connection = _require_confluent_registry(executable, registry)
+            registry_arguments = ["--property", f"schema.registry.url={connection.url}"]
         return [
             prepared[0],
             bootstrap_option,
@@ -139,28 +134,23 @@ def prepare_command(
             *prepared[1:],
         ]
     if executable in KCAT_EXECUTABLES:
-        return _prepare_kcat(prepared, schema_registry_url, schema_registry_error)
+        return _prepare_kcat(prepared, registry)
     if executable in KASKADE_EXECUTABLES:
         return _prepare_kaskade(
             prepared,
             kaskade_config_path,
             kaskade_registry_config_path,
-            schema_registry_url,
-            schema_registry_error,
+            registry,
         )
     return prepared
 
 
-def _prepare_kcat(
-    prepared: list[str], schema_registry_url: str | None, schema_registry_error: str | None
-) -> list[str]:
+def _prepare_kcat(prepared: list[str], registry: RegistryConnection | None) -> list[str]:
     executable = Path(prepared[0]).name
     _reject_kcat_overrides(executable, prepared[1:])
     if _kcat_uses_schema_registry(prepared[1:]):
-        registry_url = _require_schema_registry(
-            executable, schema_registry_url, schema_registry_error
-        )
-        return [prepared[0], "-r", registry_url, *prepared[1:]]
+        connection = _require_confluent_registry(executable, registry)
+        return [prepared[0], "-r", connection.url, *prepared[1:]]
     return prepared
 
 
@@ -168,8 +158,7 @@ def _prepare_kaskade(
     prepared: list[str],
     config_path: Path,
     registry_config_path: Path,
-    schema_registry_url: str | None,
-    schema_registry_error: str | None,
+    registry: RegistryConnection | None,
 ) -> list[str]:
     if len(prepared) <= 1 or prepared[1] not in _KASKADE_COMMANDS:
         return prepared
@@ -177,7 +166,7 @@ def _prepare_kaskade(
     _reject_kaskade_overrides(prepared[2:])
     selected_config_path = config_path
     if command == "consumer" and _kaskade_uses_schema_registry(prepared[2:]):
-        _require_schema_registry("kaskade", schema_registry_url, schema_registry_error)
+        _require_registry("kaskade", registry)
         selected_config_path = registry_config_path
     return [
         prepared[0],
@@ -196,8 +185,7 @@ def create_subshell_shims(
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     environment: Mapping[str, str],
-    schema_registry_url: str | None = None,
-    schema_registry_error: str | None = None,
+    registry: RegistryConnection | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     search_path = environment.get("PATH", os.defpath)
@@ -222,12 +210,7 @@ def create_subshell_shims(
             java_config_path=java_config_path,
             bootstrap_option=bootstrap_option,
             config_option=config_option,
-            schema_registry_url=(
-                schema_registry_url if name in SCHEMA_REGISTRY_EXECUTABLES else None
-            ),
-            schema_registry_error=(
-                schema_registry_error if name in SCHEMA_REGISTRY_EXECUTABLES else None
-            ),
+            registry=registry if name in SCHEMA_REGISTRY_EXECUTABLES else None,
             schema_registry_required=name in SCHEMA_REGISTRY_EXECUTABLES,
         )
         _write_executable(directory / name, contents)
@@ -238,14 +221,13 @@ def create_subshell_shims(
                 kaskade_executable,
                 kaskade_config_path,
                 kaskade_registry_config_path,
-                schema_registry_url,
-                schema_registry_error,
+                registry,
             ),
         )
     for name, executable in kcat_executables.items():
         _write_executable(
             directory / name,
-            _render_kcat_shim(name, executable, schema_registry_url, schema_registry_error),
+            _render_kcat_shim(name, executable, registry),
         )
     return directory
 
@@ -309,14 +291,22 @@ def _option_values(arguments: Sequence[str], option: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _require_schema_registry(name: str, url: str | None, error: str | None) -> str:
-    if error is not None:
-        raise AdapterError(error)
-    if url is None:
+def _require_registry(name: str, registry: RegistryConnection | None) -> RegistryConnection:
+    if registry is None:
+        raise AdapterError(f"{name} requires a registry section in the selected Kantrip profile")
+    return registry
+
+
+def _require_confluent_registry(
+    name: str, registry: RegistryConnection | None
+) -> RegistryConnection:
+    connection = _require_registry(name, registry)
+    if connection.provider != CONFLUENT_PROVIDER:
         raise AdapterError(
-            f"{name} requires a schemaRegistry section in the selected Kantrip profile"
+            f"{name} supports only Confluent-compatible registry profiles; configure "
+            "Apicurio's ccompat endpoint with provider confluent"
         )
-    return url
+    return connection
 
 
 def _reject_kafka_overrides(
@@ -370,8 +360,7 @@ def _render_kafka_shim(
     java_config_path: Path,
     bootstrap_option: str,
     config_option: str,
-    schema_registry_url: str | None,
-    schema_registry_error: str | None,
+    registry: RegistryConnection | None,
     schema_registry_required: bool,
 ) -> str:
     rejected_options = (
@@ -386,9 +375,7 @@ def _render_kafka_shim(
     property_guard = ""
     registry_arguments = ""
     if schema_registry_required:
-        registry_guard = _render_schema_registry_shim_guard(
-            name, schema_registry_url, schema_registry_error
-        )
+        registry_guard = _render_registry_shim_guard(name, registry, confluent_only=True)
         property_guard = f"""previous_argument=
 for argument in "$@"; do
   if [ "$previous_argument" = '--property' ]; then
@@ -408,10 +395,8 @@ for argument in "$@"; do
   previous_argument="$argument"
 done
 """
-        if schema_registry_url is not None:
-            registry_arguments = " --property " + shlex.quote(
-                f"schema.registry.url={schema_registry_url}"
-            )
+        if registry is not None and registry.provider == CONFLUENT_PROVIDER:
+            registry_arguments = " --property " + shlex.quote(f"schema.registry.url={registry.url}")
     return f"""#!/bin/sh
 {registry_guard}{property_guard}for argument in "$@"; do
   case "$argument" in
@@ -425,21 +410,26 @@ exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers
 """
 
 
-def _render_schema_registry_shim_guard(name: str, url: str | None, error: str | None) -> str:
-    message = error or f"{name} requires a schemaRegistry section in the selected Kantrip profile"
-    return f"printf '%s\\n' {shlex.quote(message)} >&2\nexit 2\n" if url is None else ""
+def _render_registry_shim_guard(
+    name: str, registry: RegistryConnection | None, *, confluent_only: bool = False
+) -> str:
+    try:
+        if confluent_only:
+            _require_confluent_registry(name, registry)
+        else:
+            _require_registry(name, registry)
+    except AdapterError as error:
+        return f"printf '%s\\n' {shlex.quote(str(error))} >&2\nexit 2\n"
+    return ""
 
 
 def _render_kaskade_shim(
     executable: str,
     config_path: Path,
     registry_config_path: Path,
-    schema_registry_url: str | None,
-    schema_registry_error: str | None,
+    registry: RegistryConnection | None,
 ) -> str:
-    registry_guard = _render_schema_registry_shim_guard(
-        "kaskade", schema_registry_url, schema_registry_error
-    )
+    registry_guard = _render_registry_shim_guard("kaskade", registry)
     return f"""#!/bin/sh
 case "${{1-}}" in
   admin|consumer)
@@ -482,13 +472,10 @@ esac
 def _render_kcat_shim(
     name: str,
     executable: str,
-    schema_registry_url: str | None,
-    schema_registry_error: str | None,
+    registry: RegistryConnection | None,
 ) -> str:
-    registry_guard = _render_schema_registry_shim_guard(
-        name, schema_registry_url, schema_registry_error
-    )
-    registry_url = shlex.quote(schema_registry_url or "")
+    registry_guard = _render_registry_shim_guard(name, registry, confluent_only=True)
+    registry_url = shlex.quote(registry.url if registry is not None else "")
     return f"""#!/bin/sh
 schema_deserializer=
 previous_argument=

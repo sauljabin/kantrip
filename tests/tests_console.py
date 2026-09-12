@@ -101,8 +101,11 @@ class TestConsole(unittest.TestCase):
         profiles = {
             "local": {
                 "kafka": {"bootstrapServers": ["localhost:9092"]},
-                "schemaRegistry": {
-                    "url": "http://user:secret@localhost:8081/path?token=classified"
+                "registry": {
+                    "provider": "confluent",
+                    "schema.registry.url": (
+                        "http://user:secret@localhost:8081/path?token=classified"
+                    ),
                 },
             }
         }
@@ -111,6 +114,7 @@ class TestConsole(unittest.TestCase):
 
         output = stream.getvalue()
         self.assertIn("http://localhost:8081", output)
+        self.assertIn("Confluent", output)
         self.assertIn("/path", output)
         self.assertNotIn("secret", output)
         self.assertNotIn("classified", output)
@@ -172,7 +176,7 @@ class TestConsole(unittest.TestCase):
             pass
 
         status.assert_called_once_with(
-            "checking connectivity", spinner="dots", spinner_style="primary"
+            "checking connectivity", spinner="moon", spinner_style="primary"
         )
 
 

@@ -31,7 +31,7 @@ from kantrip.config import (
     load_configuration,
     resolve_config_path,
 )
-from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
+from kantrip.registry import RegistryProfileError, plain_registry_connection
 from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
@@ -168,7 +168,7 @@ def _check_configuration(
     checks.append(_check_profile_ids(configuration))
     checks.append(_check_config_file(path))
     checks.append(_check_profiles(configuration))
-    checks.extend(_check_schema_registry_profiles(configuration))
+    checks.extend(_check_registry_profiles(configuration))
     return configuration, checks
 
 
@@ -205,31 +205,31 @@ def _check_profiles(configuration: Configuration) -> DoctorCheck:
     return DoctorCheck("success", "All configured Kafka profiles are executable")
 
 
-def _check_schema_registry_profiles(configuration: Configuration) -> list[DoctorCheck]:
+def _check_registry_profiles(configuration: Configuration) -> list[DoctorCheck]:
     configured = 0
     checks: list[DoctorCheck] = []
     for name, profile in configuration.profiles.items():
-        if "schemaRegistry" not in profile:
+        if "registry" not in profile:
             continue
         configured += 1
         try:
-            plain_schema_registry_url(profile)
-        except SchemaRegistryProfileError as error:
+            plain_registry_connection(profile)
+        except RegistryProfileError as error:
             checks.append(
                 DoctorCheck(
                     "error",
-                    f"Schema Registry profile '{name}' is not executable: {error}",
+                    f"Registry profile '{name}' is not executable: {error}",
                 )
             )
     if checks:
         return checks
     if not configured:
-        return [DoctorCheck("success", "Schema Registry profiles: none configured")]
+        return [DoctorCheck("success", "Registry profiles: none configured")]
     label = "profile" if configured == 1 else "profiles"
     return [
         DoctorCheck(
             "success",
-            f"Schema Registry profiles: {configured} {label} configured and executable",
+            f"Registry profiles: {configured} {label} configured and executable",
         )
     ]
 

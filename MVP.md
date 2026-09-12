@@ -26,9 +26,8 @@ documentation together.
 
 - Extend `kantrip ping` to cover authenticated profiles as those transports are
   implemented.
-- Extend the current plain Schema Registry integration for Confluent console
-  clients, kcat, and Kaskade 5 to authenticated connections and Apicurio
-  endpoints.
+- Extend the current Confluent and native Apicurio registry integrations to
+  authenticated and TLS-secured connections.
 - Add OAuth support, including the generic client-credentials flow and Strimzi
   callback integration.
 
@@ -49,7 +48,6 @@ documentation together.
 
 Early example configurations included a top-level `version: 1` field and schema
 sections for capabilities that were not implemented. The current alpha schema
-rejects `version`, `defaults`, and unsupported Kafka security fields. Remove
-those fields and recreate affected Kafka connections as plaintext profiles with
-`kantrip add` when convenient. Plain, unauthenticated `schemaRegistry` sections
-now remain valid.
+rejects `version`, `defaults`, and unsupported security fields. Remove those
+fields and recreate affected Kafka and registry connections as plaintext
+profiles with `kantrip add` when convenient.

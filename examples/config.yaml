@@ -10,7 +10,20 @@ profiles:
       transport: plaintext
       auth:
         type: none
-    schemaRegistry:
-      url: http://localhost:8081
+    registry:
+      provider: confluent
+      schema.registry.url: http://localhost:8081
+  local-apicurio:
+    id: 018f8f13-7c21-7cee-8000-000000000002
+    description: Local development with native Apicurio
+    labels:
+      environment: local
+    kafka:
+      bootstrapServers:
+        - localhost:9092
+      transport: plaintext
       auth:
         type: none
+    registry:
+      provider: apicurio
+      apicurio.registry.url: http://localhost:8082/apis/registry/v3

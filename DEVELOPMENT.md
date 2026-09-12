@@ -110,31 +110,78 @@ Endpoints are Kafka `localhost:9092`, Confluent Schema Registry
 `http://localhost:8082/apis/registry/v3`. Versions live in `sandbox/.env`.
 
 With the sandbox running and the supported clients installed locally, run the
-adapter smoke checks:
+basic Confluent adapter smoke check:
 
 ```bash
 uv run --locked python -m sandbox
-uv run --locked python -m sandbox \
-  --shell bash --shell zsh --shell fish
-uv run --locked python -m sandbox my-topic \
-  --profile sandbox --bootstrap-servers localhost:9092 --keep-topic
-uv run --locked python -m sandbox my-apicurio-topic \
-  --profile sandbox-apicurio \
-  --schema-registry-url http://localhost:8082/apis/ccompat/v7
 ```
 
-The smoke run checks Kafka and registry connectivity; topic creation, listing,
-production, consumption, groups, configs, ACLs, and broker APIs; all six registry
-console adapters; kcat; Kaskade; and cleanup. It requires each Kafka command
-group and all six Confluent registry commands. Colored terminals animate running
-steps; plain output uses stable status labels.
+This creates an isolated temporary `sandbox` profile for Kafka at
+`localhost:9092` and Confluent Schema Registry at `http://localhost:8081`. It
+creates a randomly named topic; checks Kafka and registry connectivity; tests
+topic creation and listing, production, consumption, groups, configs, ACLs,
+broker APIs, kcat, Kaskade, and all six Confluent registry console adapters; and
+then deletes the topic and temporary profile.
 
-Pass Apicurio's Confluent-compatible URL as shown above to run the same adapter
-workflow against Apicurio instead.
+Add interactive-shell checks to the same Confluent workflow with:
 
-Repeat `--shell` to test installed interactive shells after direct commands. The
-three-shell example verifies Bash, Zsh, and Fish with PTYs, profile visibility,
-path restoration, and installed adapters.
+```bash
+uv run --locked python -m sandbox \
+  --shell bash --shell zsh --shell fish
+```
+
+After the direct adapter checks, this opens an isolated Kantrip session in each
+requested shell and repeats the installed adapter probes through the generated
+session shims. Repeating `--shell` verifies Bash, Zsh, and Fish independently,
+including profile visibility and connection-override protection.
+
+Use an explicit topic and connection target when diagnosing a sandbox or when
+you want to inspect the smoke topic afterward:
+
+```bash
+uv run --locked python -m sandbox my-topic \
+  --profile sandbox --bootstrap-servers localhost:9092 --keep-topic
+```
+
+`my-topic` replaces the random topic name. `--profile` controls the temporary
+Kantrip profile name, `--bootstrap-servers` selects the Kafka brokers, and
+`--keep-topic` skips topic deletion. This command still uses the default
+Confluent provider and `http://localhost:8081` registry URL.
+
+Test Apicurio's Confluent compatibility API with:
+
+```bash
+uv run --locked python -m sandbox my-apicurio-topic \
+  --profile sandbox-apicurio-ccompat \
+  --registry-provider confluent \
+  --registry-url http://localhost:8082/apis/ccompat/v7
+```
+
+This deliberately keeps `provider=confluent`, so Kantrip treats the Apicurio
+endpoint as a Confluent-compatible Schema Registry. The smoke check exercises
+the Confluent console adapters, kcat, and Kaskade with Confluent framing. The
+topic is deleted because `--keep-topic` is not present.
+
+Test Apicurio's native Core Registry API v3 integration with:
+
+```bash
+uv run --locked python -m sandbox my-apicurio-native-topic \
+  --profile sandbox-apicurio-native \
+  --registry-provider apicurio \
+  --registry-url http://localhost:8082/apis/registry/v3
+```
+
+This pings the native `/search/artifacts` API and verifies that Kaskade receives
+the Apicurio provider and URL. It skips the six Confluent registry console
+probes, which cannot read native Apicurio framing, while retaining the generic
+Kafka and kcat metadata checks. This command validates the native integration
+configuration; use the native Apicurio workflow below to decode records produced
+with Apicurio's default `contentId` framing. Only Kaskade 5+ supports this native
+profile.
+
+All commands animate running steps in colored terminals and use stable status
+labels in plain output. Unless `--keep-topic` is supplied, each command deletes
+its smoke topic even when a later check fails.
 
 The smoke script is also a pre-commit hook. Keep the sandbox running when making
 commits; this remains a local integration check rather than part of the offline
@@ -159,7 +206,7 @@ two records, and consume exactly those records:
 ```bash
 uv run kantrip add sandbox \
   --bootstrap-servers localhost:9092 \
-  --schema-registry-url http://localhost:8081
+  --registry-url http://localhost:8081
 
 uv run kantrip exec sandbox -- kafka-topics --create \
   --topic kantrip-development --partitions 1 --replication-factor 1
@@ -223,6 +270,32 @@ uv run kantrip exec sandbox -- kaskade consumer \
 ```
 
 Change `--topic` to inspect the JSON Schema or Protobuf topics.
+
+### Native Apicurio adapter workflow
+
+Create a separate profile for the native Core Registry API v3 endpoint:
+
+```bash
+uv run kantrip add sandbox-apicurio \
+  --bootstrap-servers localhost:9092 \
+  --registry-provider apicurio \
+  --registry-url http://localhost:8082/apis/registry/v3
+
+uv run kantrip ping sandbox-apicurio
+```
+
+After producing records with an Apicurio serializer in a native-format topic:
+
+```bash
+uv run kantrip exec sandbox-apicurio -- kaskade consumer \
+  --topic your-native-apicurio-topic --earliest -v registry
+```
+
+Kaskade 5+ can decode native Apicurio Avro, JSON Schema, and Protobuf records.
+The producing serializers must use Apicurio's default `contentId` framing.
+Confluent console clients and kcat do not accept this profile; configure a
+second profile with provider `confluent` and the `/apis/ccompat/v7` endpoint for
+those clients.
 
 Other adapter checks:
 

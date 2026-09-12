@@ -1,4 +1,4 @@
-"""Check whether a profile can reach a Kafka cluster."""
+"""Check whether a profile can reach its Kafka cluster and registry."""
 
 from __future__ import annotations
 
@@ -12,7 +12,12 @@ from urllib.request import Request, urlopen
 from confluent_kafka import KafkaException
 from confluent_kafka.admin import AdminClient
 
-from kantrip.schema_registry import SchemaRegistryProfileError, plain_schema_registry_url
+from kantrip.registry import (
+    RegistryConnection,
+    RegistryProfileError,
+    RegistryProvider,
+    plain_registry_connection,
+)
 
 
 class PingError(ConnectionError):
@@ -20,46 +25,82 @@ class PingError(ConnectionError):
 
 
 @dataclass(frozen=True)
+class RegistryPingResult:
+    """Provider-specific registry metadata returned by a connectivity check."""
+
+    provider: RegistryProvider
+    count: int
+
+
+@dataclass(frozen=True)
 class PingResult:
-    """Metadata returned by a successful Kafka connectivity check."""
+    """Metadata returned by a successful profile connectivity check."""
 
     broker_count: int
-    schema_registry_subject_count: int | None = None
+    registry: RegistryPingResult | None = None
 
 
 def ping_profile(profile: Mapping[str, Any], *, timeout: float = 5.0) -> PingResult:
-    """Check Kafka metadata and an optional plain Schema Registry connection."""
+    """Check Kafka metadata and an optional plaintext registry connection."""
     try:
-        registry_url = plain_schema_registry_url(profile)
-    except SchemaRegistryProfileError as error:
+        registry = plain_registry_connection(profile)
+    except RegistryProfileError as error:
         raise PingError(str(error)) from error
     try:
         client = AdminClient(_client_configuration(profile, timeout))
         metadata = client.list_topics(timeout=timeout)
     except KafkaException as error:
         raise PingError("the Kafka cluster did not return metadata") from error
-    subject_count = (
-        _schema_registry_subject_count(registry_url, timeout) if registry_url is not None else None
-    )
-    return PingResult(
-        broker_count=len(metadata.brokers),
-        schema_registry_subject_count=subject_count,
-    )
+    registry_result = _registry_metadata(registry, timeout) if registry is not None else None
+    return PingResult(broker_count=len(metadata.brokers), registry=registry_result)
 
 
-def _schema_registry_subject_count(url: str, timeout: float) -> int:
-    request = Request(
+def _registry_metadata(connection: RegistryConnection, timeout: float) -> RegistryPingResult:
+    if connection.provider == "apicurio":
+        return RegistryPingResult("apicurio", _apicurio_artifact_count(connection.url, timeout))
+    return RegistryPingResult("confluent", _confluent_subject_count(connection.url, timeout))
+
+
+def _confluent_subject_count(url: str, timeout: float) -> int:
+    body = _registry_json(
         f"{url.rstrip('/')}/subjects",
-        headers={"Accept": "application/vnd.schemaregistry.v1+json"},
+        timeout,
+        "Confluent Schema Registry",
+        "application/vnd.schemaregistry.v1+json",
     )
+    if not isinstance(body, list) or not all(isinstance(subject, str) for subject in body):
+        raise PingError("the Confluent Schema Registry returned an invalid subjects response")
+    return len(body)
+
+
+def _apicurio_artifact_count(url: str, timeout: float) -> int:
+    body = _registry_json(
+        f"{url.rstrip('/')}/search/artifacts?limit=1",
+        timeout,
+        "Apicurio Registry",
+        "application/json",
+    )
+    if not isinstance(body, dict):
+        raise PingError("the Apicurio Registry returned an invalid artifact search response")
+    count = body.get("count")
+    artifacts = body.get("artifacts")
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or not isinstance(artifacts, list)
+    ):
+        raise PingError("the Apicurio Registry returned an invalid artifact search response")
+    return count
+
+
+def _registry_json(url: str, timeout: float, name: str, accept: str) -> object:
+    request = Request(url, headers={"Accept": accept})
     try:
         with urlopen(request, timeout=timeout) as response:
-            subjects = json.loads(response.read())
+            return json.loads(response.read())
     except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError) as error:
-        raise PingError("the Schema Registry did not return its subjects") from error
-    if not isinstance(subjects, list) or not all(isinstance(subject, str) for subject in subjects):
-        raise PingError("the Schema Registry returned an invalid subjects response")
-    return len(subjects)
+        raise PingError(f"the {name} did not return registry metadata") from error
 
 
 def _client_configuration(profile: Mapping[str, Any], timeout: float) -> dict[str, Any]:
@@ -81,4 +122,4 @@ def _client_configuration(profile: Mapping[str, Any], timeout: float) -> dict[st
     return properties
 
 
-__all__ = ["PingError", "PingResult", "ping_profile"]
+__all__ = ["PingError", "PingResult", "RegistryPingResult", "ping_profile"]

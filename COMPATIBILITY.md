@@ -19,7 +19,7 @@ adapter executables after startup-time aliases, functions, abbreviations, and
 `PATH` changes. When `SHELL` is unset, an installed Bash is used. Other shells
 are not supported.
 
-| Supported executable(s) | Distribution | CLI version | Kafka behavior | Schema Registry support | Notes |
+| Supported executable(s) | Distribution | CLI version | Kafka behavior | Registry support | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `kafka-console-consumer.sh` / `kafka-console-consumer` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Consume records | No | Injects `--bootstrap-server` and `--consumer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
 | `kafka-console-producer.sh` / `kafka-console-producer` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Produce records | No | Injects `--bootstrap-server` and `--producer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
@@ -28,25 +28,25 @@ are not supported.
 | `kafka-configs.sh` / `kafka-configs` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Inspect and alter supported dynamic configurations | No | Injects `--bootstrap-server` and `--command-config`; broker authorization still applies. |
 | `kafka-acls.sh` / `kafka-acls` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | List, add, and remove ACLs | No | Injects `--bootstrap-server` and `--command-config`; requires a configured authorizer and an authorized principal. |
 | `kafka-broker-api-versions.sh` / `kafka-broker-api-versions` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Inspect broker protocol versions | No | Injects `--bootstrap-server` and `--command-config`. |
-| `kafka-avro-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Avro records | Yes, profile-aware | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-avro-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Avro records | Yes, profile-aware | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kafka-json-schema-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume JSON Schema records | Yes, profile-aware | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-json-schema-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce JSON Schema records | Yes, profile-aware | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Yes, profile-aware | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Yes, profile-aware | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kcat` / `kafkacat` | kcat | kcat 1.7+ | Metadata, produce, and consume | Yes, profile-aware for Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
-| `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Yes, profile-aware for Avro, JSON Schema, and Protobuf | Uses a private INI file for `admin` and `consumer`; registry deserializers select a second private file containing `[registry]`. Explicit Kafka, config-file, and registry connection options are rejected. |
+| `kafka-avro-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Avro records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-avro-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Avro records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-json-schema-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume JSON Schema records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-json-schema-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kcat` / `kafkacat` | kcat | kcat 1.7+ | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
+| `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. Explicit Kafka, config-file, and registry connection options are rejected. |
 
-“Profile-aware” means Kantrip maps the selected profile into the command. kcat
-supports Schema Registry-backed Avro decoding. Kaskade 5 supports registry-backed
-Avro, JSON Schema, and Protobuf decoding.
+“Profile-aware” means Kantrip maps the selected profile into the command. The
+Confluent console clients and kcat require `provider: confluent`. This includes
+Apicurio's `/apis/ccompat/v7` endpoint, which uses Confluent framing. Native
+Apicurio `/apis/registry/v3` profiles work only with Kaskade 5 registry
+deserializers and use Apicurio's default `contentId` framing.
 
-Schema-aware Confluent console commands, kcat Avro deserializers, and Kaskade 5
-registry deserializers require a profile `schemaRegistry` connection using an
-`http://` URL and `auth.type: none`. Kantrip rejects missing, authenticated, or
-TLS-secured registry settings before starting those client modes. It also
-rejects caller-supplied connection overrides. Bash, Zsh, and Fish sessions apply
-the same checks through temporary adapters.
+Every registry connection uses an `http://` URL. Kantrip rejects missing,
+encrypted, authenticated, provider-incompatible, and caller-supplied connection
+settings before starting the affected client mode. Bash, Zsh, and Fish sessions
+apply the same checks through temporary adapters.
 
 ## Installing supported commands
 

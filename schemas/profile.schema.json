@@ -73,39 +73,41 @@
         }
       }
     },
-    "schemaRegistry": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["url", "auth"],
-      "properties": {
-        "url": {
-          "type": "string",
-          "format": "uri",
-          "pattern": "^https?://"
-        },
-        "transport": {
-          "enum": ["plaintext", "tls"]
-        },
-        "auth": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/noneAuth"
+    "registryUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^http://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
+    },
+    "registry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema.registry.url"],
+          "properties": {
+            "provider": {
+              "const": "confluent",
+              "default": "confluent"
             },
-            {
-              "type": "object",
-              "required": ["type"],
-              "properties": {
-                "type": {
-                  "enum": ["basic", "bearer"]
-                }
-              }
+            "schema.registry.url": {
+              "$ref": "#/$defs/registryUrl"
             }
-          ]
+          }
         },
-        "tls": {
-          "type": ["object", "boolean"]
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "apicurio.registry.url"],
+          "properties": {
+            "provider": {
+              "const": "apicurio"
+            },
+            "apicurio.registry.url": {
+              "$ref": "#/$defs/registryUrl"
+            }
+          }
         }
-      }
+      ]
     },
     "profile": {
       "type": "object",
@@ -131,8 +133,8 @@
         "kafka": {
           "$ref": "#/$defs/kafka"
         },
-        "schemaRegistry": {
-          "$ref": "#/$defs/schemaRegistry"
+        "registry": {
+          "$ref": "#/$defs/registry"
         }
       }
     }
