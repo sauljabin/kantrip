@@ -10,8 +10,6 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES, KCAT_EXECUTABLES
 from kantrip.config import add_profile
 from scripts import run_terminal
@@ -89,13 +87,12 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             fake_bin.mkdir()
             log_path = root / f"{shell_name}.jsonl"
             config_path = root / "config.yaml"
-            add_profile("contract", config_path, bootstrap_servers=("contract.invalid:9092",))
-            configuration = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            configuration["profiles"]["contract"]["schemaRegistry"] = {
-                "url": "http://registry.invalid:8081",
-                "auth": {"type": "none"},
-            }
-            config_path.write_text(yaml.safe_dump(configuration, sort_keys=False), encoding="utf-8")
+            add_profile(
+                "contract",
+                config_path,
+                bootstrap_servers=("contract.invalid:9092",),
+                registry_url="http://registry.invalid:8081",
+            )
             _write_fake_clients(fake_bin)
             isolated_shell = _isolate_shell(shell_name, shell, root)
             environment = _contract_environment(
@@ -180,7 +177,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
                 if record["name"] == "kaskade" and "registry" in record["argv"]:
                     self.assertIn(
-                        "\n[registry]\nurl=http://registry.invalid:8081\n",
+                        "\n[registry]\nprovider=confluent\nurl=http://registry.invalid:8081\n",
                         record["config_contents"],
                     )
             producers = [

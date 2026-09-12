@@ -119,18 +119,24 @@ uv run --locked python -m sandbox \
 uv run --locked python -m sandbox my-topic \
   --profile sandbox --bootstrap-servers localhost:9092 --keep-topic
 uv run --locked python -m sandbox my-apicurio-topic \
-  --profile sandbox-apicurio \
-  --schema-registry-url http://localhost:8082/apis/ccompat/v7
+  --profile sandbox-apicurio-ccompat \
+  --registry-provider confluent \
+  --registry-url http://localhost:8082/apis/ccompat/v7
+uv run --locked python -m sandbox my-apicurio-native-topic \
+  --profile sandbox-apicurio-native \
+  --registry-provider apicurio \
+  --registry-url http://localhost:8082/apis/registry/v3
 ```
 
 The smoke run checks Kafka and registry connectivity; topic creation, listing,
-production, consumption, groups, configs, ACLs, and broker APIs; all six registry
-console adapters; kcat; Kaskade; and cleanup. It requires each Kafka command
-group and all six Confluent registry commands. Colored terminals animate running
-steps; plain output uses stable status labels.
+production, consumption, groups, configs, ACLs, and broker APIs; kcat; Kaskade;
+and cleanup. Confluent mode also checks all six registry console adapters and
+requires those commands. Native Apicurio mode checks its Core API and Kaskade's
+registry configuration without requiring the Confluent registry commands.
+Colored terminals animate running steps; plain output uses stable status labels.
 
-Pass Apicurio's Confluent-compatible URL as shown above to run the same adapter
-workflow against Apicurio instead.
+Apicurio's Confluent-compatible endpoint remains a Confluent-provider profile.
+Only Kaskade 5+ supports a native Apicurio-provider profile.
 
 Repeat `--shell` to test installed interactive shells after direct commands. The
 three-shell example verifies Bash, Zsh, and Fish with PTYs, profile visibility,
@@ -159,7 +165,7 @@ two records, and consume exactly those records:
 ```bash
 uv run kantrip add sandbox \
   --bootstrap-servers localhost:9092 \
-  --schema-registry-url http://localhost:8081
+  --registry-url http://localhost:8081
 
 uv run kantrip exec sandbox -- kafka-topics --create \
   --topic kantrip-development --partitions 1 --replication-factor 1
@@ -223,6 +229,32 @@ uv run kantrip exec sandbox -- kaskade consumer \
 ```
 
 Change `--topic` to inspect the JSON Schema or Protobuf topics.
+
+### Native Apicurio adapter workflow
+
+Create a separate profile for the native Core Registry API v3 endpoint:
+
+```bash
+uv run kantrip add sandbox-apicurio \
+  --bootstrap-servers localhost:9092 \
+  --registry-provider apicurio \
+  --registry-url http://localhost:8082/apis/registry/v3
+
+uv run kantrip ping sandbox-apicurio
+```
+
+After producing records with an Apicurio serializer in a native-format topic:
+
+```bash
+uv run kantrip exec sandbox-apicurio -- kaskade consumer \
+  --topic your-native-apicurio-topic --earliest -v registry
+```
+
+Kaskade 5+ can decode native Apicurio Avro, JSON Schema, and Protobuf records.
+The producing serializers must use Apicurio's default `contentId` framing.
+Confluent console clients and kcat do not accept this profile; configure a
+second profile with provider `confluent` and the `/apis/ccompat/v7` endpoint for
+those clients.
 
 Other adapter checks:
 

@@ -12,7 +12,7 @@
 
 Kantrip securely manages plaintext Kafka profiles for kcat, the official Kafka
 CLIs, Kaskade, and compatible applications. This pre-release CLI validates and
-displays profiles, opens scoped sessions, and checks Kafka and Schema Registry
+displays profiles, opens scoped sessions, and checks Kafka and registry
 connectivity.
 
 ## Features
@@ -38,7 +38,8 @@ connectivity.
   Confluent Platform commands
 - Profile-aware Avro, JSON Schema, and Protobuf console clients for plain
   Confluent Schema Registry connections
-- Private Kaskade 5 configuration for admin, consumer, and registry decoding
+- Private Kaskade 5 configuration for admin, consumer, Confluent Schema
+  Registry, and native Apicurio Registry decoding
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Child exit-status preservation and automatic session cleanup
 
@@ -54,7 +55,7 @@ The MVP roadmap has three stages:
 
 1. Harden profile sessions and add local credential-store integration.
 2. Add TLS and authenticated Kafka profiles and adapters.
-3. Add authenticated Schema Registry, OAuth integration, and authenticated
+3. Add authenticated registry connections, OAuth integration, and authenticated
    connectivity checks.
 
 See the [MVP roadmap](MVP.md) for scope and non-goals.
@@ -92,8 +93,9 @@ exit
 
 `add` creates `~/.config/kantrip/config.yaml` and defaults to `localhost:9092`.
 Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a description, and
-`--schema-registry-url http://HOST:PORT` for a plain registry. Remove profiles
-with `kantrip remove PROFILE`; `list` shows both endpoints.
+`--registry-url http://HOST:PORT` for a plain Confluent Schema Registry. Add
+`--registry-provider apicurio` for a native Apicurio Core Registry API v3 URL.
+Remove profiles with `kantrip remove PROFILE`; `list` shows both endpoints.
 
 ## Command compatibility
 

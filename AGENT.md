@@ -2,6 +2,8 @@
 
 ## Engineering Contract
 
+- Write all source code, identifiers, comments, tests, fixtures, CLI text, and
+  documentation in English, regardless of the language used in conversations.
 - When a durable convention changes, update this file and every affected guide,
   schema, fixture, example, template, and command. Replace obsolete or duplicate
   guidance.
@@ -43,20 +45,28 @@
   equivalents. All receive `--bootstrap-server`; consumers/producers receive
   their config option and admin tools receive `--command-config`, using private
   Java properties.
+- Profiles use one optional `registry` object. Its provider defaults to
+  `confluent`; canonical generated profiles persist it explicitly. Confluent
+  uses the official `schema.registry.url` serializer/deserializer property and native Apicurio
+  uses `apicurio.registry.url`. The providers are mutually exclusive and only
+  plain `http://` URLs are supported.
 - Confluent's Avro, JSON Schema, and Protobuf console producers and consumers
   are unsuffixed. They receive the matching Kafka producer/consumer config file
-  and the profile's plain Schema Registry URL; connection overrides are rejected.
+  and a Confluent-compatible `schema.registry.url`; connection overrides and
+  native Apicurio profiles are rejected.
 - Kaskade 5 `admin` and `consumer` receive a private INI file through
   `--config-file`; registry deserializers select a second private file with a
-  `[registry]` section. Do not assume a Kaskade environment variable until
-  Kaskade implements that contract.
+  provider-specific `[registry]` section. Kaskade alone supports native
+  Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
+  environment variable until Kaskade implements that contract.
 - Bash, Zsh, and Fish sessions preserve startup files and history, neutralize
   adapter shadows, and restore the private temporary shim path. Never install
   persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
-- `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata
-  and checks `/subjects` when Schema Registry is configured. Both use a bounded
-  timeout and do not depend on an installed external Kafka CLI.
+- `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata.
+  It checks `/subjects` for Confluent-compatible registries and
+  `/search/artifacts` for native Apicurio. All checks use a bounded timeout and
+  do not depend on an installed external Kafka CLI.
 
 ## Sensitive Values and Output
 

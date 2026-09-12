@@ -31,7 +31,7 @@ from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
 
 DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
-DEFAULT_SCHEMA_REGISTRY_URL = "http://localhost:8081"
+DEFAULT_REGISTRY_URL = "http://localhost:8081"
 KAFKA_COMMANDS = {
     "topics": KAFKA_TOPICS_EXECUTABLES,
     "producer": KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
@@ -61,10 +61,17 @@ class SmokeFailure(RuntimeError):
 )
 @cloup.option("--keep-topic", is_flag=True, help="Leave the smoke topic in the cluster.")
 @cloup.option(
-    "--schema-registry-url",
-    default=DEFAULT_SCHEMA_REGISTRY_URL,
+    "--registry-provider",
+    type=cloup.Choice(("confluent", "apicurio")),
+    default="confluent",
     show_default=True,
-    help="Sandbox Schema Registry URL.",
+    help="Sandbox registry provider.",
+)
+@cloup.option(
+    "--registry-url",
+    default=DEFAULT_REGISTRY_URL,
+    show_default=True,
+    help="Sandbox registry URL.",
 )
 @cloup.option("--no-color", is_flag=True, help="Disable styled terminal output.")
 @cloup.option(
@@ -79,7 +86,8 @@ def main(
     profile: str,
     bootstrap_servers: str,
     keep_topic: bool,
-    schema_registry_url: str,
+    registry_provider: str,
+    registry_url: str,
     no_color: bool,
     shells: tuple[str, ...],
 ) -> None:
@@ -97,7 +105,8 @@ def main(
             bootstrap_servers=tuple(server.strip() for server in bootstrap_servers.split(",")),
             topic=smoke_topic,
             keep_topic=keep_topic,
-            schema_registry_url=schema_registry_url,
+            registry_provider=registry_provider,
+            registry_url=registry_url,
             environment=environment,
             shells=shells,
         )
@@ -112,7 +121,8 @@ def smoke(
     bootstrap_servers: Sequence[str],
     topic: str,
     keep_topic: bool,
-    schema_registry_url: str,
+    registry_provider: str,
+    registry_url: str,
     environment: Mapping[str, str],
     shells: Sequence[str] = (),
 ) -> None:
@@ -122,6 +132,8 @@ def smoke(
         for adapter, executables in KAFKA_COMMANDS.items()
     }
     for adapter, executables in installed.items():
+        if adapter == "Schema Registry console" and registry_provider == "apicurio":
+            continue
         _require_command(f"Kafka {adapter} CLI", bool(executables))
     kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
     _require_command("kcat", "kcat" in kcat_executables)
@@ -135,12 +147,13 @@ def smoke(
             console,
             profile,
             bootstrap_servers,
-            schema_registry_url,
+            registry_provider,
+            registry_url,
             smoke_environment,
         )
         _check(
             console,
-            "check Kafka and Schema Registry connectivity",
+            "check Kafka and registry connectivity",
             [sys.executable, "-m", "kantrip.cli", "ping", profile],
             smoke_environment,
         )
@@ -164,13 +177,14 @@ def smoke(
                 smoke_environment,
             )
             created = True
-            for executable in installed["Schema Registry console"]:
-                _check(
-                    console,
-                    f"validate the Schema Registry adapter with {executable}",
-                    _kantrip(profile, *_schema_registry_probe(executable)),
-                    smoke_environment,
-                )
+            if registry_provider == "confluent":
+                for executable in installed["Schema Registry console"]:
+                    _check(
+                        console,
+                        f"validate the Schema Registry adapter with {executable}",
+                        _kantrip(profile, *_schema_registry_probe(executable)),
+                        smoke_environment,
+                    )
             for executable in installed["topics"]:
                 output = _check(
                     console,
@@ -246,6 +260,12 @@ def smoke(
                 _kantrip(profile, "kaskade", "admin", "--help"),
                 smoke_environment,
             )
+            _check(
+                console,
+                "validate the Kaskade registry adapter",
+                _kantrip(profile, "kaskade", "consumer", "-v", "registry", "--help"),
+                smoke_environment,
+            )
             for shell_name, shell in resolved_shells:
                 _check_shell(
                     console,
@@ -255,6 +275,7 @@ def smoke(
                     topic=topic,
                     installed=installed,
                     kcat_executables=kcat_executables,
+                    registry_provider=registry_provider,
                     environment=smoke_environment,
                 )
             console.print(
@@ -304,6 +325,7 @@ def _check_shell(
     topic: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
+    registry_provider: str,
     environment: Mapping[str, str],
 ) -> None:
     label = f"exercise adapters in {shell_name}"
@@ -314,6 +336,7 @@ def _check_shell(
         topic=topic,
         installed=installed,
         kcat_executables=kcat_executables,
+        registry_provider=registry_provider,
     )
     markers = tuple(f"__KANTRIP_SMOKE_{index}__" for index in range(len(commands)))
     checked = [
@@ -345,6 +368,7 @@ def _shell_commands(
     topic: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
+    registry_provider: str,
 ) -> list[str]:
     quoted_topic = quote_shell_argument(shell_name, topic)
     quoted_python = quote_shell_argument(shell_name, sys.executable)
@@ -365,12 +389,19 @@ def _shell_commands(
     )
     commands.extend(f"{executable} --version" for executable in installed["acls"])
     commands.extend(executable for executable in installed["broker API versions"])
-    commands.extend(
-        " ".join(_schema_registry_probe(executable))
-        for executable in installed["Schema Registry console"]
-    )
+    if registry_provider == "confluent":
+        commands.extend(
+            " ".join(_schema_registry_probe(executable))
+            for executable in installed["Schema Registry console"]
+        )
     commands.extend(f"{executable} -L" for executable in kcat_executables)
-    commands.extend(("kaskade admin --help", "kaskade consumer --help"))
+    commands.extend(
+        (
+            "kaskade admin --help",
+            "kaskade consumer --help",
+            "kaskade consumer -v registry --help",
+        )
+    )
     return commands
 
 
@@ -378,7 +409,8 @@ def _add_profile(
     console: Console,
     profile: str,
     bootstrap_servers: Sequence[str],
-    schema_registry_url: str,
+    registry_provider: str,
+    registry_url: str,
     environment: Mapping[str, str],
 ) -> None:
     command = [
@@ -390,7 +422,7 @@ def _add_profile(
         "--bootstrap-servers",
         ",".join(bootstrap_servers),
     ]
-    command.extend(("--schema-registry-url", schema_registry_url))
+    command.extend(("--registry-provider", registry_provider, "--registry-url", registry_url))
     _check(console, "prepare an isolated sandbox profile", command, environment)
 
 

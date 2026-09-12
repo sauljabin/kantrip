@@ -5,7 +5,13 @@ from urllib.error import URLError
 
 from confluent_kafka import KafkaError, KafkaException
 
-from kantrip.ping import PingError, PingResult, _client_configuration, ping_profile
+from kantrip.ping import (
+    PingError,
+    PingResult,
+    RegistryPingResult,
+    _client_configuration,
+    ping_profile,
+)
 
 
 class TestPing(unittest.TestCase):
@@ -70,16 +76,16 @@ class TestPing(unittest.TestCase):
         ):
             ping_profile(profile)
 
-    def test_profile_checks_configured_schema_registry_subjects(self) -> None:
+    def test_profile_checks_configured_confluent_registry_subjects(self) -> None:
         profile = {
             "kafka": {
                 "bootstrapServers": ["localhost:9092"],
                 "transport": "plaintext",
                 "auth": {"type": "none"},
             },
-            "schemaRegistry": {
-                "url": "http://registry.invalid:8081/",
-                "auth": {"type": "none"},
+            "registry": {
+                "provider": "confluent",
+                "schema.registry.url": "http://registry.invalid:8081/",
             },
         }
         admin = Mock()
@@ -93,21 +99,50 @@ class TestPing(unittest.TestCase):
         ):
             result = ping_profile(profile, timeout=1.25)
 
-        self.assertEqual(PingResult(1, schema_registry_subject_count=2), result)
+        self.assertEqual(PingResult(1, RegistryPingResult("confluent", 2)), result)
         request = open_registry.call_args.args[0]
         self.assertEqual("http://registry.invalid:8081/subjects", request.full_url)
         self.assertEqual(1.25, open_registry.call_args.kwargs["timeout"])
 
-    def test_profile_reports_schema_registry_connectivity_failure(self) -> None:
+    def test_profile_checks_configured_apicurio_registry_artifacts(self) -> None:
         profile = {
             "kafka": {
                 "bootstrapServers": ["localhost:9092"],
                 "transport": "plaintext",
                 "auth": {"type": "none"},
             },
-            "schemaRegistry": {
-                "url": "http://registry.invalid:8081",
+            "registry": {
+                "provider": "apicurio",
+                "apicurio.registry.url": "http://registry.invalid/apis/registry/v3/",
+            },
+        }
+        admin = Mock()
+        admin.list_topics.return_value = SimpleNamespace(brokers={1: object()})
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"artifacts": [], "count": 7}'
+
+        with (
+            patch("kantrip.ping.AdminClient", return_value=admin),
+            patch("kantrip.ping.urlopen", return_value=response) as open_registry,
+        ):
+            result = ping_profile(profile, timeout=1.25)
+
+        self.assertEqual(PingResult(1, RegistryPingResult("apicurio", 7)), result)
+        request = open_registry.call_args.args[0]
+        self.assertEqual(
+            "http://registry.invalid/apis/registry/v3/search/artifacts?limit=1",
+            request.full_url,
+        )
+
+    def test_profile_reports_registry_connectivity_failure(self) -> None:
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["localhost:9092"],
+                "transport": "plaintext",
                 "auth": {"type": "none"},
+            },
+            "registry": {
+                "schema.registry.url": "http://registry.invalid:8081",
             },
         }
         admin = Mock()
@@ -116,7 +151,31 @@ class TestPing(unittest.TestCase):
         with (
             patch("kantrip.ping.AdminClient", return_value=admin),
             patch("kantrip.ping.urlopen", side_effect=URLError("unavailable")),
-            self.assertRaisesRegex(PingError, "Schema Registry did not return"),
+            self.assertRaisesRegex(PingError, "Confluent Schema Registry did not return"),
+        ):
+            ping_profile(profile)
+
+    def test_profile_rejects_invalid_apicurio_artifact_metadata(self) -> None:
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["localhost:9092"],
+                "transport": "plaintext",
+                "auth": {"type": "none"},
+            },
+            "registry": {
+                "provider": "apicurio",
+                "apicurio.registry.url": "http://registry.invalid/apis/registry/v3",
+            },
+        }
+        admin = Mock()
+        admin.list_topics.return_value = SimpleNamespace(brokers={1: object()})
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"artifacts": [], "count": true}'
+
+        with (
+            patch("kantrip.ping.AdminClient", return_value=admin),
+            patch("kantrip.ping.urlopen", return_value=response),
+            self.assertRaisesRegex(PingError, "invalid artifact search response"),
         ):
             ping_profile(profile)
 

@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from kantrip import APP_VERSION
 from kantrip.cli import cli
 from kantrip.config import load_configuration
-from kantrip.ping import PingError, PingResult
+from kantrip.ping import PingError, PingResult, RegistryPingResult
 
 
 class TestCli(unittest.TestCase):
@@ -43,7 +43,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("Profile", listed.output)
         self.assertIn("Description", listed.output)
         self.assertIn("Kafka", listed.output)
-        self.assertIn("Schema Registry", listed.output)
+        self.assertIn("Registry", listed.output)
         self.assertIn("local", listed.output)
         self.assertIn("Local development", listed.output)
         self.assertIn("localhost:8081", listed.output)
@@ -64,7 +64,7 @@ class TestCli(unittest.TestCase):
                     "broker-1.example.com:9092,broker-2.example.com:9092",
                     "-d",
                     "Development cluster",
-                    "--schema-registry-url",
+                    "--registry-url",
                     "http://registry.example.com:8081",
                 ],
                 env=environment,
@@ -82,7 +82,13 @@ class TestCli(unittest.TestCase):
             ["broker-1.example.com:9092", "broker-2.example.com:9092"],
             profile["kafka"]["bootstrapServers"],
         )
-        self.assertEqual("http://registry.example.com:8081", profile["schemaRegistry"]["url"])
+        self.assertEqual(
+            {
+                "provider": "confluent",
+                "schema.registry.url": "http://registry.example.com:8081",
+            },
+            profile["registry"],
+        )
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
 
@@ -193,14 +199,17 @@ class TestCli(unittest.TestCase):
         self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
         ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5)
 
-    def test_ping_reports_schema_registry_connectivity(self) -> None:
+    def test_ping_reports_confluent_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
             config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
             environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
-                return_value=PingResult(broker_count=2, schema_registry_subject_count=3),
+                return_value=PingResult(
+                    broker_count=2,
+                    registry=RegistryPingResult(provider="confluent", count=3),
+                ),
             ):
                 result = self.runner.invoke(
                     cli,
@@ -211,7 +220,61 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn("[running] Checking profile 'local'", result.output)
         self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
-        self.assertIn("[passed] Connected to Schema Registry (3 subjects)", result.output)
+        self.assertIn("[passed] Connected to Confluent Schema Registry (3 subjects)", result.output)
+
+    def test_ping_reports_apicurio_registry_connectivity(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                return_value=PingResult(
+                    broker_count=1,
+                    registry=RegistryPingResult(provider="apicurio", count=2),
+                ),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "ping", "local"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("[passed] Connected to Apicurio Registry (2 artifacts)", result.output)
+
+    def test_add_apicurio_requires_and_persists_its_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            environment = {"KANTRIP_CONFIG": str(config_path)}
+            result = self.runner.invoke(
+                cli,
+                [
+                    "add",
+                    "native",
+                    "--registry-provider",
+                    "apicurio",
+                    "--registry-url",
+                    "http://registry.example.com/apis/registry/v3",
+                ],
+                env=environment,
+            )
+
+            profile = load_configuration(config_path).profile("native")
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("apicurio", profile["registry"]["provider"])
+        self.assertIn("apicurio.registry.url", profile["registry"])
+
+    def test_add_rejects_a_registry_provider_without_a_url(self) -> None:
+        result = self.runner.invoke(
+            cli,
+            ["add", "native", "--registry-provider", "apicurio"],
+            env={"KANTRIP_CONFIG": "config.yaml"},
+        )
+
+        self.assertNotEqual(0, result.exit_code)
+        self.assertIn("requires --registry-url", result.output)
 
     def test_ping_exits_nonzero_when_kafka_is_unreachable(self) -> None:
         with self.runner.isolated_filesystem():
@@ -291,10 +354,9 @@ profiles:
 """
 
 _VALID_REGISTRY_CONFIG = _VALID_CONFIG + """\
-    schemaRegistry:
-      url: http://localhost:8081
-      auth:
-        type: none
+    registry:
+      provider: confluent
+      schema.registry.url: http://localhost:8081
 """
 
 

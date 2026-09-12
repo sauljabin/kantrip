@@ -27,9 +27,7 @@ class TestDoctor(unittest.TestCase):
         self.assertTrue(any(message.startswith("kcat: ") for message in messages))
         self.assertTrue(any("Apache Kafka CLI: all 7" in message for message in messages))
         self.assertTrue(any("Schema Registry console: all 6" in message for message in messages))
-        self.assertTrue(
-            any("Schema Registry profiles: 1 profile" in message for message in messages)
-        )
+        self.assertTrue(any("Registry profiles: 1 profile" in message for message in messages))
         verbose_messages = [
             check.message
             for _, checks in report.sections(verbose=True)
@@ -59,7 +57,7 @@ class TestDoctor(unittest.TestCase):
             any("configuration does not match schema" in check.message for check in report.checks)
         )
 
-    def test_unsupported_schema_registry_profile_is_unhealthy(self) -> None:
+    def test_unsupported_registry_profile_is_unhealthy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(
@@ -78,10 +76,7 @@ class TestDoctor(unittest.TestCase):
 
         self.assertFalse(report.healthy)
         self.assertTrue(
-            any(
-                "Schema Registry profile 'local' is not executable" in check.message
-                for check in report.checks
-            )
+            any("configuration does not match schema" in check.message for check in report.checks)
         )
 
     def test_names_a_missing_schema_registry_console_command(self) -> None:
@@ -215,10 +210,9 @@ profiles:
       transport: plaintext
       auth:
         type: none
-    schemaRegistry:
-      url: http://localhost:8081
-      auth:
-        type: none
+    registry:
+      provider: confluent
+      schema.registry.url: http://localhost:8081
 """
 
 

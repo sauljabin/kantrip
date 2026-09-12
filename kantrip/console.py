@@ -14,7 +14,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
-from kantrip.schema_registry import display_schema_registry_url
+from kantrip.registry import display_registry
 
 ARCANA_COLORS = {
     "primary": "#3B82F6",
@@ -92,7 +92,7 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
     table.add_column("Profile", style="secondary", no_wrap=True, min_width=12)
     table.add_column("Description", style="foreground", min_width=12)
     table.add_column("Kafka", style="foreground", overflow="fold")
-    table.add_column("Schema Registry", style="foreground", overflow="fold")
+    table.add_column("Registry", style="foreground", overflow="fold")
     for name, profile in profiles.items():
         kafka = profile.get("kafka", {})
         bootstrap_servers = kafka.get("bootstrapServers", ()) if isinstance(kafka, Mapping) else ()
@@ -100,7 +100,7 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
             name,
             str(profile.get("description") or "-"),
             ",".join(str(server) for server in bootstrap_servers),
-            display_schema_registry_url(profile),
+            display_registry(profile),
         )
     return table
 

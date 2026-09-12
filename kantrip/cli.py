@@ -94,14 +94,20 @@ def _split_bootstrap_servers(
 )
 @cloup.option("-d", "--description", help="Optional profile description.")
 @cloup.option(
-    "--schema-registry-url",
-    help="Optional plain, unauthenticated Schema Registry URL.",
+    "--registry-provider",
+    type=cloup.Choice(("confluent", "apicurio")),
+    help="Registry provider; defaults to confluent when --registry-url is supplied.",
+)
+@cloup.option(
+    "--registry-url",
+    help="Optional plain registry URL.",
 )
 def add_configured_profile(
     profile_name: str,
     bootstrap_servers: tuple[str, ...],
     description: str | None,
-    schema_registry_url: str | None,
+    registry_provider: str | None,
+    registry_url: str | None,
 ) -> None:
     """Add a plaintext profile."""
     try:
@@ -109,7 +115,8 @@ def add_configured_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
             description=description,
-            schema_registry_url=schema_registry_url,
+            registry_provider=registry_provider,
+            registry_url=registry_url,
         )
     except ConfigurationError as error:
         raise click.ClickException(str(error)) from error
@@ -230,7 +237,7 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
 )
 @cloup.pass_context
 def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
-    """Check PROFILE's Kafka and configured Schema Registry connections."""
+    """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
@@ -258,13 +265,19 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
             f"{'s' if result.broker_count != 1 else ''})",
         )
     )
-    if result.schema_registry_subject_count is not None:
+    if result.registry is not None:
+        resource = "artifact" if result.registry.provider == "apicurio" else "subject"
+        product = (
+            "Apicurio Registry"
+            if result.registry.provider == "apicurio"
+            else "Confluent Schema Registry"
+        )
         console.print(
             create_status_text(
                 console,
                 "success",
-                f"Connected to Schema Registry ({result.schema_registry_subject_count} subject"
-                f"{'s' if result.schema_registry_subject_count != 1 else ''})",
+                f"Connected to {product} ({result.registry.count} {resource}"
+                f"{'s' if result.registry.count != 1 else ''})",
             )
         )
 
