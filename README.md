@@ -47,7 +47,8 @@ connectivity.
 
 - Rich-based Arcana theme with semantic colors
 - Clean stdout/stderr separation
-- `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY behavior
+- `NO_COLOR`, `TERM=dumb`, non-TTY behavior, and global or command-local
+  `--no-color`
 
 ## Roadmap
 

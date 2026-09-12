@@ -477,10 +477,24 @@ complete environment or properties.
 Commands write results to stdout and diagnostics to stderr. Styling is disabled
 when:
 
-- `--no-color` is supplied.
+- `--no-color` is supplied globally or after a subcommand.
 - `NO_COLOR` is present in the environment.
 - `TERM=dumb`.
 - The destination stream is not a terminal.
+
+The global and command-local forms are equivalent:
+
+```bash
+kantrip --no-color list
+kantrip list --no-color
+```
+
+For `exec`, `--` ends Kantrip option parsing. Options after it belong to the
+child and pass through unchanged:
+
+```bash
+kantrip exec local -- child-command --no-color
+```
 
 `kantrip list` shows profile endpoints; `kantrip show PROFILE` syntax-highlights
 redacted YAML. Both remain readable without ANSI color.

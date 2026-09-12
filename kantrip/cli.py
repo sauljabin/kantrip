@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import click
 import cloup
@@ -29,6 +30,38 @@ from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
+CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
+
+
+def _configure_consoles(context: click.Context, *, no_color: bool) -> None:
+    """Configure result and diagnostic consoles on the root context."""
+    root_context = context.find_root()
+    obj: dict[str, Any] = root_context.ensure_object(dict)
+    obj["console"] = create_console(no_color=no_color)
+    obj["error_console"] = create_console(
+        stream=sys.stderr,
+        no_color=no_color,
+    )
+
+
+def _apply_local_no_color(context: click.Context, parameter: click.Parameter, value: bool) -> bool:
+    """Disable color before invoking a subcommand when requested locally."""
+    del parameter
+    if value:
+        _configure_consoles(context, no_color=True)
+    return value
+
+
+def local_no_color(function: CommandFunction) -> CommandFunction:
+    """Add the command-local form of Kantrip's global color option."""
+    decorated = cloup.option(
+        "--no-color",
+        is_flag=True,
+        expose_value=False,
+        callback=_apply_local_no_color,
+        help="Disable styled terminal output.",
+    )(function)
+    return decorated
 
 
 @cloup.group(
@@ -45,12 +78,7 @@ EPILOG = "More information at https://github.com/sauljabin/kantrip."
 @cloup.pass_context
 def cli(context: cloup.Context, no_color: bool) -> None:
     """Kantrip securely manages local Kafka profiles for command-line tools and compatible applications."""
-    context.ensure_object(dict)
-    context.obj["console"] = create_console(no_color=no_color)
-    context.obj["error_console"] = create_console(
-        stream=sys.stderr,
-        no_color=no_color,
-    )
+    _configure_consoles(context, no_color=no_color)
 
 
 def console_from_context(context: cloup.Context) -> Console:
@@ -82,6 +110,7 @@ def _split_bootstrap_servers(
 
 
 @cli.command("add")
+@local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
     "-b",
@@ -124,6 +153,7 @@ def add_configured_profile(
 
 
 @cli.command("remove")
+@local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
 def remove_configured_profile(profile_name: str) -> None:
     """Remove a profile."""
@@ -135,6 +165,7 @@ def remove_configured_profile(profile_name: str) -> None:
 
 
 @cli.command("list")
+@local_no_color
 @cloup.pass_context
 def list_profiles(context: cloup.Context) -> None:
     """List configured profiles."""
@@ -147,6 +178,7 @@ def list_profiles(context: cloup.Context) -> None:
 
 
 @cli.command("show")
+@local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.pass_context
 def show_profile(context: cloup.Context, profile_name: str) -> None:
@@ -160,6 +192,7 @@ def show_profile(context: cloup.Context, profile_name: str) -> None:
 
 
 @cli.command("current")
+@local_no_color
 def current_profile() -> None:
     """Show the profile active in the current Kantrip session."""
     profile_name = os.environ.get("KANTRIP_PROFILE")
@@ -171,6 +204,7 @@ def current_profile() -> None:
 
 
 @cli.command("doctor")
+@local_no_color
 @cloup.option(
     "--verbose",
     is_flag=True,
@@ -227,6 +261,7 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
 
 
 @cli.command("ping")
+@local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
     "--timeout",
@@ -283,6 +318,7 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})
+@local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.argument("command", nargs=-1, type=click.UNPROCESSED)
 def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
