@@ -23,7 +23,6 @@ Complete Kantrip's local profile model with:
   connection.
 - New adapters for `kcl` and `kafkactl`.
 - Authenticated connectivity diagnostics.
-- `--no-color` accepted before or after a subcommand.
 
 Every command that connects to Kafka continues to require an explicit profile.
 Kantrip must not keep an ambient or persistent profile selection.
@@ -482,28 +481,6 @@ Unsupported combinations fail before the child starts.
 Add both explicit-command adaptation and temporary subshell shims. Use
 documented config-path environment variables so secrets never appear in argv.
 
-## 8. CLI consistency
-
-Accept `--no-color` in both positions:
-
-```bash
-kantrip --no-color list
-kantrip list --no-color
-```
-
-Implement the local form through one reusable command decorator rather than
-duplicated callbacks. The local option updates the root console configuration
-before command output begins.
-
-For `exec`, option parsing must stop at `--`; a child command's
-`--no-color` remains untouched:
-
-```bash
-kantrip exec local -- child-command --no-color
-```
-
-Add parser tests for global, local, help, error, and child passthrough cases.
-
 ## Delivery order
 
 1. Implement process supervision, crash markers, cleanup, and diagnostics.
@@ -516,8 +493,7 @@ Add parser tests for global, local, help, error, and child passthrough cases.
 7. Add OAuth client credentials through verified native Java and librdkafka
    mechanisms.
 8. Add the `kcl` and `kafkactl` adapters.
-9. Add local-position `--no-color`.
-10. Run the complete Linux/macOS integration and security matrix and synchronize
+9. Run the complete Linux/macOS integration and security matrix and synchronize
    all current-feature documentation.
 
 Session hardening precedes secret-bearing artifacts so abnormal termination has
@@ -562,8 +538,6 @@ boundaries are proven before token lifecycle is added.
   process and artifact outcomes.
 - Cleanup cannot remove active sessions, user-owned source material, or paths
   outside the validated runtime root.
-- Both documented `--no-color` positions behave identically, while child
-  arguments after `--` pass through unchanged.
 - README, usage, compatibility, architecture, threat model, schema, examples,
   and release artifacts describe exactly the implemented matrix.
 

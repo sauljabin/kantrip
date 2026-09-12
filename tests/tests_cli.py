@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from kantrip import APP_VERSION
 from kantrip.cli import cli
 from kantrip.config import load_configuration
+from kantrip.console import create_console
 from kantrip.ping import PingError, PingResult, RegistryPingResult
 
 
@@ -30,6 +31,42 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code)
         self.assertIn(APP_VERSION, result.output)
+
+    def test_no_color_configures_consoles_globally(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {"KANTRIP_CONFIG": str(Path(directory) / "missing.yaml")}
+            with patch("kantrip.cli.create_console", wraps=create_console) as create:
+                result = self.runner.invoke(cli, ["--no-color", "list"], env=environment)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual([True, True], [call.kwargs["no_color"] for call in create.call_args_list])
+
+    def test_no_color_configures_consoles_after_the_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {"KANTRIP_CONFIG": str(Path(directory) / "missing.yaml")}
+            with patch("kantrip.cli.create_console", wraps=create_console) as create:
+                result = self.runner.invoke(cli, ["list", "--no-color"], env=environment)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual(
+            [False, False, True, True],
+            [call.kwargs["no_color"] for call in create.call_args_list],
+        )
+
+    def test_command_help_documents_local_no_color(self) -> None:
+        for command in ("add", "remove", "list", "show", "current", "doctor", "ping", "exec"):
+            with self.subTest(command=command):
+                result = self.runner.invoke(cli, [command, "--help"])
+
+                self.assertEqual(0, result.exit_code, result.output)
+                self.assertIn("--no-color", result.output)
+
+    def test_local_no_color_preserves_parser_errors(self) -> None:
+        result = self.runner.invoke(cli, ["show", "--no-color"])
+
+        self.assertEqual(2, result.exit_code, result.output)
+        self.assertIn("Missing argument 'PROFILE'", result.output)
+        self.assertNotIn("No such option", result.output)
 
     def test_profile_commands_use_resolved_file(self) -> None:
         with self.runner.isolated_filesystem():
@@ -306,6 +343,21 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(17, result.exit_code, result.output)
         self.assertEqual(("kcat", "-L"), run.call_args.args[2])
+
+    def test_exec_passes_child_no_color_through_after_separator(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch("kantrip.cli.run_profile_session", return_value=0) as run:
+                result = self.runner.invoke(
+                    cli,
+                    ["exec", "local", "--", "child-command", "--no-color"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual(("child-command", "--no-color"), run.call_args.args[2])
 
     def test_exec_rejects_a_nested_session(self) -> None:
         result = self.runner.invoke(
