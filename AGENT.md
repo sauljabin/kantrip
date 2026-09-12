@@ -80,8 +80,7 @@
 - Send results to stdout and diagnostics to stderr. Animate progress only on
   colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output use
   stable text labels. Accept `--no-color` before or after a subcommand through
-  the shared local-option decorator, but preserve every child argument after
-  `exec ... --`. Styling carries no essential information.
+  the shared local-option decorator. Styling carries no essential information.
 
 ## Tests, Scripts, and Sandbox
 

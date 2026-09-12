@@ -489,13 +489,6 @@ kantrip --no-color list
 kantrip list --no-color
 ```
 
-For `exec`, `--` ends Kantrip option parsing. Options after it belong to the
-child and pass through unchanged:
-
-```bash
-kantrip exec local -- child-command --no-color
-```
-
 `kantrip list` shows profile endpoints; `kantrip show PROFILE` syntax-highlights
 redacted YAML. Both remain readable without ANSI color.
 
