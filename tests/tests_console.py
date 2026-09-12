@@ -176,7 +176,7 @@ class TestConsole(unittest.TestCase):
             pass
 
         status.assert_called_once_with(
-            "checking connectivity", spinner="dots", spinner_style="primary"
+            "checking connectivity", spinner="moon", spinner_style="primary"
         )
 
 

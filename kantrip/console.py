@@ -124,7 +124,7 @@ def show_progress(console: Console, message: str) -> Iterator[None]:
         console.print(create_status_text(console, "progress", message))
         yield
         return
-    with console.status(message, spinner="dots", spinner_style="primary"):
+    with console.status(message, spinner="moon", spinner_style="primary"):
         yield
 
 
