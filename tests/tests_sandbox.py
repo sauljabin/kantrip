@@ -1,10 +1,12 @@
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
+from rich.console import Console
 
-from sandbox.__main__ import _write_shell_driver
+from sandbox.__main__ import _show_section, _write_shell_driver
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
@@ -100,6 +102,19 @@ class TestSandbox(unittest.TestCase):
                 "set -l kantrip_status $status; exit $kantrip_status",
                 driver,
             )
+
+    def test_sections_are_separated_from_the_sandbox_title(self) -> None:
+        stream = io.StringIO()
+        console = Console(file=stream, color_system=None)
+
+        console.print("Kantrip Sandbox")
+        _show_section(console, "Setup")
+        _show_section(console, "Kafka CLI")
+
+        self.assertEqual(
+            "Kantrip Sandbox\n\nSetup\n\nKafka CLI\n",
+            stream.getvalue(),
+        )
 
 
 if __name__ == "__main__":
