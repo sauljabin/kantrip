@@ -15,6 +15,7 @@ import click
 import cloup
 from rich.console import Console
 
+from kantrip._files import write_exclusive_text
 from kantrip.adapters import (
     KAFKA_ACLS_EXECUTABLES,
     KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
@@ -343,23 +344,41 @@ def _check_shell(
         f"{command} && echo {marker} || exit 70"
         for command, marker in zip(commands, markers, strict=True)
     ]
-    checked.append("exit")
-    try:
-        with show_progress(console, label):
-            status, output = run_terminal(
-                (sys.executable, "-m", "kantrip.cli", "exec", profile),
-                checked,
-                environment=shell_environment,
-                timeout=120,
-            )
-    except TerminalTimeout as error:
-        raise SmokeFailure(f"{label} failed: {error}") from error
+    with tempfile.TemporaryDirectory(prefix=f"kantrip-{shell_name}-smoke-") as directory:
+        driver = _write_shell_driver(shell_name, checked, Path(directory))
+        try:
+            with show_progress(console, label):
+                status, output = run_terminal(
+                    (sys.executable, "-m", "kantrip.cli", "exec", profile),
+                    (driver,),
+                    environment=shell_environment,
+                    timeout=120,
+                )
+        except TerminalTimeout as error:
+            raise SmokeFailure(f"{label} failed: {error}") from error
     if status or any(marker not in output for marker in markers):
         details = output.strip() or f"shell exited with status {status}"
         raise SmokeFailure(f"{label} failed:\n{details}")
     _require_topic(topic, output, shell_name)
     _require_topic("kantrip smoke record", output, shell_name)
     console.print(create_status_text(console, "success", label))
+
+
+def _write_shell_driver(shell_name: str, commands: Sequence[str], directory: Path) -> str:
+    """Write one sourced command batch so terminal clients cannot consume later commands."""
+    script_path = directory / "commands"
+    write_exclusive_text(
+        script_path,
+        "\n".join(commands) + "\n",
+        mode=0o600,
+    )
+    quoted_path = quote_shell_argument(shell_name, str(script_path))
+    if shell_name == "fish":
+        return (
+            f"source {quoted_path} < /dev/null; "
+            "set -l kantrip_status $status; exit $kantrip_status"
+        )
+    return f". {quoted_path} < /dev/null; exit $?"
 
 
 def _shell_commands(

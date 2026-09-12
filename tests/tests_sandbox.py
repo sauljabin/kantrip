@@ -1,7 +1,10 @@
+import tempfile
 import unittest
 from pathlib import Path
 
 import yaml
+
+from sandbox.__main__ import _write_shell_driver
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
@@ -75,6 +78,28 @@ class TestSandbox(unittest.TestCase):
 
     def test_keeps_a_repository_specific_network(self) -> None:
         self.assertEqual("kantrip-sandbox", self.compose["networks"]["default"]["name"])
+
+    def test_writes_one_sourced_driver_for_interactive_shell_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            driver = _write_shell_driver("bash", ("first", "second"), root)
+
+            self.assertEqual(f". {root / 'commands'} < /dev/null; exit $?", driver)
+            self.assertEqual("first\nsecond\n", (root / "commands").read_text())
+            self.assertEqual(0o600, (root / "commands").stat().st_mode & 0o777)
+
+    def test_uses_fish_source_syntax_for_the_shell_driver(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            driver = _write_shell_driver("fish", (), root)
+
+            self.assertEqual(
+                f"source '{root / 'commands'}' < /dev/null; "
+                "set -l kantrip_status $status; exit $kantrip_status",
+                driver,
+            )
 
 
 if __name__ == "__main__":
