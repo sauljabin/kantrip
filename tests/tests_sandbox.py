@@ -78,8 +78,8 @@ class TestSandbox(unittest.TestCase):
     def test_does_not_use_compose_extension_fields(self) -> None:
         self.assertFalse(any(key.startswith("x-") for key in self.compose))
 
-    def test_keeps_a_repository_specific_network(self) -> None:
-        self.assertEqual("kantrip-sandbox", self.compose["networks"]["default"]["name"])
+    def test_uses_stable_sandbox_network_name(self) -> None:
+        self.assertEqual("sandbox", self.compose["networks"]["default"]["name"])
 
     def test_writes_one_sourced_driver_for_interactive_shell_commands(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

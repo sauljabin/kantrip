@@ -91,4 +91,4 @@ services:
 
 networks:
   default:
-    name: kantrip-sandbox
+    name: sandbox
