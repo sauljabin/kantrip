@@ -13,6 +13,13 @@ kantrip exec local -- kcat -L
 
 Planned capabilities are tracked separately in the [MVP roadmap](MVP.md).
 
+Kantrip is not a persistent process manager, a global context selector, or a
+replacement for Kafka clients. Its responsibility ends at storing profiles,
+resolving the connection material supported by the installed release,
+generating the correct temporary configuration, and supervising active
+execution. This pre-release currently supports plaintext profiles;
+secret-backed profiles remain tracked in the MVP roadmap.
+
 ## Local diagnostics
 
 Run `kantrip doctor` to inspect the installation without opening a Kafka

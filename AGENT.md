@@ -20,6 +20,10 @@
 
 ## Profiles and Sessions
 
+- Keep Kantrip scoped to profile storage, secret resolution, temporary client
+  configuration, and active-execution supervision. Do not turn it into a
+  persistent process manager, global context selector, or Kafka client
+  replacement.
 - Keep the implemented profile schema in `schemas/`, examples in `examples/`, and
   synthetic data with its tests. Update examples, tests, and migration notes with
   schema changes. Release-bundled schemas are authoritative; filenames and
