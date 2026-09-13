@@ -77,9 +77,11 @@ class TestPing(unittest.TestCase):
 
         with (
             patch("kantrip.ping.AdminClient", return_value=admin),
-            self.assertRaisesRegex(PingError, "did not return metadata"),
+            self.assertRaisesRegex(PingError, "did not return metadata") as raised,
         ):
             ping_profile(profile)
+
+        self.assertEqual("_TIMED_OUT: Local: Timed out", raised.exception.detail)
 
     def test_unreachable_kafka_does_not_write_native_logs_to_stderr(self) -> None:
         script = """
@@ -186,10 +188,12 @@ else:
 
         with (
             patch("kantrip.ping.AdminClient", return_value=admin),
-            patch("kantrip.ping.urlopen", side_effect=URLError("unavailable")),
-            self.assertRaisesRegex(PingError, "Confluent Schema Registry did not return"),
+            patch("kantrip.ping.urlopen", side_effect=URLError("connection refused")),
+            self.assertRaisesRegex(PingError, "Confluent Schema Registry did not return") as raised,
         ):
             ping_profile(profile)
+
+        self.assertEqual("connection refused", raised.exception.detail)
 
     def test_profile_rejects_invalid_apicurio_artifact_metadata(self) -> None:
         profile = {

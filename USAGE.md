@@ -53,7 +53,8 @@ from a Confluent-compatible registry or `/search/artifacts` from native
 Apicurio, reporting broker and provider-specific resource counts. It needs no
 external CLI and defaults to a five-second timeout, configurable with
 `--timeout SECONDS`. Colored terminals animate checks; plain output uses
-`[running]`.
+`[running]`. Add `--verbose` to a failed ping to include the sanitized message
+from the underlying client or transport exception.
 
 ## First-run configuration
 

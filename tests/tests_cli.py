@@ -385,6 +385,32 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] Could not connect for profile 'local'", result.stderr)
+        self.assertNotIn("Cause:", result.stderr)
+
+    def test_ping_verbose_reports_the_sanitized_underlying_exception(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                side_effect=PingError(
+                    "the Kafka cluster did not return metadata",
+                    detail="_TRANSPORT: password=visible connection refused",
+                ),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["--no-color", "ping", "local", "--verbose"],
+                    env=environment,
+                )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn(
+            "Cause: _TRANSPORT: password=<redacted> connection refused",
+            result.stderr,
+        )
+        self.assertNotIn("visible", result.stderr)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():

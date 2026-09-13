@@ -307,8 +307,13 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
     show_default=True,
     help="Maximum time in seconds for the connectivity check.",
 )
+@cloup.option(
+    "--verbose",
+    is_flag=True,
+    help="Include the sanitized underlying connection error.",
+)
 @cloup.pass_context
-def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
+def ping(context: cloup.Context, profile_name: str, timeout: float, verbose: bool) -> None:
     """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
     try:
@@ -321,11 +326,12 @@ def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
         raise click.exceptions.Exit(1) from error
     except PingError as error:
         error_console = error_console_from_context(context)
+        detail = f"\nCause: {error.detail}" if verbose and error.detail else ""
         error_console.print(
             create_status_text(
                 error_console,
                 "error",
-                f"Could not connect for profile '{profile_name}': {error}",
+                f"Could not connect for profile '{profile_name}': {error}{detail}",
             )
         )
         raise click.exceptions.Exit(1) from error

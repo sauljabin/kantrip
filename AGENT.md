@@ -89,6 +89,8 @@
   colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output use
   stable text labels. Accept `--no-color` before or after a subcommand through
   the shared local-option decorator. Styling carries no essential information.
+- Keep `ping` failures normalized by default. `ping --verbose` may add only a
+  bounded, sanitized message from the underlying exception, never a traceback.
 
 ## Tests, Scripts, and Sandbox
 
