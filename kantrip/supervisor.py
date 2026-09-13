@@ -111,7 +111,7 @@ class _RawTerminal:
     def activate(self) -> None:
         """Switch the parent side to raw mode after the child PTY is created."""
         if self._attributes is not None:
-            tty.setraw(self.input_descriptor)
+            tty.setraw(self.input_descriptor, when=termios.TCSANOW)
 
     def restore(self) -> None:
         if self._foreground_group is not None:

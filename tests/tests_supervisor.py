@@ -168,6 +168,21 @@ class TestProcessSupervisor(unittest.TestCase):
 
 
 class TestInteractiveSupervisor(unittest.TestCase):
+    def test_preserves_input_queued_before_raw_mode(self) -> None:
+        child_script = "value = input(); print('EARLY=' + value, flush=True)"
+        wrapper = _interactive_wrapper(child_script)
+
+        status, output = run_terminal(
+            [sys.executable, "-c", wrapper],
+            ["queued"],
+            environment=os.environ,
+            timeout=3,
+        )
+
+        self.assertEqual(0, status, output)
+        self.assertIn("EARLY=queued", output)
+        self.assertIn("EXIT=0", output)
+
     def test_bridges_input_and_restores_terminal(self) -> None:
         child_script = "value = input('READY>'); print('ECHO=' + value, flush=True)"
         wrapper = _interactive_wrapper(child_script, check_terminal=True)
