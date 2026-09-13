@@ -1,12 +1,22 @@
 import io
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
+from click.testing import CliRunner
 from rich.console import Console
 
-from sandbox.__main__ import _show_section, _write_shell_driver
+from sandbox.__main__ import (
+    SmokeFailure,
+    _failure_details,
+    _kantrip_cli,
+    _show_section,
+    _write_shell_driver,
+    main,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
@@ -115,6 +125,44 @@ class TestSandbox(unittest.TestCase):
             "Kantrip Sandbox\n\nSetup\n\nKafka CLI\n",
             stream.getvalue(),
         )
+
+    def test_captured_kantrip_commands_explicitly_disable_color(self) -> None:
+        command = _kantrip_cli("ping", "sandbox")
+
+        self.assertEqual(
+            [
+                "-m",
+                "kantrip.cli",
+                "--no-color",
+                "ping",
+                "sandbox",
+            ],
+            command[1:],
+        )
+
+    def test_failure_details_remove_nested_status_presentation(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["kantrip", "ping", "sandbox"],
+            1,
+            stdout="[running] Checking profile 'sandbox'\n",
+            stderr=(
+                "[failed] Could not connect for profile 'sandbox': the Kafka cluster "
+                "did not return metadata\n"
+            ),
+        )
+
+        self.assertEqual(
+            "Could not connect for profile 'sandbox': the Kafka cluster did not return metadata",
+            _failure_details(result),
+        )
+
+    @patch("sandbox.__main__.smoke", side_effect=SmokeFailure("connectivity failed"))
+    def test_main_renders_failures_with_its_selected_presentation(self, _smoke: object) -> None:
+        result = CliRunner().invoke(main, ["--no-color"])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertEqual("[failed] connectivity failed\n", result.output)
+        self.assertNotIn("Error:", result.output)
 
 
 if __name__ == "__main__":

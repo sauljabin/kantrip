@@ -99,6 +99,11 @@ def main(
         no_color or bool(environment.get("CI")) or bool(environment.get("GITHUB_ACTIONS"))
     )
     console = create_console(no_color=plain_output, environment=environment)
+    error_console = create_console(
+        stream=sys.stderr,
+        no_color=plain_output,
+        environment=environment,
+    )
     smoke_topic = topic or f"kantrip-smoke-{secrets.token_hex(6)}"
     try:
         smoke(
@@ -113,7 +118,8 @@ def main(
             shells=shells,
         )
     except SmokeFailure as error:
-        raise click.ClickException(str(error)) from error
+        error_console.print(create_status_text(error_console, "error", str(error)))
+        raise click.exceptions.Exit(1) from error
 
 
 def smoke(
@@ -158,7 +164,7 @@ def smoke(
         _check(
             console,
             f"connect to Kafka and {_registry_name(registry_provider)}",
-            [sys.executable, "-m", "kantrip.cli", "ping", profile],
+            _kantrip_cli("ping", profile),
             smoke_environment,
         )
         creator = installed["topics"][0]
@@ -456,30 +462,29 @@ def _add_profile(
     registry_url: str,
     environment: Mapping[str, str],
 ) -> None:
-    command = [
-        sys.executable,
-        "-m",
-        "kantrip.cli",
+    command = _kantrip_cli(
         "add",
         profile,
         "--bootstrap-servers",
         ",".join(bootstrap_servers),
-    ]
+    )
     command.extend(("--registry-provider", registry_provider, "--registry-url", registry_url))
     _check(console, "create isolated Kantrip profile", command, environment)
 
 
+def _kantrip_cli(*arguments: str) -> list[str]:
+    """Build a plain-output Kantrip command for capture by the sandbox runner."""
+    return [sys.executable, "-m", "kantrip.cli", "--no-color", *arguments]
+
+
 def _kantrip(profile: str, executable: str, *arguments: str) -> list[str]:
-    return [
-        sys.executable,
-        "-m",
-        "kantrip.cli",
+    return _kantrip_cli(
         "exec",
         profile,
         "--",
         executable,
         *arguments,
-    ]
+    )
 
 
 def _schema_registry_probe(executable: str) -> tuple[str, str]:
@@ -506,10 +511,25 @@ def _check(
         )
     output = f"{result.stdout}{result.stderr}"
     if result.returncode:
-        details = output.strip() or f"command exited with status {result.returncode}"
+        details = _failure_details(result)
         raise SmokeFailure(f"{label} failed:\n{details}")
     console.print(create_status_text(console, "success", label))
     return output
+
+
+def _failure_details(result: subprocess.CompletedProcess[str]) -> str:
+    """Remove nested Kantrip presentation while preserving diagnostic content."""
+    output = "\n".join(part.rstrip("\n") for part in (result.stdout, result.stderr) if part)
+    details: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("[running] "):
+            continue
+        for prefix in ("[failed] ", "[warning] ", "[passed] ", "[cleanup] "):
+            if line.startswith(prefix):
+                line = line.removeprefix(prefix)
+                break
+        details.append(line)
+    return "\n".join(details).strip() or f"command exited with status {result.returncode}"
 
 
 def _require_topic(topic: str, output: str, executable: str) -> None:
