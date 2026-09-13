@@ -64,13 +64,24 @@ class TestSandbox(unittest.TestCase):
 
     def test_contains_plain_schema_registry(self) -> None:
         registry = self.services["schema-registry"]
+        environment = registry["environment"]
 
         self.assertEqual("confluentinc/cp-schema-registry:${CONFLUENT_VERSION}", registry["image"])
         self.assertEqual(["8081:8081"], registry["ports"])
-        self.assertEqual(
-            "http://0.0.0.0:8081", registry["environment"]["SCHEMA_REGISTRY_LISTENERS"]
-        )
-        self.assertNotIn("HTTPS", registry["environment"]["SCHEMA_REGISTRY_LISTENERS"])
+        self.assertEqual("http://0.0.0.0:8081", environment["SCHEMA_REGISTRY_LISTENERS"])
+        self.assertEqual("_schemas", environment["SCHEMA_REGISTRY_KAFKASTORE_TOPIC"])
+        self.assertEqual("1", environment["SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR"])
+        self.assertNotIn("HTTPS", environment["SCHEMA_REGISTRY_LISTENERS"])
+
+    def test_schema_registry_healthcheck_uses_its_available_python_runtime(self) -> None:
+        healthcheck = self.services["schema-registry"]["healthcheck"]
+        command = healthcheck["test"]
+
+        self.assertEqual(["CMD", "python3", "-c"], command[:3])
+        self.assertIn("http://localhost:8081/subjects", command[3])
+        self.assertIn("timeout=5", command[3])
+        self.assertNotIn("curl", command[3])
+        self.assertEqual("30s", healthcheck["start_period"])
 
     def test_contains_apicurio_on_standard_host_port(self) -> None:
         registry = self.services["apicurio"]
