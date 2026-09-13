@@ -1,12 +1,22 @@
 import io
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
+from click.testing import CliRunner
 from rich.console import Console
 
-from sandbox.__main__ import _show_section, _write_shell_driver
+from sandbox.__main__ import (
+    SmokeFailure,
+    _failure_details,
+    _kantrip_cli,
+    _show_section,
+    _write_shell_driver,
+    main,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
@@ -54,13 +64,24 @@ class TestSandbox(unittest.TestCase):
 
     def test_contains_plain_schema_registry(self) -> None:
         registry = self.services["schema-registry"]
+        environment = registry["environment"]
 
         self.assertEqual("confluentinc/cp-schema-registry:${CONFLUENT_VERSION}", registry["image"])
         self.assertEqual(["8081:8081"], registry["ports"])
-        self.assertEqual(
-            "http://0.0.0.0:8081", registry["environment"]["SCHEMA_REGISTRY_LISTENERS"]
-        )
-        self.assertNotIn("HTTPS", registry["environment"]["SCHEMA_REGISTRY_LISTENERS"])
+        self.assertEqual("http://0.0.0.0:8081", environment["SCHEMA_REGISTRY_LISTENERS"])
+        self.assertEqual("_schemas", environment["SCHEMA_REGISTRY_KAFKASTORE_TOPIC"])
+        self.assertEqual("1", environment["SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR"])
+        self.assertNotIn("HTTPS", environment["SCHEMA_REGISTRY_LISTENERS"])
+
+    def test_schema_registry_healthcheck_uses_its_available_python_runtime(self) -> None:
+        healthcheck = self.services["schema-registry"]["healthcheck"]
+        command = healthcheck["test"]
+
+        self.assertEqual(["CMD", "python3", "-c"], command[:3])
+        self.assertIn("http://localhost:8081/subjects", command[3])
+        self.assertIn("timeout=5", command[3])
+        self.assertNotIn("curl", command[3])
+        self.assertEqual("30s", healthcheck["start_period"])
 
     def test_contains_apicurio_on_standard_host_port(self) -> None:
         registry = self.services["apicurio"]
@@ -115,6 +136,44 @@ class TestSandbox(unittest.TestCase):
             "Kantrip Sandbox\n\nSetup\n\nKafka CLI\n",
             stream.getvalue(),
         )
+
+    def test_captured_kantrip_commands_explicitly_disable_color(self) -> None:
+        command = _kantrip_cli("ping", "sandbox")
+
+        self.assertEqual(
+            [
+                "-m",
+                "kantrip.cli",
+                "--no-color",
+                "ping",
+                "sandbox",
+            ],
+            command[1:],
+        )
+
+    def test_failure_details_remove_nested_status_presentation(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["kantrip", "ping", "sandbox"],
+            1,
+            stdout="[running] Checking profile 'sandbox'\n",
+            stderr=(
+                "[failed] Could not connect for profile 'sandbox': the Kafka cluster "
+                "did not return metadata\n"
+            ),
+        )
+
+        self.assertEqual(
+            "Could not connect for profile 'sandbox': the Kafka cluster did not return metadata",
+            _failure_details(result),
+        )
+
+    @patch("sandbox.__main__.smoke", side_effect=SmokeFailure("connectivity failed"))
+    def test_main_renders_failures_with_its_selected_presentation(self, _smoke: object) -> None:
+        result = CliRunner().invoke(main, ["--no-color"])
+
+        self.assertEqual(1, result.exit_code)
+        self.assertEqual("[failed] connectivity failed\n", result.output)
+        self.assertNotIn("Error:", result.output)
 
 
 if __name__ == "__main__":

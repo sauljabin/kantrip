@@ -39,6 +39,14 @@
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
   session. The schema and execution accept only `transport: plaintext` with
   `auth.type: none`.
+- Supervise one-off commands in their own POSIX process boundary and interactive
+  shells through a PTY. Forward SIGINT, SIGTERM, and SIGHUP, preserve child exit
+  status, and escalate after five seconds or a repeated signal.
+- Keep session roots and directories private and user-owned. Determine liveness
+  with `fcntl.flock`, treat validated unlocked sessions as stale after five
+  minutes, and inspect no more than 256 entries automatically before `exec`.
+- Cleanup must be descriptor-relative, refuse symlinks and unsafe metadata, and
+  never remove active sessions or paths outside the validated runtime root.
 
 ## Client Adapters and Shells
 
@@ -81,6 +89,9 @@
   colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output use
   stable text labels. Accept `--no-color` before or after a subcommand through
   the shared local-option decorator. Styling carries no essential information.
+- Include a bounded, sanitized underlying cause in normal `ping` failures,
+  never a traceback. `ping --quiet` emits nothing and communicates only through
+  status `0` or `1`.
 
 ## Tests, Scripts, and Sandbox
 

@@ -13,6 +13,7 @@ from kantrip.cli import cli
 from kantrip.config import load_configuration
 from kantrip.console import create_console
 from kantrip.ping import PingError, PingResult, RegistryPingResult
+from kantrip.runtime import SessionRuntimeError, SessionScan
 
 
 class TestCli(unittest.TestCase):
@@ -54,12 +55,66 @@ class TestCli(unittest.TestCase):
         )
 
     def test_command_help_documents_local_no_color(self) -> None:
-        for command in ("add", "remove", "list", "show", "current", "doctor", "ping", "exec"):
+        for command in (
+            "add",
+            "remove",
+            "list",
+            "show",
+            "current",
+            "cleanup",
+            "doctor",
+            "ping",
+            "exec",
+        ):
             with self.subTest(command=command):
                 result = self.runner.invoke(cli, [command, "--help"])
 
                 self.assertEqual(0, result.exit_code, result.output)
                 self.assertIn("--no-color", result.output)
+
+    def test_cleanup_dry_run_reports_without_removing(self) -> None:
+        report = SessionScan(
+            Path("/runtime"),
+            exists=True,
+            active=1,
+            recent=2,
+            stale=3,
+        )
+        with patch("kantrip.cli.scan_sessions", return_value=report) as scan:
+            result = self.runner.invoke(cli, ["cleanup", "--dry-run", "--no-color"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Would remove 3 stale sessions", result.output)
+        self.assertIn("active: 1; recent: 2", result.output)
+        scan.assert_called_once_with(remove=False)
+
+    def test_cleanup_removes_stale_sessions(self) -> None:
+        report = SessionScan(Path("/runtime"), exists=True, removed=2)
+        with patch("kantrip.cli.scan_sessions", return_value=report) as scan:
+            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Removed 2 stale sessions", result.output)
+        scan.assert_called_once_with(remove=True)
+
+    def test_cleanup_fails_when_the_scan_is_incomplete(self) -> None:
+        report = SessionScan(Path("/runtime"), exists=True, invalid=1)
+        with patch("kantrip.cli.scan_sessions", return_value=report):
+            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("invalid: 1", result.stdout)
+        self.assertIn("Session cleanup was incomplete", result.stderr)
+
+    def test_cleanup_fails_for_an_unsafe_runtime_root(self) -> None:
+        with patch(
+            "kantrip.cli.scan_sessions",
+            side_effect=SessionRuntimeError("session runtime is unsafe"),
+        ):
+            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("session runtime is unsafe", result.stderr)
 
     def test_local_no_color_preserves_parser_errors(self) -> None:
         result = self.runner.invoke(cli, ["show", "--no-color"])
@@ -313,14 +368,17 @@ class TestCli(unittest.TestCase):
         self.assertNotEqual(0, result.exit_code)
         self.assertIn("requires --registry-url", result.output)
 
-    def test_ping_exits_nonzero_when_kafka_is_unreachable(self) -> None:
+    def test_ping_failure_includes_the_sanitized_underlying_exception(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
             config_path.write_text(_VALID_CONFIG, encoding="utf-8")
             environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
-                side_effect=PingError("the Kafka cluster did not return metadata"),
+                side_effect=PingError(
+                    "the Kafka cluster did not return metadata",
+                    detail="_TRANSPORT: password=visible connection refused",
+                ),
             ):
                 result = self.runner.invoke(
                     cli,
@@ -330,6 +388,71 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] Could not connect for profile 'local'", result.stderr)
+        self.assertIn(
+            "Cause: _TRANSPORT: password=<redacted> connection refused",
+            result.stderr,
+        )
+        self.assertNotIn("visible", result.stderr)
+
+    def test_ping_quiet_emits_nothing_on_connection_failure(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                side_effect=PingError(
+                    "the Kafka cluster did not return metadata",
+                    detail="_TRANSPORT: password=visible connection refused",
+                ),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["ping", "local", "--quiet"],
+                    env=environment,
+                )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_ping_quiet_emits_nothing_on_success(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                return_value=PingResult(broker_count=1),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["ping", "local", "--quiet"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_ping_quiet_emits_nothing_on_configuration_failure(self) -> None:
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(
+                cli,
+                ["ping", "missing", "--quiet"],
+                env={"KANTRIP_CONFIG": str(Path("missing.yaml").resolve())},
+            )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_ping_help_exposes_quiet_without_verbose(self) -> None:
+        result = self.runner.invoke(cli, ["ping", "--help"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("--quiet", result.output)
+        self.assertNotIn("--verbose", result.output)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():

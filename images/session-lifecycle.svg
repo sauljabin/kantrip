@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="650" viewBox="0 0 1100 650" role="img" aria-labelledby="title desc">
+  <title id="title">Kantrip supervised session lifecycle</title>
+  <desc id="desc">A flow from profile validation through bounded cleanup, private runtime creation, command or PTY supervision, terminal restoration, and session deletion.</desc>
+  <style>
+    :root { color-scheme: light dark; }
+    .background { fill: #ffffff; }
+    .box { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+    .boundary { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .decision { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+    .terminal { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+    .line { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
+    .label { fill: #0f172a; font: 600 17px system-ui, sans-serif; text-anchor: middle; }
+    .detail { fill: #475569; font: 14px system-ui, sans-serif; text-anchor: middle; }
+    .edge { fill: #475569; font: 600 13px system-ui, sans-serif; text-anchor: middle; }
+    .heading { fill: #0f172a; font: 700 24px system-ui, sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0f172a; }
+      .box { fill: #1e293b; stroke: #94a3b8; }
+      .boundary { fill: #172554; stroke: #60a5fa; }
+      .decision { fill: #431407; stroke: #fb923c; }
+      .terminal { fill: #052e16; stroke: #4ade80; }
+      .line { stroke: #cbd5e1; }
+      .label, .heading { fill: #f8fafc; }
+      .detail, .edge { fill: #cbd5e1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect class="background" width="1100" height="650"/>
+  <text class="heading" x="40" y="42">Supervised session lifecycle</text>
+
+  <rect class="box" x="40" y="75" width="210" height="80" rx="10"/>
+  <text class="label" x="145" y="108">Validate request</text>
+  <text class="detail" x="145" y="132">profile · client · arguments</text>
+
+  <rect class="box" x="320" y="75" width="210" height="80" rx="10"/>
+  <text class="label" x="425" y="108">Bounded janitor</text>
+  <text class="detail" x="425" y="132">at most 256 entries</text>
+
+  <rect class="boundary" x="600" y="75" width="210" height="80" rx="10"/>
+  <text class="label" x="705" y="106">Create runtime</text>
+  <text class="detail" x="705" y="129">0700 directory</text>
+  <text class="detail" x="705" y="147">marker + held flock</text>
+
+  <rect class="box" x="850" y="75" width="210" height="80" rx="10"/>
+  <text class="label" x="955" y="106">Prepare connection</text>
+  <text class="detail" x="955" y="129">private files · environment</text>
+  <text class="detail" x="955" y="147">adapter or shell shims</text>
+
+  <path class="line" d="M250 115 H320"/>
+  <path class="line" d="M530 115 H600"/>
+  <path class="line" d="M810 115 H850"/>
+
+  <polygon class="decision" points="550,220 675,285 550,350 425,285"/>
+  <text class="label" x="550" y="279">Execution</text>
+  <text class="label" x="550" y="301">mode?</text>
+  <path class="line" d="M955 155 V190 H550 V220"/>
+
+  <rect class="boundary" x="80" y="250" width="260" height="100" rx="10"/>
+  <text class="label" x="210" y="283">Direct command</text>
+  <text class="detail" x="210" y="307">new POSIX session + process group</text>
+  <text class="detail" x="210" y="329">signal the managed group</text>
+
+  <rect class="terminal" x="760" y="250" width="260" height="100" rx="10"/>
+  <text class="label" x="890" y="283">Interactive shell</text>
+  <text class="detail" x="890" y="307">PTY-owned child session</text>
+  <text class="detail" x="890" y="329">I/O bridge · resize · job control</text>
+
+  <path class="line" d="M425 285 H340"/>
+  <text class="edge" x="382" y="274">command</text>
+  <path class="line" d="M675 285 H760"/>
+  <text class="edge" x="718" y="274">subshell</text>
+
+  <rect class="box" x="420" y="410" width="260" height="90" rx="10"/>
+  <text class="label" x="550" y="442">Supervise execution</text>
+  <text class="detail" x="550" y="466">forward signals · 5 s grace</text>
+  <text class="detail" x="550" y="486">preserve child exit status</text>
+
+  <path class="line" d="M210 350 V375 H500 V410"/>
+  <path class="line" d="M890 350 V375 H600 V410"/>
+
+  <rect class="box" x="160" y="550" width="250" height="70" rx="10"/>
+  <text class="label" x="285" y="578">Restore process state</text>
+  <text class="detail" x="285" y="601">handlers · terminal · foreground</text>
+
+  <rect class="boundary" x="690" y="550" width="250" height="70" rx="10"/>
+  <text class="label" x="815" y="578">Close and delete runtime</text>
+  <text class="detail" x="815" y="601">release lock · remove session</text>
+
+  <path class="line" d="M500 500 V525 H285 V550"/>
+  <path class="line" d="M410 585 H690"/>
+  <path class="line" d="M940 585 H1040"/>
+  <text class="edge" x="1010" y="574">exit</text>
+</svg>

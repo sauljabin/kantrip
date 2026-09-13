@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from confluent_kafka import KafkaException
+from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient
 
+from kantrip.redaction import redact_text
 from kantrip.registry import (
     RegistryConnection,
     RegistryProfileError,
@@ -19,9 +21,18 @@ from kantrip.registry import (
     plain_registry_connection,
 )
 
+_QUIET_KAFKA_LOGGER = logging.getLogger("kantrip.ping.librdkafka")
+_QUIET_KAFKA_LOGGER.addHandler(logging.NullHandler())
+_QUIET_KAFKA_LOGGER.propagate = False
+_QUIET_KAFKA_LOGGER.disabled = True
+
 
 class PingError(ConnectionError):
     """Raised when a configured profile service cannot be reached."""
+
+    def __init__(self, message: str, *, detail: object | None = None) -> None:
+        super().__init__(message)
+        self.detail = redact_text(detail) if detail is not None else None
 
 
 @dataclass(frozen=True)
@@ -47,10 +58,16 @@ def ping_profile(profile: Mapping[str, Any], *, timeout: float = 5.0) -> PingRes
     except RegistryProfileError as error:
         raise PingError(str(error)) from error
     try:
-        client = AdminClient(_client_configuration(profile, timeout))
+        client = AdminClient(
+            _client_configuration(profile, timeout),
+            logger=_QUIET_KAFKA_LOGGER,
+        )
         metadata = client.list_topics(timeout=timeout)
     except KafkaException as error:
-        raise PingError("the Kafka cluster did not return metadata") from error
+        raise PingError(
+            "the Kafka cluster did not return metadata",
+            detail=_exception_message(error),
+        ) from error
     registry_result = _registry_metadata(registry, timeout) if registry is not None else None
     return PingResult(broker_count=len(metadata.brokers), registry=registry_result)
 
@@ -100,7 +117,23 @@ def _registry_json(url: str, timeout: float, name: str, accept: str) -> object:
         with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read())
     except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError) as error:
-        raise PingError(f"the {name} did not return registry metadata") from error
+        raise PingError(
+            f"the {name} did not return registry metadata",
+            detail=_exception_message(error),
+        ) from error
+
+
+def _exception_message(error: Exception) -> str:
+    if isinstance(error, KafkaException) and error.args:
+        kafka_error = error.args[0]
+        if isinstance(kafka_error, KafkaError):
+            return f"{kafka_error.name()}: {kafka_error.str()}"
+    if isinstance(error, HTTPError):
+        return f"HTTP {error.code}: {error.reason}"
+    if isinstance(error, URLError):
+        return str(error.reason)
+    message = str(error)
+    return message or type(error).__name__
 
 
 def _client_configuration(profile: Mapping[str, Any], timeout: float) -> dict[str, Any]:

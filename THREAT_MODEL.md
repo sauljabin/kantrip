@@ -264,15 +264,17 @@ Controls:
 
 - Supervise one-off commands in a POSIX process group and interactive shells in
   a PTY-owned session.
-- Forward SIGINT, SIGTERM, and SIGHUP to the managed boundary and use bounded
-  escalation.
+- Forward SIGINT, SIGTERM, and SIGHUP to the managed boundary and escalate after
+  five seconds or a repeated signal.
 - Restore terminal attributes and foreground ownership in a `finally` path.
 - Hold a `fcntl.flock` for liveness and use the PID only as metadata.
 - Validate ownership, permissions, marker, lock, age, direct-child shape, and
   path containment before stale cleanup.
 - Reject symlinks and use descriptor-relative or equivalently symlink-safe
   deletion.
-- Keep automatic cleanup bounded and expose `kantrip cleanup --dry-run`.
+- Treat only validated, unlocked sessions older than five minutes as stale,
+  limit automatic cleanup to 256 entries, and expose
+  `kantrip cleanup --dry-run`.
 
 Residual risk: a process that deliberately daemonizes or creates a new session
 can escape supervision and retain copied material. `SIGKILL`, host crashes, and
@@ -290,6 +292,7 @@ Controls:
 
 - Classify and redact values before formatting or styling.
 - Keep command output on stdout and diagnostics on stderr.
+- Bound and redact underlying exception messages before diagnostic output.
 - Never print resolved child environments or generated file contents.
 - Make color optional and semantically irrelevant.
 - Map stable librdkafka and HTTP outcomes into configuration, transport, TLS,

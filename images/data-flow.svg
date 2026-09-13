@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+  <title id="title">Kantrip connection data flow</title>
+  <desc id="desc">Profile metadata and operating-system secrets become one validated connection model, which native renderers place inside a private supervised session for the selected Kafka or Registry client.</desc>
+  <style>
+    :root { color-scheme: light dark; }
+    .background { fill: #ffffff; }
+    .source { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+    .model { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+    .renderer { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .session { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+    .client { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+    .connector { fill: none; stroke: #475569; stroke-width: 2; }
+    .line { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
+    .label { fill: #0f172a; font: 600 17px system-ui, sans-serif; text-anchor: middle; }
+    .detail { fill: #475569; font: 14px system-ui, sans-serif; text-anchor: middle; }
+    .group { fill: #475569; font: 600 13px system-ui, sans-serif; text-anchor: middle; letter-spacing: .08em; }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0f172a; }
+      .source { fill: #1e293b; stroke: #94a3b8; }
+      .model { fill: #312e81; stroke: #818cf8; }
+      .renderer { fill: #172554; stroke: #60a5fa; }
+      .session { fill: #052e16; stroke: #4ade80; }
+      .client { fill: #431407; stroke: #fb923c; }
+      .connector, .line { stroke: #cbd5e1; }
+      .label { fill: #f8fafc; }
+      .detail, .group { fill: #cbd5e1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="context-stroke"/>
+    </marker>
+  </defs>
+  <rect class="background" width="1100" height="620"/>
+
+  <text class="group" x="145" y="55">SOURCES</text>
+  <rect class="source" x="35" y="80" width="220" height="82" rx="12"/>
+  <text class="label" x="145" y="113">Profile YAML</text>
+  <text class="detail" x="145" y="138">metadata + secret references</text>
+
+  <rect class="source" x="35" y="205" width="220" height="82" rx="12"/>
+  <text class="label" x="145" y="238">OS credential store</text>
+  <text class="detail" x="145" y="263">long-lived secrets</text>
+
+  <text class="group" x="430" y="55">RESOLUTION</text>
+  <rect class="model" x="315" y="125" width="230" height="118" rx="12"/>
+  <text class="label" x="430" y="163">Validate and resolve</text>
+  <text class="detail" x="430" y="189">allowlisted connection fields</text>
+  <text class="detail" x="430" y="213">fail closed</text>
+
+  <path class="line" d="M255 121 H285 Q300 121 300 136 V169 H315"/>
+  <path class="line" d="M255 246 H285 Q300 246 300 231 V199 H315"/>
+
+  <rect class="model" x="625" y="125" width="240" height="118" rx="12"/>
+  <text class="label" x="745" y="163">Connection model</text>
+  <text class="detail" x="745" y="189">provider-neutral</text>
+  <text class="detail" x="745" y="213">in memory</text>
+  <path class="line" d="M545 184 H625"/>
+
+  <text class="group" x="115" y="394">NATIVE RENDERERS</text>
+  <rect class="renderer" x="230" y="350" width="190" height="76" rx="12"/>
+  <text class="label" x="325" y="383">Java</text>
+  <text class="detail" x="325" y="406">Kafka properties</text>
+
+  <rect class="renderer" x="455" y="350" width="190" height="76" rx="12"/>
+  <text class="label" x="550" y="383">librdkafka</text>
+  <text class="detail" x="550" y="406">native properties</text>
+
+  <rect class="renderer" x="680" y="350" width="190" height="76" rx="12"/>
+  <text class="label" x="775" y="383">Registry</text>
+  <text class="detail" x="775" y="406">Confluent or Apicurio</text>
+
+  <path class="line" d="M745 243 V286 H325 V350"/>
+  <path class="line" d="M745 243 V286 H550 V350"/>
+  <path class="line" d="M745 243 V350"/>
+
+  <rect class="session" x="355" y="490" width="390" height="92" rx="12"/>
+  <text class="label" x="550" y="526">Private supervised session</text>
+  <text class="detail" x="550" y="551">temporary files + child environment</text>
+
+  <path class="connector" d="M325 426 V456 H775 V426"/>
+  <path class="connector" d="M550 426 V456"/>
+  <path class="line" d="M550 456 V490"/>
+
+  <rect class="client" x="815" y="490" width="250" height="92" rx="12"/>
+  <text class="label" x="940" y="526">Selected client</text>
+  <text class="detail" x="940" y="551">owns remote protocols</text>
+  <path class="line" d="M745 536 H815"/>
+</svg>

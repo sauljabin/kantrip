@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any, TypeVar
 
 import click
@@ -27,6 +28,7 @@ from kantrip.console import (
 from kantrip.doctor import run_doctor
 from kantrip.ping import PingError, ping_profile
 from kantrip.redaction import redact_mapping
+from kantrip.runtime import SessionRuntimeError, scan_sessions
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
@@ -203,6 +205,42 @@ def current_profile() -> None:
     click.echo(profile_name)
 
 
+@cli.command("cleanup")
+@local_no_color
+@cloup.option(
+    "--dry-run",
+    is_flag=True,
+    help="Report stale sessions without removing them.",
+)
+@cloup.pass_context
+def cleanup_sessions(context: cloup.Context, dry_run: bool) -> None:
+    """Remove validated session artifacts left by abnormal termination."""
+    try:
+        report = scan_sessions(remove=not dry_run)
+    except SessionRuntimeError as error:
+        error_console = error_console_from_context(context)
+        error_console.print(create_status_text(error_console, "error", str(error)))
+        raise click.exceptions.Exit(1) from error
+    console = console_from_context(context)
+    action = "Would remove" if dry_run else "Removed"
+    affected = report.stale if dry_run else report.removed
+    console.print(
+        create_status_text(
+            console,
+            "cleanup",
+            f"{action} {affected} stale session{'s' if affected != 1 else ''}; "
+            f"active: {report.active}; recent: {report.recent}; invalid: {report.invalid}; "
+            f"failed: {report.failed}; truncated: {'yes' if report.truncated else 'no'}",
+        )
+    )
+    if report.has_errors:
+        error_console = error_console_from_context(context)
+        error_console.print(
+            create_status_text(error_console, "error", "Session cleanup was incomplete")
+        )
+        raise click.exceptions.Exit(1)
+
+
 @cli.command("doctor")
 @local_no_color
 @cloup.option(
@@ -270,28 +308,37 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
     show_default=True,
     help="Maximum time in seconds for the connectivity check.",
 )
+@cloup.option("--quiet", is_flag=True, help="Return only the connectivity exit status.")
 @cloup.pass_context
-def ping(context: cloup.Context, profile_name: str, timeout: float) -> None:
+def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool) -> None:
     """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
-        with show_progress(console, f"Checking profile '{profile_name}'"):
+        progress = (
+            nullcontext() if quiet else show_progress(console, f"Checking profile '{profile_name}'")
+        )
+        with progress:
             result = ping_profile(profile, timeout=timeout)
     except ConfigurationError as error:
-        error_console = error_console_from_context(context)
-        error_console.print(create_status_text(error_console, "error", str(error)))
+        if not quiet:
+            error_console = error_console_from_context(context)
+            error_console.print(create_status_text(error_console, "error", str(error)))
         raise click.exceptions.Exit(1) from error
     except PingError as error:
-        error_console = error_console_from_context(context)
-        error_console.print(
-            create_status_text(
-                error_console,
-                "error",
-                f"Could not connect for profile '{profile_name}': {error}",
+        if not quiet:
+            error_console = error_console_from_context(context)
+            detail = f"\nCause: {error.detail}" if error.detail else ""
+            error_console.print(
+                create_status_text(
+                    error_console,
+                    "error",
+                    f"Could not connect for profile '{profile_name}': {error}{detail}",
+                )
             )
-        )
         raise click.exceptions.Exit(1) from error
+    if quiet:
+        return
     console.print(
         create_status_text(
             console,

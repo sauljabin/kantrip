@@ -1,6 +1,6 @@
 import unittest
 
-from kantrip.redaction import REDACTED, is_classified_key, redact_mapping
+from kantrip.redaction import REDACTED, is_classified_key, redact_mapping, redact_text
 
 
 class TestRedaction(unittest.TestCase):
@@ -25,6 +25,27 @@ class TestRedaction(unittest.TestCase):
         self.assertEqual(REDACTED, result["auth"]["password"])
         self.assertEqual("synthetic-password", source["auth"]["password"])
         self.assertEqual(["localhost:9092"], result["bootstrapServers"])
+
+    def test_redacts_sensitive_exception_text(self) -> None:
+        source = (
+            "request https://user:pass@example.test/token?access_token=visible failed; "
+            "client_secret=also-visible Authorization: Bearer bearer-value"
+        )
+
+        result = redact_text(source)
+
+        self.assertEqual(
+            "request https://example.test/token failed; client_secret=<redacted> "
+            "Authorization: <redacted>",
+            result,
+        )
+
+    def test_bounds_and_removes_control_characters_from_exception_text(self) -> None:
+        result = redact_text(f"failure\x1b[31m {'x' * 600}")
+
+        self.assertNotIn("\x1b", result)
+        self.assertEqual(500, len(result))
+        self.assertTrue(result.endswith("…"))
 
 
 if __name__ == "__main__":
