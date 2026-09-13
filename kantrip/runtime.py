@@ -187,6 +187,10 @@ def scan_sessions(
         return SessionScan(location.root)
     try:
         try:
+            fcntl.flock(
+                root_descriptor,
+                fcntl.LOCK_EX if remove else fcntl.LOCK_SH,
+            )
             return _scan_open_root(
                 location.root,
                 root_descriptor,
