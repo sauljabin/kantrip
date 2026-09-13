@@ -186,11 +186,43 @@ does not modify the user's Kafka installation.
 
 ## Process supervision and cleanup
 
-One-off commands run in a Kantrip-owned POSIX process group. Interactive shells
-run in a PTY-owned child session so terminal job control, resizing, and Ctrl-C
-behave normally. The supervisor forwards SIGINT, SIGTERM, and SIGHUP, preserves
-the child's exit status, escalates after five seconds or a repeated signal, and
-restores terminal state in all normal error paths.
+### Session lifecycle
+
+![Kantrip supervised session lifecycle](images/session-lifecycle.svg)
+
+Every `exec` validates the profile, client, and caller-supplied connection
+arguments before creating connection material. It then runs the bounded
+automatic janitor, creates and locks one runtime session, renders private client
+configuration, prepares the adapter or subshell, marks the session as running,
+and starts the supervisor. Cleanup closes the lock and removes the owned session
+after the child exits. A failure before the child starts follows the same
+cleanup path.
+
+The runtime lock is acquired before connection files are generated. The marker
+moves from `preparing` to `running` only after rendering and adapter preparation
+succeed. This ordering makes all session-owned material subject to one liveness
+and recovery boundary.
+
+### Process boundary and terminal ownership
+
+One-off commands start in a new POSIX session and process group. Signals and
+shutdown cleanup target that group so descendants that remain in it do not
+outlive the managed execution. Interactive Bash, Zsh, and Fish shells instead
+run in a PTY-owned child session. Kantrip bridges terminal input and output,
+copies window-size changes, and lets the PTY kernel semantics preserve
+foreground jobs, Ctrl-C, and shell job control.
+
+The supervisor temporarily handles SIGINT, SIGTERM, and SIGHUP. The first signal
+is forwarded to the managed process boundary and starts one five-second grace
+period. A repeated signal or expiration of that original deadline sends
+SIGKILL. Normal child exit codes are preserved; termination by signal `N` maps
+to the shell convention `128 + N`.
+
+Signal handlers, terminal attributes, and foreground ownership are restored in
+nested cleanup paths whenever control returns to the supervisor. Startup errors
+are wrapped without exposing the generated environment or configuration. An
+unpreventable supervisor SIGKILL, host failure, or power loss cannot execute
+this restoration path and may require the user's terminal to be reset.
 
 The child receives `KANTRIP_PROFILE`, `KANTRIP_SESSION_ID`, and
 `KANTRIP_SESSION_DIR`, plus the documented client-specific connection variables.
@@ -198,12 +230,70 @@ Kantrip constructs this environment for the child only and clears inherited
 Kafka and Registry values that could conflict with the selected profile. The
 caller's parent environment is never modified.
 
-Session directories live below a validated user-owned runtime root. Each
-session has a non-secret marker and a held `fcntl.flock`; the lock, not the PID
-alone, establishes liveness. Startup cleanup and `kantrip cleanup` remove only
-validated, unlocked direct children that are at least five minutes old. The
-automatic scan is limited to 256 entries. Cleanup rejects symlinks, unsafe
-permissions, wrong owners, malformed markers, and paths outside the root.
+### Runtime location and metadata
+
+Kantrip prefers `$XDG_RUNTIME_DIR/kantrip/sessions` only when
+`XDG_RUNTIME_DIR` is an absolute, real directory owned by the current user with
+mode `0700`. Otherwise it selects
+`<operating-system-temp>/kantrip-<uid>/sessions`. Managed parent, root, and
+session directories use mode `0700`. An existing selected managed root with an
+unsafe owner, mode, or type blocks session startup rather than silently
+weakening the boundary.
+
+Each direct child is named `session-<id>`, where `<id>` is 32 lowercase
+hexadecimal characters. `session.lock` and `session.json` are regular files
+owned by the current user with mode `0600`. Connection files are also `0600`;
+executable shims remain owner-only. The marker contains exactly the session ID,
+owner UID, supervisor PID, creation time, and lifecycle state. It contains no
+connection values or secrets.
+
+Kantrip holds an exclusive `fcntl.flock` on `session.lock` for the complete
+session. That kernel lock establishes liveness; the recorded PID is metadata
+only because operating systems can reuse process IDs. Normal exit removes the
+directory while the lock is still held. After a crash, the kernel releases the
+lock even if the directory remains.
+
+### Recovery classification and deletion
+
+![Kantrip session cleanup decision](images/session-cleanup-decision.svg)
+
+Every scanned direct child has one result:
+
+| Result | Meaning | Error |
+| --- | --- | --- |
+| `active` | Its validated lock is held by a live session. | No |
+| `recent` | Its lock is available, but it is less than five minutes old. | No for cleanup; warning in `doctor` |
+| `stale` | It is valid, unlocked, and at least five minutes old. | No; eligible for removal |
+| `removed` | A stale session was deleted successfully. | No |
+| `invalid` | Its name, type, owner, mode, marker, lock, or contents failed validation. | Yes |
+| `failed` | It passed validation but could not be deleted safely. | Yes |
+
+The five-minute age requirement is secondary to the lock. It prevents immediate
+deletion of a newly unlocked or partially initialized session after an unusual
+failure. Invalid entries fail closed: Kantrip leaves them untouched for
+inspection instead of guessing whether they are safe to remove.
+
+Before `exec`, the automatic janitor inspects at most 256 direct entries. An
+unsafe runtime root blocks startup; invalid child entries are skipped and can be
+reported by `doctor`. The bound prevents startup latency from growing without
+limit. Explicit `kantrip cleanup` requests a complete scan, while
+`kantrip cleanup --dry-run` classifies entries without creating or deleting
+runtime directories.
+
+Cleanup deletes only a direct session child after validating its exact name,
+owner, restrictive modes, marker schema, lock state, age, and complete tree.
+Directory and file operations are relative to already-open descriptors, reject
+symlinks, and compare opened objects with their listed device and inode. This
+prevents traversal and path-replacement attacks from redirecting deletion
+outside the validated root. Concurrent cleaners coordinate through the same
+lock; only one can remove a stale session, and a concurrent disappearance is
+treated as already handled rather than as corruption.
+
+Explicit cleanup returns a nonzero status for an unsafe root, invalid objects,
+an incomplete scan, or deletion failures. Active and recent sessions are not
+errors. `doctor` uses the same scanner without removal, treats active sessions
+as valid, reports recent and stale sessions as warnings, and reports unsafe or
+invalid state as errors. Runtime paths are visible only with `--verbose`.
 
 Nested sessions are rejected. Processes that deliberately daemonize, create a
 new session, or otherwise escape the Kantrip-owned process boundary are
