@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-import secrets
 import shutil
 import subprocess
-import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -27,7 +25,14 @@ from kantrip.registry import (
     RegistryProfileError,
     plain_registry_connection,
 )
+from kantrip.runtime import (
+    SessionRuntime,
+    SessionRuntimeError,
+    cleanup_abandoned_sessions,
+    create_session_runtime,
+)
 from kantrip.shells import ShellError, prepare_interactive_shell, resolve_interactive_shell
+from kantrip.supervisor import SupervisorError, run_supervised_process
 
 
 class SessionError(RuntimeError):
@@ -68,97 +73,196 @@ def run_profile_session(
     except RegistryProfileError as error:
         raise SessionError(str(error)) from error
 
-    session_id = secrets.token_hex(16)
-    with tempfile.TemporaryDirectory(prefix=f"kantrip-{session_id}-") as directory:
-        session_directory = Path(directory)
-        kcat_config_path = session_directory / "kcat.conf"
-        java_config_path = session_directory / "kafka.properties"
-        kaskade_config_path = session_directory / "kaskade.ini"
-        kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
-        registry_config_path = session_directory / "registry.properties"
-        write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
-        write_exclusive_text(java_config_path, _render_properties(java_properties), mode=0o600)
+    try:
+        cleanup_abandoned_sessions(env)
+        runtime = create_session_runtime(env)
+    except SessionRuntimeError as error:
+        raise SessionError(str(error)) from error
+    try:
+        return _run_in_runtime(
+            runtime,
+            profile_name,
+            executable,
+            arguments,
+            bool(command),
+            env,
+            kcat_properties,
+            java_properties,
+            registry,
+        )
+    except (SessionRuntimeError, SupervisorError) as error:
+        raise SessionError(str(error)) from error
+    finally:
+        try:
+            runtime.close()
+        except SessionRuntimeError as error:
+            raise SessionError(str(error)) from error
+
+
+def _run_in_runtime(
+    runtime: SessionRuntime,
+    profile_name: str,
+    executable: str,
+    arguments: list[str],
+    has_command: bool,
+    environment: Mapping[str, str],
+    kcat_properties: Mapping[str, str],
+    java_properties: Mapping[str, str],
+    registry: RegistryConnection | None,
+) -> int:
+    session_directory = runtime.path
+    kcat_config_path = session_directory / "kcat.conf"
+    java_config_path = session_directory / "kafka.properties"
+    kaskade_config_path = session_directory / "kaskade.ini"
+    kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
+    registry_config_path = session_directory / "registry.properties"
+    write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
+    write_exclusive_text(java_config_path, _render_properties(java_properties), mode=0o600)
+    write_exclusive_text(
+        kaskade_config_path,
+        f"[kafka]\n{_render_properties(kcat_properties)}",
+        mode=0o600,
+    )
+    if registry is not None:
         write_exclusive_text(
-            kaskade_config_path,
-            f"[kafka]\n{_render_properties(kcat_properties)}",
+            kaskade_registry_config_path,
+            f"[kafka]\n{_render_properties(kcat_properties)}"
+            f"\n[registry]\n{_render_kaskade_registry(registry)}",
             mode=0o600,
         )
-        if registry is not None:
-            write_exclusive_text(
-                kaskade_registry_config_path,
-                f"[kafka]\n{_render_properties(kcat_properties)}"
-                f"\n[registry]\n{_render_kaskade_registry(registry)}",
-                mode=0o600,
-            )
-            write_exclusive_text(
-                registry_config_path,
-                _render_properties({registry.property_name: registry.url}),
-                mode=0o600,
-            )
+        write_exclusive_text(
+            registry_config_path,
+            _render_properties({registry.property_name: registry.url}),
+            mode=0o600,
+        )
 
-        child_environment = env | {
-            "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
-            "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
-            "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
-            "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
-            "KANTRIP_PROFILE": profile_name,
-            "KANTRIP_SESSION_DIR": str(session_directory),
-            "KANTRIP_SESSION_ID": session_id,
-            "KCAT_CONFIG": str(kcat_config_path),
-        }
-        for name in (
-            "APICURIO_REGISTRY_CONFIG_FILE",
-            "APICURIO_REGISTRY_URL",
-            "SCHEMA_REGISTRY_CONFIG_FILE",
-            "SCHEMA_REGISTRY_URL",
-        ):
-            child_environment.pop(name, None)
-        if registry is not None:
-            prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
-            child_environment.update(
-                {
-                    f"{prefix}_REGISTRY_CONFIG_FILE": str(registry_config_path),
-                    f"{prefix}_REGISTRY_URL": registry.url,
-                }
+    child_environment = _child_environment(
+        runtime,
+        profile_name,
+        environment,
+        kcat_properties,
+        java_config_path,
+        kcat_config_path,
+        registry_config_path,
+        registry,
+    )
+    try:
+        if has_command:
+            arguments = prepare_command(
+                arguments,
+                bootstrap_servers=kcat_properties["bootstrap.servers"],
+                java_config_path=java_config_path,
+                kaskade_config_path=kaskade_config_path,
+                kaskade_registry_config_path=kaskade_registry_config_path,
+                registry=registry,
             )
-        try:
-            if command:
-                arguments = prepare_command(
-                    arguments,
-                    bootstrap_servers=kcat_properties["bootstrap.servers"],
-                    java_config_path=java_config_path,
-                    kaskade_config_path=kaskade_config_path,
-                    kaskade_registry_config_path=kaskade_registry_config_path,
-                    registry=registry,
-                )
-            else:
-                shim_directory = create_subshell_shims(
-                    session_directory / "bin",
-                    bootstrap_servers=kcat_properties["bootstrap.servers"],
-                    java_config_path=java_config_path,
-                    kaskade_config_path=kaskade_config_path,
-                    kaskade_registry_config_path=kaskade_registry_config_path,
-                    environment=env,
-                    registry=registry,
-                )
-                child_environment["PATH"] = (
-                    f"{shim_directory}{os.pathsep}{env.get('PATH', os.defpath)}"
-                )
-                plan = prepare_interactive_shell(
-                    executable,
-                    session_directory,
-                    shim_directory,
-                    env,
-                )
-                arguments = list(plan.arguments)
-                child_environment.update(plan.environment_overrides)
-        except (AdapterError, ShellError) as error:
-            raise SessionError(str(error)) from error
-        try:
-            result = subprocess.run(arguments, env=child_environment, check=False)
-        except OSError as error:
-            raise SessionError(f"command could not be started: {executable}") from error
-        return result.returncode
+        else:
+            arguments = _prepare_subshell(
+                executable,
+                session_directory,
+                environment,
+                child_environment,
+                kcat_properties,
+                java_config_path,
+                kaskade_config_path,
+                kaskade_registry_config_path,
+                registry,
+            )
+    except (AdapterError, ShellError) as error:
+        raise SessionError(str(error)) from error
+    runtime.mark_running()
+    result = _run_child(
+        arguments,
+        env=child_environment,
+        check=False,
+        interactive=not has_command,
+    )
+    return result.returncode
+
+
+def _run_child(
+    arguments: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    check: bool,
+    interactive: bool,
+) -> subprocess.CompletedProcess[str]:
+    del check
+    return_code = run_supervised_process(
+        arguments,
+        environment=env,
+        interactive=interactive,
+    )
+    return subprocess.CompletedProcess(arguments, return_code)
+
+
+def _child_environment(
+    runtime: SessionRuntime,
+    profile_name: str,
+    environment: Mapping[str, str],
+    kcat_properties: Mapping[str, str],
+    java_config_path: Path,
+    kcat_config_path: Path,
+    registry_config_path: Path,
+    registry: RegistryConnection | None,
+) -> dict[str, str]:
+    child_environment = dict(environment) | {
+        "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
+        "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
+        "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
+        "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
+        "KANTRIP_PROFILE": profile_name,
+        "KANTRIP_SESSION_DIR": str(runtime.path),
+        "KANTRIP_SESSION_ID": runtime.session_id,
+        "KCAT_CONFIG": str(kcat_config_path),
+    }
+    for name in (
+        "APICURIO_REGISTRY_CONFIG_FILE",
+        "APICURIO_REGISTRY_URL",
+        "SCHEMA_REGISTRY_CONFIG_FILE",
+        "SCHEMA_REGISTRY_URL",
+    ):
+        child_environment.pop(name, None)
+    if registry is not None:
+        prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
+        child_environment.update(
+            {
+                f"{prefix}_REGISTRY_CONFIG_FILE": str(registry_config_path),
+                f"{prefix}_REGISTRY_URL": registry.url,
+            }
+        )
+    return child_environment
+
+
+def _prepare_subshell(
+    executable: str,
+    session_directory: Path,
+    environment: Mapping[str, str],
+    child_environment: dict[str, str],
+    kcat_properties: Mapping[str, str],
+    java_config_path: Path,
+    kaskade_config_path: Path,
+    kaskade_registry_config_path: Path,
+    registry: RegistryConnection | None,
+) -> list[str]:
+    shim_directory = create_subshell_shims(
+        session_directory / "bin",
+        bootstrap_servers=kcat_properties["bootstrap.servers"],
+        java_config_path=java_config_path,
+        kaskade_config_path=kaskade_config_path,
+        kaskade_registry_config_path=kaskade_registry_config_path,
+        environment=environment,
+        registry=registry,
+    )
+    child_environment["PATH"] = f"{shim_directory}{os.pathsep}{environment.get('PATH', os.defpath)}"
+    plan = prepare_interactive_shell(
+        executable,
+        session_directory,
+        shim_directory,
+        environment,
+    )
+    child_environment.update(plan.environment_overrides)
+    return list(plan.arguments)
 
 
 def _validate_executable(executable: str, environment: Mapping[str, str]) -> None:

@@ -189,8 +189,8 @@ does not modify the user's Kafka installation.
 One-off commands run in a Kantrip-owned POSIX process group. Interactive shells
 run in a PTY-owned child session so terminal job control, resizing, and Ctrl-C
 behave normally. The supervisor forwards SIGINT, SIGTERM, and SIGHUP, preserves
-the child's exit status, escalates only after a documented grace period or
-repeated signal, and restores terminal state in all normal error paths.
+the child's exit status, escalates after five seconds or a repeated signal, and
+restores terminal state in all normal error paths.
 
 The child receives `KANTRIP_PROFILE`, `KANTRIP_SESSION_ID`, and
 `KANTRIP_SESSION_DIR`, plus the documented client-specific connection variables.
@@ -201,7 +201,8 @@ caller's parent environment is never modified.
 Session directories live below a validated user-owned runtime root. Each
 session has a non-secret marker and a held `fcntl.flock`; the lock, not the PID
 alone, establishes liveness. Startup cleanup and `kantrip cleanup` remove only
-validated stale direct children of that root. Cleanup rejects symlinks, unsafe
+validated, unlocked direct children that are at least five minutes old. The
+automatic scan is limited to 256 entries. Cleanup rejects symlinks, unsafe
 permissions, wrong owners, malformed markers, and paths outside the root.
 
 Nested sessions are rejected. Processes that deliberately daemonize, create a

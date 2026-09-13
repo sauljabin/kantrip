@@ -31,9 +31,10 @@ kantrip doctor
 
 Doctor groups local checks under System, Configuration, Session, and Clients,
 names missing commands, and summarizes health. It validates configuration,
-permissions, profile IDs, registry support, active-session state, and the
-installed shell, kcat, Kafka, Confluent Schema Registry, and Kaskade commands.
-Use `--verbose` for executable paths and individual checks.
+permissions, profile IDs, registry support, active-session state, recoverable
+runtime artifacts, and the installed shell, kcat, Kafka, Confluent Schema
+Registry, and Kaskade commands. Use `--verbose` for executable paths and
+individual checks.
 
 Missing optional clients or first-run configuration produce warnings. Invalid
 configuration, unsupported registry settings, or inconsistent session state
@@ -122,6 +123,39 @@ is equivalent to reading `KANTRIP_PROFILE`.
 The subshell preserves normal startup files and history. It neutralizes aliases,
 functions, and Fish abbreviations that shadow adapters, keeps the shim directory
 first on `PATH`, and removes these changes on exit.
+
+## Session supervision and recovery
+
+One-off commands run in their own POSIX process group. Interactive Bash, Zsh,
+and Fish subshells run through a PTY so terminal input, Ctrl-C, job control, and
+window resizing behave normally. Kantrip preserves normal child exit codes and
+maps signal termination to `128 + signal number`.
+
+Kantrip forwards SIGINT, SIGTERM, and SIGHUP to the managed process boundary. A
+second termination signal or a child that remains alive for five seconds causes
+escalation to SIGKILL. Terminal state and signal handlers are restored when the
+supervisor exits. Processes that deliberately daemonize or create a new POSIX
+session remain unsupported.
+
+Session files live under `$XDG_RUNTIME_DIR/kantrip/sessions` when the configured
+runtime directory is private and user-owned. Otherwise Kantrip uses a private
+`kantrip-<uid>/sessions` directory below the operating-system temporary root.
+Every session holds a liveness lock; PIDs are metadata and are not used alone to
+decide whether a session is active.
+
+Before `exec`, Kantrip inspects at most 256 direct runtime entries and removes
+validated unlocked sessions older than five minutes. Inspect or clean all
+remaining artifacts explicitly with:
+
+```bash
+kantrip cleanup --dry-run
+kantrip cleanup
+```
+
+Cleanup refuses malformed markers, symlinks, unsafe permissions, wrong owners,
+and paths outside the runtime root. `doctor` reports active, recent, stale, and
+invalid runtime entries without modifying them; runtime paths appear only with
+`--verbose`.
 
 ## Displaying the active profile in your prompt
 

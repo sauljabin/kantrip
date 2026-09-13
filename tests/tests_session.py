@@ -1,3 +1,4 @@
+import os
 import stat
 import subprocess
 import sys
@@ -8,11 +9,20 @@ from unittest.mock import patch
 
 from kantrip.adapters import SCHEMA_REGISTRY_EXECUTABLES, create_subshell_shims
 from kantrip.registry import RegistryConnection
+from kantrip.runtime import create_session_runtime
 from kantrip.session import SessionError, run_profile_session
 
 
 class TestProfileSession(unittest.TestCase):
     def setUp(self) -> None:
+        self.runtime_directory = tempfile.TemporaryDirectory()
+        self.runtime_patch = patch(
+            "kantrip.runtime.tempfile.gettempdir",
+            return_value=self.runtime_directory.name,
+        )
+        self.runtime_patch.start()
+        self.addCleanup(self.runtime_patch.stop)
+        self.addCleanup(self.runtime_directory.cleanup)
         self.profile = {
             "kafka": {
                 "bootstrapServers": ["localhost:9092", "localhost:9093"],
@@ -46,7 +56,7 @@ class TestProfileSession(unittest.TestCase):
 
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             result = run_profile_session("local", self.profile, ["kcat", "-L"], environment={})
 
@@ -68,11 +78,32 @@ class TestProfileSession(unittest.TestCase):
         assert isinstance(session_directory, Path)
         self.assertFalse(session_directory.exists())
 
+    def test_removes_an_abandoned_stale_session_before_exec(self) -> None:
+        with patch("kantrip.runtime.time.time", return_value=0):
+            abandoned = create_session_runtime({})
+        abandoned_path = abandoned.path
+        abandoned._closed = True
+        os.close(abandoned._lock_descriptor)
+        os.close(abandoned._session_descriptor)
+        os.close(abandoned._root_descriptor)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+            patch(
+                "kantrip.session._run_child",
+                return_value=subprocess.CompletedProcess(["kcat"], 0),
+            ),
+        ):
+            result = run_profile_session("local", self.profile, ["kcat", "-L"], environment={})
+
+        self.assertEqual(0, result)
+        self.assertFalse(abandoned_path.exists())
+
     def test_opens_configured_shell_when_command_is_omitted(self) -> None:
         with (
             patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
             patch(
-                "kantrip.session.subprocess.run",
+                "kantrip.session._run_child",
                 return_value=subprocess.CompletedProcess(["/bin/bash"], 0),
             ) as run,
         ):
@@ -83,7 +114,7 @@ class TestProfileSession(unittest.TestCase):
     def test_rejects_a_nested_kantrip_session_before_launch(self) -> None:
         with (
             patch("kantrip.session.shutil.which") as which,
-            patch("kantrip.session.subprocess.run") as run,
+            patch("kantrip.session._run_child") as run,
             self.assertRaisesRegex(SessionError, "session is already active"),
         ):
             run_profile_session(
@@ -137,7 +168,7 @@ class TestProfileSession(unittest.TestCase):
 
                 with (
                     patch("kantrip.session.shutil.which", return_value=f"/opt/kafka/{executable}"),
-                    patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                    patch("kantrip.session._run_child", side_effect=inspect_run),
                 ):
                     run_profile_session(
                         "local", self.profile, [executable, "--list"], environment={}
@@ -221,7 +252,7 @@ class TestProfileSession(unittest.TestCase):
                     patch(
                         "kantrip.session.shutil.which", return_value=f"/opt/confluent/{executable}"
                     ),
-                    patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                    patch("kantrip.session._run_child", side_effect=inspect_run),
                 ):
                     run_profile_session(
                         "local", self.profile, [executable, "--topic", "orders"], environment={}
@@ -268,7 +299,7 @@ class TestProfileSession(unittest.TestCase):
             with (
                 self.subTest(arguments=arguments),
                 patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
-                patch("kantrip.session.subprocess.run") as run,
+                patch("kantrip.session._run_child") as run,
                 self.assertRaisesRegex(SessionError, "cannot override"),
             ):
                 run_profile_session(
@@ -283,7 +314,7 @@ class TestProfileSession(unittest.TestCase):
         del self.profile["registry"]
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
-            patch("kantrip.session.subprocess.run") as run,
+            patch("kantrip.session._run_child") as run,
             self.assertRaisesRegex(SessionError, "requires a registry section"),
         ):
             run_profile_session(
@@ -298,7 +329,7 @@ class TestProfileSession(unittest.TestCase):
         }
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
-            patch("kantrip.session.subprocess.run") as run,
+            patch("kantrip.session._run_child") as run,
             self.assertRaisesRegex(SessionError, "supports only an http:// registry URL"),
         ):
             run_profile_session(
@@ -363,7 +394,7 @@ class TestProfileSession(unittest.TestCase):
 
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
                 "local",
@@ -407,7 +438,7 @@ class TestProfileSession(unittest.TestCase):
 
                 with (
                     patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
-                    patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                    patch("kantrip.session._run_child", side_effect=inspect_run),
                 ):
                     run_profile_session(
                         "local",
@@ -446,7 +477,7 @@ class TestProfileSession(unittest.TestCase):
 
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
                 "local",
@@ -491,7 +522,7 @@ class TestProfileSession(unittest.TestCase):
 
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
                 "local",
@@ -529,7 +560,7 @@ class TestProfileSession(unittest.TestCase):
             with (
                 self.subTest(command=command),
                 patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
-                patch("kantrip.session.subprocess.run") as run,
+                patch("kantrip.session._run_child") as run,
                 self.assertRaisesRegex(
                     SessionError, "supports only Confluent-compatible registry profiles"
                 ),
@@ -556,7 +587,7 @@ class TestProfileSession(unittest.TestCase):
                 with (
                     self.subTest(command=command, registry=registry),
                     patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
-                    patch("kantrip.session.subprocess.run") as run,
+                    patch("kantrip.session._run_child") as run,
                     self.assertRaisesRegex(SessionError, expected),
                 ):
                     if registry is None:
@@ -591,7 +622,7 @@ class TestProfileSession(unittest.TestCase):
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
             patch(
-                "kantrip.session.subprocess.run",
+                "kantrip.session._run_child",
                 return_value=subprocess.CompletedProcess(["kaskade", "--help"], 0),
             ) as run,
         ):
@@ -635,7 +666,7 @@ class TestProfileSession(unittest.TestCase):
         with (
             patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
             patch("kantrip.adapters.shutil.which", side_effect=find_executable),
-            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
                 "local", self.profile, [], environment={"SHELL": "/bin/bash", "PATH": "/bin"}
@@ -675,7 +706,7 @@ class TestProfileSession(unittest.TestCase):
         with (
             patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
             patch("kantrip.adapters.shutil.which", side_effect=find_executable),
-            patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
                 "local", self.profile, [], environment={"SHELL": "/bin/bash", "PATH": "/bin"}
@@ -714,7 +745,7 @@ class TestProfileSession(unittest.TestCase):
             with (
                 patch("kantrip.session.shutil.which", side_effect=find_executable),
                 patch("kantrip.adapters.shutil.which", side_effect=find_executable),
-                patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                patch("kantrip.session._run_child", side_effect=inspect_run),
             ):
                 run_profile_session(
                     "local",
@@ -763,7 +794,7 @@ class TestProfileSession(unittest.TestCase):
             with (
                 patch("kantrip.session.shutil.which", side_effect=find_executable),
                 patch("kantrip.adapters.shutil.which", side_effect=find_executable),
-                patch("kantrip.session.subprocess.run", side_effect=inspect_run),
+                patch("kantrip.session._run_child", side_effect=inspect_run),
             ):
                 run_profile_session(
                     "local",
@@ -807,7 +838,7 @@ class TestProfileSession(unittest.TestCase):
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
             patch(
-                "kantrip.session.subprocess.run",
+                "kantrip.session._run_child",
                 return_value=subprocess.CompletedProcess(["kcat"], 0),
             ) as run,
         ):
@@ -836,7 +867,7 @@ class TestProfileSession(unittest.TestCase):
         self.profile["kafka"]["auth"] = {"type": "plain"}
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            patch("kantrip.session.subprocess.run") as run,
+            patch("kantrip.session._run_child") as run,
             self.assertRaisesRegex(SessionError, "only plaintext profiles"),
         ):
             run_profile_session("local", self.profile, ["kcat", "-L"], environment={})

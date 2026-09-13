@@ -1,9 +1,11 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.doctor import run_doctor
+from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 
 
 class TestDoctor(unittest.TestCase):
@@ -14,6 +16,7 @@ class TestDoctor(unittest.TestCase):
             config_path.chmod(0o600)
             environment = {
                 "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
             }
@@ -49,7 +52,12 @@ class TestDoctor(unittest.TestCase):
 
             with patch("kantrip.doctor.shutil.which", return_value=None):
                 report = run_doctor(
-                    {"KANTRIP_CONFIG": str(config_path), "PATH": "", "SHELL": "/bin/zsh"}
+                    {
+                        "KANTRIP_CONFIG": str(config_path),
+                        "XDG_RUNTIME_DIR": directory,
+                        "PATH": "",
+                        "SHELL": "/bin/zsh",
+                    }
                 )
 
         self.assertFalse(report.healthy)
@@ -67,6 +75,7 @@ class TestDoctor(unittest.TestCase):
             config_path.chmod(0o600)
             environment = {
                 "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
             }
@@ -86,6 +95,7 @@ class TestDoctor(unittest.TestCase):
             config_path.chmod(0o600)
             environment = {
                 "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
             }
@@ -123,6 +133,7 @@ class TestDoctor(unittest.TestCase):
             virtual_environment.mkdir(parents=True)
             environment = {
                 "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
                 "KANTRIP_PROFILE": "local",
                 "KANTRIP_SESSION_ID": "synthetic-session",
                 "KANTRIP_SESSION_DIR": str(session_directory),
@@ -157,6 +168,7 @@ class TestDoctor(unittest.TestCase):
             shadow.chmod(0o700)
             environment = {
                 "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
                 "KANTRIP_PROFILE": "local",
                 "KANTRIP_SESSION_ID": "synthetic-session",
                 "KANTRIP_SESSION_DIR": str(session_directory),
@@ -173,6 +185,67 @@ class TestDoctor(unittest.TestCase):
                 check.message == "Session adapters are shadowed earlier on PATH: kcat"
                 for check in report.checks
             )
+        )
+
+    def test_runtime_diagnostics_are_read_only_and_hide_paths_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            config_path = root / "config.yaml"
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.chmod(0o600)
+            environment = {
+                "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+            with patch("kantrip.runtime.time.time", return_value=1000):
+                runtime = create_session_runtime(environment)
+            runtime_path = runtime.path
+            runtime._closed = True
+            os.close(runtime._lock_descriptor)
+            os.close(runtime._session_descriptor)
+            os.close(runtime._root_descriptor)
+
+            with (
+                patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+                patch("kantrip.runtime.time.time", return_value=1000 + SESSION_STALE_SECONDS),
+            ):
+                report = run_doctor(environment)
+            artifact_preserved = runtime_path.exists()
+
+        visible = [check.message for _, checks in report.sections() for check in checks]
+        verbose = [check.message for _, checks in report.sections(verbose=True) for check in checks]
+        self.assertTrue(artifact_preserved)
+        self.assertTrue(any("Runtime stale: 1 session" in message for message in visible))
+        self.assertFalse(any(str(runtime_path.parent) in message for message in visible))
+        self.assertTrue(any(str(runtime_path.parent) in message for message in verbose))
+
+    def test_invalid_runtime_entry_is_unhealthy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            runtime_root = root / "kantrip" / "sessions"
+            runtime_root.mkdir(mode=0o700, parents=True)
+            runtime_root.parent.chmod(0o700)
+            (runtime_root / "unexpected").mkdir()
+            config_path = root / "config.yaml"
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            config_path.chmod(0o600)
+            environment = {
+                "KANTRIP_CONFIG": str(config_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            with patch("kantrip.doctor.shutil.which", side_effect=_installed_tool):
+                report = run_doctor(environment)
+
+        self.assertFalse(report.healthy)
+        self.assertTrue(
+            any("Runtime invalid: 1 session" in check.message for check in report.checks)
         )
 
 

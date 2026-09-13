@@ -27,6 +27,7 @@ from kantrip.console import (
 from kantrip.doctor import run_doctor
 from kantrip.ping import PingError, ping_profile
 from kantrip.redaction import redact_mapping
+from kantrip.runtime import SessionRuntimeError, scan_sessions
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
@@ -201,6 +202,42 @@ def current_profile() -> None:
             "no profile is active; run 'kantrip exec PROFILE' to start a profile session"
         )
     click.echo(profile_name)
+
+
+@cli.command("cleanup")
+@local_no_color
+@cloup.option(
+    "--dry-run",
+    is_flag=True,
+    help="Report stale sessions without removing them.",
+)
+@cloup.pass_context
+def cleanup_sessions(context: cloup.Context, dry_run: bool) -> None:
+    """Remove validated session artifacts left by abnormal termination."""
+    try:
+        report = scan_sessions(remove=not dry_run)
+    except SessionRuntimeError as error:
+        error_console = error_console_from_context(context)
+        error_console.print(create_status_text(error_console, "error", str(error)))
+        raise click.exceptions.Exit(1) from error
+    console = console_from_context(context)
+    action = "Would remove" if dry_run else "Removed"
+    affected = report.stale if dry_run else report.removed
+    console.print(
+        create_status_text(
+            console,
+            "cleanup",
+            f"{action} {affected} stale session{'s' if affected != 1 else ''}; "
+            f"active: {report.active}; recent: {report.recent}; invalid: {report.invalid}; "
+            f"failed: {report.failed}; truncated: {'yes' if report.truncated else 'no'}",
+        )
+    )
+    if report.has_errors:
+        error_console = error_console_from_context(context)
+        error_console.print(
+            create_status_text(error_console, "error", "Session cleanup was incomplete")
+        )
+        raise click.exceptions.Exit(1)
 
 
 @cli.command("doctor")

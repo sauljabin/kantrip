@@ -41,7 +41,8 @@ connectivity.
 - Private Kaskade 5 configuration for admin, consumer, Confluent Schema
   Registry, and native Apicurio Registry decoding
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
-- Child exit-status preservation and automatic session cleanup
+- Process-group and PTY supervision with child exit-status preservation
+- Crash-safe runtime locks, automatic stale-session recovery, and `cleanup`
 
 ### Terminal experience
 
@@ -54,7 +55,7 @@ connectivity.
 
 The MVP roadmap has three stages:
 
-1. Harden profile sessions and add local credential-store integration.
+1. Add local credential-store integration and recoverable profile updates.
 2. Add TLS and authenticated Kafka profiles and adapters.
 3. Add authenticated registry connections, OAuth integration, and authenticated
    connectivity checks.

@@ -32,6 +32,12 @@ from kantrip.config import (
     resolve_config_path,
 )
 from kantrip.registry import RegistryProfileError, plain_registry_connection
+from kantrip.runtime import (
+    AUTOMATIC_SCAN_LIMIT,
+    SessionRuntimeError,
+    resolve_runtime_root,
+    scan_sessions,
+)
 from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
@@ -106,7 +112,10 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
     checks = [
         *_assign_section("System", system_checks),
         *_assign_section("Configuration", config_checks),
-        *_assign_section("Session", _check_session(configuration, env)),
+        *_assign_section(
+            "Session",
+            [*_check_session(configuration, env), *_check_runtime_sessions(env)],
+        ),
         *_assign_section("Clients", _check_commands(env)),
     ]
     return DoctorReport(tuple(checks))
@@ -258,15 +267,56 @@ def _check_session(
     else:
         checks.append(DoctorCheck("success", f"Active profile exists: {profile_name}"))
     if not session_directory.is_dir():
+        checks.append(DoctorCheck("error", "Active session directory was not found"))
         checks.append(
-            DoctorCheck("error", f"Active session directory was not found: {session_directory}")
+            DoctorCheck(
+                "success",
+                f"Configured active session directory: {session_directory}",
+                verbose_only=True,
+            )
         )
         return checks
-    checks.append(DoctorCheck("success", f"Active session directory: {session_directory}"))
+    checks.append(DoctorCheck("success", "Active session directory exists"))
+    checks.append(
+        DoctorCheck(
+            "success",
+            f"Active session directory: {session_directory}",
+            verbose_only=True,
+        )
+    )
     shim_directory = session_directory / "bin"
     if shim_directory.is_dir():
         checks.append(_check_session_path(shim_directory, environment))
     return checks
+
+
+def _check_runtime_sessions(environment: Mapping[str, str]) -> list[DoctorCheck]:
+    root = resolve_runtime_root(environment)
+    path_check = DoctorCheck(
+        "success",
+        f"Session runtime: {root}",
+        verbose_only=True,
+    )
+    try:
+        report = scan_sessions(environment, limit=AUTOMATIC_SCAN_LIMIT)
+    except SessionRuntimeError:
+        return [DoctorCheck("error", "Session runtime is not private and user-owned"), path_check]
+    checks = [path_check]
+    if not report.exists:
+        return [DoctorCheck("success", "No stored session artifacts were found"), *checks]
+    checks.append(_runtime_count("active", report.active, "success"))
+    checks.append(_runtime_count("recent inactive", report.recent, "warning"))
+    checks.append(_runtime_count("stale", report.stale, "warning"))
+    checks.append(_runtime_count("invalid", report.invalid, "error"))
+    if report.truncated:
+        checks.append(DoctorCheck("error", "Session runtime scan reached its safety limit"))
+    return checks
+
+
+def _runtime_count(label: str, count: int, nonzero_status: CheckStatus) -> DoctorCheck:
+    status: CheckStatus = nonzero_status if count else "success"
+    noun = "session" if count == 1 else "sessions"
+    return DoctorCheck(status, f"Runtime {label}: {count} {noun}")
 
 
 def _check_session_path(shim_directory: Path, environment: Mapping[str, str]) -> DoctorCheck:

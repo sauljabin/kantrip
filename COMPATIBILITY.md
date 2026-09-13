@@ -19,6 +19,12 @@ adapter executables after startup-time aliases, functions, abbreviations, and
 `PATH` changes. When `SHELL` is unset, an installed Bash is used. Other shells
 are not supported.
 
+Direct commands run in an isolated POSIX process group, while supported
+interactive shells use a PTY-owned session with terminal resizing and job
+control. Signal forwarding and stale-session recovery apply identically to every
+adapter. Detached processes and children that create a new POSIX session remain
+outside the supported lifecycle.
+
 | Supported executable(s) | Distribution | CLI version | Kafka behavior | Registry support | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `kafka-console-consumer.sh` / `kafka-console-consumer` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Consume records | No | Injects `--bootstrap-server` and `--consumer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |

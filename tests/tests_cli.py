@@ -13,6 +13,7 @@ from kantrip.cli import cli
 from kantrip.config import load_configuration
 from kantrip.console import create_console
 from kantrip.ping import PingError, PingResult, RegistryPingResult
+from kantrip.runtime import SessionRuntimeError, SessionScan
 
 
 class TestCli(unittest.TestCase):
@@ -54,12 +55,66 @@ class TestCli(unittest.TestCase):
         )
 
     def test_command_help_documents_local_no_color(self) -> None:
-        for command in ("add", "remove", "list", "show", "current", "doctor", "ping", "exec"):
+        for command in (
+            "add",
+            "remove",
+            "list",
+            "show",
+            "current",
+            "cleanup",
+            "doctor",
+            "ping",
+            "exec",
+        ):
             with self.subTest(command=command):
                 result = self.runner.invoke(cli, [command, "--help"])
 
                 self.assertEqual(0, result.exit_code, result.output)
                 self.assertIn("--no-color", result.output)
+
+    def test_cleanup_dry_run_reports_without_removing(self) -> None:
+        report = SessionScan(
+            Path("/runtime"),
+            exists=True,
+            active=1,
+            recent=2,
+            stale=3,
+        )
+        with patch("kantrip.cli.scan_sessions", return_value=report) as scan:
+            result = self.runner.invoke(cli, ["cleanup", "--dry-run", "--no-color"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Would remove 3 stale sessions", result.output)
+        self.assertIn("active: 1; recent: 2", result.output)
+        scan.assert_called_once_with(remove=False)
+
+    def test_cleanup_removes_stale_sessions(self) -> None:
+        report = SessionScan(Path("/runtime"), exists=True, removed=2)
+        with patch("kantrip.cli.scan_sessions", return_value=report) as scan:
+            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Removed 2 stale sessions", result.output)
+        scan.assert_called_once_with(remove=True)
+
+    def test_cleanup_fails_when_the_scan_is_incomplete(self) -> None:
+        report = SessionScan(Path("/runtime"), exists=True, invalid=1)
+        with patch("kantrip.cli.scan_sessions", return_value=report):
+            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("invalid: 1", result.stdout)
+        self.assertIn("Session cleanup was incomplete", result.stderr)
+
+    def test_cleanup_fails_for_an_unsafe_runtime_root(self) -> None:
+        with patch(
+            "kantrip.cli.scan_sessions",
+            side_effect=SessionRuntimeError("session runtime is unsafe"),
+        ):
+            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("session runtime is unsafe", result.stderr)
 
     def test_local_no_color_preserves_parser_errors(self) -> None:
         result = self.runner.invoke(cli, ["show", "--no-color"])

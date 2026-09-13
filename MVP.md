@@ -12,7 +12,6 @@ must not be restated here as future work.
 
 Complete Kantrip's local profile model with:
 
-- Reliable process supervision and recovery after abnormal termination.
 - OS-backed storage for Kafka and Registry secrets.
 - TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and generic OAuth client
   credentials.
@@ -61,71 +60,7 @@ supervising the active execution.
 - Detached and background processes remain unsupported. Do not claim that
   Kantrip can supervise a child that deliberately escapes its POSIX session.
 
-## 1. Session supervision and crash recovery
-
-The current temporary-directory context already handles normal cleanup. The
-remaining work covers process trees, signals, and artifacts left when Python
-cannot run that cleanup.
-
-### Process supervision
-
-- Replace the blocking `subprocess.run` call with a small supervisor built
-  around `subprocess.Popen`.
-- Start one-off commands in their own POSIX process group and forward SIGINT,
-  SIGTERM, and SIGHUP to that group.
-- Preserve the child's normal exit status. Map signal termination to the shell
-  convention `128 + signal number`.
-- On Kantrip shutdown, allow a documented grace interval before SIGKILL. A
-  normal Ctrl-C forwards SIGINT; escalation occurs only on a repeated signal or
-  shutdown timeout.
-- Run interactive subshells through a PTY-owned child session so Bash, Zsh, and
-  Fish retain terminal job control. Forward terminal resizing and restore the
-  parent's terminal attributes and foreground process group in a `finally`
-  block.
-- Treat a process that daemonizes or creates a new session as outside the
-  supported lifecycle. The supervisor manages only processes that remain in
-  the Kantrip-owned process/session boundary.
-
-### Runtime ownership
-
-- Use `$XDG_RUNTIME_DIR/kantrip/sessions` when it is owned by the current user
-  and has safe permissions. Otherwise use a private `kantrip-<uid>` directory
-  below the OS temporary root.
-- Create every runtime root and random session directory with mode `0700`.
-- Add a non-secret marker and a `session.lock` held with `fcntl.flock` for
-  the lifetime of the supervisor.
-- Record only the session ID, owner UID, supervisor PID, creation time, and
-  lifecycle state. The lock, rather than the PID alone, is the liveness signal
-  because PIDs can be reused.
-- Continue creating generated properties, TLS material, and shims with
-  exclusive creation and restrictive permissions.
-
-### Recovery and cleanup
-
-- Add `kantrip cleanup [--dry-run]`.
-- On startup, scan only direct children of the validated sessions root and keep
-  the automatic scan bounded.
-- Consider a session stale only when its lock can be acquired, its marker and
-  ownership validate, and it is older than the stale-session TTL.
-- Reject symlinks, unexpected names, wrong owners, unsafe permissions, malformed
-  markers, and paths outside the validated root.
-- Use descriptor-relative or otherwise symlink-safe deletion. Never pass an
-  unresolved environment path or user-provided source path to recursive
-  deletion.
-- Extend `doctor` to report active, stale, and invalid session directories
-  without printing child environments or generated file contents.
-
-### Required verification
-
-- Real subprocess tests for exit codes, SIGINT, SIGTERM, repeated-signal
-  escalation, and grandchildren that remain in the managed process group.
-- PTY tests for interactive shell input, terminal restoration, and Ctrl-C.
-- Crash tests that leave a marker and prove that the next janitor pass removes
-  only the abandoned session.
-- Race-oriented tests for locks, PID reuse, symlinks, traversal, wrong
-  ownership, and concurrent cleanup.
-
-## 2. Credential store and profile lifecycle
+## 1. Credential store and profile lifecycle
 
 ### Supported stores
 
@@ -197,7 +132,7 @@ There must be no literal password, client-secret, token, JAAS, or private-key
 value option. Generic secret-provider automation beyond the explicit import
 commands is not part of this MVP.
 
-## 3. Profile import
+## 2. Profile import
 
 Importers create a new Kantrip profile through the same schema validation,
 credential staging, YAML commit, and reconciliation workflow as `kantrip add`.
@@ -277,7 +212,7 @@ kantrip import strimzi NAME --user-secret - [options]
 - Do not call `kubectl` or discover listeners, namespaces, clusters, or CA
   Secrets automatically.
 
-## 4. Kafka TLS and authentication
+## 3. Kafka TLS and authentication
 
 Extend the current schema and canonical client-property construction in this
 order:
@@ -358,7 +293,7 @@ Refresh-token and fixed-access-token profile modes are deliberately deferred.
 They add lifecycle and expiry behavior without being required for the initial
 client-credentials use case.
 
-## 5. Registry TLS and authentication
+## 4. Registry TLS and authentication
 
 Extend the existing independent `registry` object for:
 
@@ -433,7 +368,7 @@ through a generic property map.
   unauthorized response when the provider follows those semantics. Do not
   describe a resource-list request as permission-independent.
 
-## 6. Connectivity diagnostics
+## 5. Connectivity diagnostics
 
 Extend the existing `confluent-kafka` AdminClient probe; do not implement a
 second Kafka protocol stack inside Kantrip.
@@ -450,7 +385,7 @@ second Kafka protocol stack inside Kantrip.
 - Continue accepting `kantrip ping PROFILE --timeout SECONDS`. Additional
   endpoint-policy or JSON interfaces require a separate demonstrated use case.
 
-## 7. Client adapters
+## 6. Client adapters
 
 ### Existing adapters
 
@@ -483,24 +418,21 @@ documented config-path environment variables so secrets never appear in argv.
 
 ## Delivery order
 
-1. Implement process supervision, crash markers, cleanup, and diagnostics.
-2. Implement the credential-store abstraction and recoverable profile updates,
+1. Implement the credential-store abstraction and recoverable profile updates,
    including Registry changes through `edit`.
-3. Add TLS, PLAIN, SCRAM, and mTLS to the schema and shared renderers.
-4. Add properties import and Strimzi credential import.
-5. Extend the existing adapters and authenticated `ping` for those mechanisms.
-6. Add secure Registry connections.
-7. Add OAuth client credentials through verified native Java and librdkafka
+2. Add TLS, PLAIN, SCRAM, and mTLS to the schema and shared renderers.
+3. Add properties import and Strimzi credential import.
+4. Extend the existing adapters and authenticated `ping` for those mechanisms.
+5. Add secure Registry connections.
+6. Add OAuth client credentials through verified native Java and librdkafka
    mechanisms.
-8. Add the `kcl` and `kafkactl` adapters.
-9. Run the complete Linux/macOS integration and security matrix and synchronize
+7. Add the `kcl` and `kafkactl` adapters.
+8. Run the complete Linux/macOS integration and security matrix and synchronize
    all current-feature documentation.
 
-Session hardening precedes secret-bearing artifacts so abnormal termination has
-a recovery path before authentication lands. Credential storage then precedes
-authenticated profiles so secrets never need a temporary insecure
-representation. Basic TLS and SASL precede OAuth so the renderer and adapter
-boundaries are proven before token lifecycle is added.
+Credential storage precedes authenticated profiles so secrets never need a
+temporary insecure representation. Basic TLS and SASL precede OAuth so the
+renderer and adapter boundaries are proven before token lifecycle is added.
 
 ## Remaining completion criteria
 
@@ -534,10 +466,6 @@ boundaries are proven before token lifecycle is added.
   tested authentication combinations.
 - `kcl` and `kafkactl` work in explicit and interactive sessions for every
   combination marked supported.
-- SIGINT, SIGTERM, normal exit, child failure, and supervisor crash have tested
-  process and artifact outcomes.
-- Cleanup cannot remove active sessions, user-owned source material, or paths
-  outside the validated runtime root.
 - README, usage, compatibility, architecture, threat model, schema, examples,
   and release artifacts describe exactly the implemented matrix.
 
