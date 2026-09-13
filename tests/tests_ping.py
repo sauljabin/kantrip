@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
@@ -34,10 +36,13 @@ class TestPing(unittest.TestCase):
 
         self.assertEqual(PingResult(broker_count=2), result)
         configuration = admin_client.call_args.args[0]
+        logger = admin_client.call_args.kwargs["logger"]
         self.assertEqual("broker-1:9092,broker-2:9092", configuration["bootstrap.servers"])
         self.assertEqual("PLAINTEXT", configuration["security.protocol"])
         self.assertEqual("kantrip-ping", configuration["client.id"])
         self.assertEqual(2500, configuration["socket.timeout.ms"])
+        self.assertTrue(logger.disabled)
+        self.assertFalse(logger.propagate)
         admin.list_topics.assert_called_once_with(timeout=2.5)
 
     def test_profile_maps_common_and_librdkafka_properties(self) -> None:
@@ -75,6 +80,37 @@ class TestPing(unittest.TestCase):
             self.assertRaisesRegex(PingError, "did not return metadata"),
         ):
             ping_profile(profile)
+
+    def test_unreachable_kafka_does_not_write_native_logs_to_stderr(self) -> None:
+        script = """
+from kantrip.ping import PingError, ping_profile
+
+profile = {
+    "kafka": {
+        "bootstrapServers": ["127.0.0.1:1"],
+        "transport": "plaintext",
+        "auth": {"type": "none"},
+        "properties": {"librdkafka": {"debug": "broker"}},
+    }
+}
+try:
+    ping_profile(profile, timeout=0.1)
+except PingError:
+    pass
+else:
+    raise AssertionError("the unavailable broker unexpectedly returned metadata")
+"""
+
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", result.stderr)
 
     def test_profile_checks_configured_confluent_registry_subjects(self) -> None:
         profile = {

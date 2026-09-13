@@ -312,7 +312,9 @@ broker metadata and provider-specific Registry requests: `/subjects` for a
 Confluent-compatible Registry and `/search/artifacts` for native Apicurio. It
 then distinguishes configuration, DNS, transport, TLS, authentication, and
 authorization outcomes without claiming more than the underlying operation
-proves.
+proves. The embedded Kafka client sends native retry logs to a private discard
+logger so they cannot interleave terminal presentation; Kantrip emits one
+normalized failure after the bounded operation ends.
 
 Output and diagnostics stay on separate streams. Redaction occurs before
 presentation and does not depend on Rich. `NO_COLOR`, `TERM=dumb`, non-TTY

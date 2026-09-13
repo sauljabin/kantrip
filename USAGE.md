@@ -53,7 +53,8 @@ from a Confluent-compatible registry or `/search/artifacts` from native
 Apicurio, reporting broker and provider-specific resource counts. It needs no
 external CLI and defaults to a five-second timeout, configurable with
 `--timeout SECONDS`. Colored terminals animate checks; plain output uses
-`[running]`.
+`[running]`. Native librdkafka retry logs are suppressed; an unreachable Kafka
+cluster produces one normalized Kantrip diagnostic on stderr.
 
 ## First-run configuration
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,11 @@ from kantrip.registry import (
     RegistryProvider,
     plain_registry_connection,
 )
+
+_QUIET_KAFKA_LOGGER = logging.getLogger("kantrip.ping.librdkafka")
+_QUIET_KAFKA_LOGGER.addHandler(logging.NullHandler())
+_QUIET_KAFKA_LOGGER.propagate = False
+_QUIET_KAFKA_LOGGER.disabled = True
 
 
 class PingError(ConnectionError):
@@ -47,7 +53,10 @@ def ping_profile(profile: Mapping[str, Any], *, timeout: float = 5.0) -> PingRes
     except RegistryProfileError as error:
         raise PingError(str(error)) from error
     try:
-        client = AdminClient(_client_configuration(profile, timeout))
+        client = AdminClient(
+            _client_configuration(profile, timeout),
+            logger=_QUIET_KAFKA_LOGGER,
+        )
         metadata = client.list_topics(timeout=timeout)
     except KafkaException as error:
         raise PingError("the Kafka cluster did not return metadata") from error

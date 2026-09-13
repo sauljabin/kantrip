@@ -292,6 +292,8 @@ Controls:
 
 - Classify and redact values before formatting or styling.
 - Keep command output on stdout and diagnostics on stderr.
+- Route embedded librdkafka logs to a private discard logger and emit only the
+  normalized bounded `ping` result.
 - Never print resolved child environments or generated file contents.
 - Make color optional and semantically irrelevant.
 - Map stable librdkafka and HTTP outcomes into configuration, transport, TLS,
