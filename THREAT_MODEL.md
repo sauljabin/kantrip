@@ -292,7 +292,7 @@ Controls:
 
 - Classify and redact values before formatting or styling.
 - Keep command output on stdout and diagnostics on stderr.
-- Bound and redact underlying exception messages before verbose output.
+- Bound and redact underlying exception messages before diagnostic output.
 - Never print resolved child environments or generated file contents.
 - Make color optional and semantically irrelevant.
 - Map stable librdkafka and HTTP outcomes into configuration, transport, TLS,

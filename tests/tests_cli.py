@@ -368,26 +368,7 @@ class TestCli(unittest.TestCase):
         self.assertNotEqual(0, result.exit_code)
         self.assertIn("requires --registry-url", result.output)
 
-    def test_ping_exits_nonzero_when_kafka_is_unreachable(self) -> None:
-        with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
-            with patch(
-                "kantrip.cli.ping_profile",
-                side_effect=PingError("the Kafka cluster did not return metadata"),
-            ):
-                result = self.runner.invoke(
-                    cli,
-                    ["--no-color", "ping", "local"],
-                    env=environment,
-                )
-
-        self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("[failed] Could not connect for profile 'local'", result.stderr)
-        self.assertNotIn("Cause:", result.stderr)
-
-    def test_ping_verbose_reports_the_sanitized_underlying_exception(self) -> None:
+    def test_ping_failure_includes_the_sanitized_underlying_exception(self) -> None:
         with self.runner.isolated_filesystem():
             config_path = Path("config.yaml")
             config_path.write_text(_VALID_CONFIG, encoding="utf-8")
@@ -401,16 +382,77 @@ class TestCli(unittest.TestCase):
             ):
                 result = self.runner.invoke(
                     cli,
-                    ["--no-color", "ping", "local", "--verbose"],
+                    ["--no-color", "ping", "local"],
                     env=environment,
                 )
 
         self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("[failed] Could not connect for profile 'local'", result.stderr)
         self.assertIn(
             "Cause: _TRANSPORT: password=<redacted> connection refused",
             result.stderr,
         )
         self.assertNotIn("visible", result.stderr)
+
+    def test_ping_quiet_emits_nothing_on_connection_failure(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                side_effect=PingError(
+                    "the Kafka cluster did not return metadata",
+                    detail="_TRANSPORT: password=visible connection refused",
+                ),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["ping", "local", "--quiet"],
+                    env=environment,
+                )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_ping_quiet_emits_nothing_on_success(self) -> None:
+        with self.runner.isolated_filesystem():
+            config_path = Path("config.yaml")
+            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
+            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            with patch(
+                "kantrip.cli.ping_profile",
+                return_value=PingResult(broker_count=1),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["ping", "local", "--quiet"],
+                    env=environment,
+                )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_ping_quiet_emits_nothing_on_configuration_failure(self) -> None:
+        with self.runner.isolated_filesystem():
+            result = self.runner.invoke(
+                cli,
+                ["ping", "missing", "--quiet"],
+                env={"KANTRIP_CONFIG": str(Path("missing.yaml").resolve())},
+            )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_ping_help_exposes_quiet_without_verbose(self) -> None:
+        result = self.runner.invoke(cli, ["ping", "--help"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("--quiet", result.output)
+        self.assertNotIn("--verbose", result.output)
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():

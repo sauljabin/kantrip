@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any, TypeVar
 
 import click
@@ -307,34 +308,37 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
     show_default=True,
     help="Maximum time in seconds for the connectivity check.",
 )
-@cloup.option(
-    "--verbose",
-    is_flag=True,
-    help="Include the sanitized underlying connection error.",
-)
+@cloup.option("--quiet", is_flag=True, help="Return only the connectivity exit status.")
 @cloup.pass_context
-def ping(context: cloup.Context, profile_name: str, timeout: float, verbose: bool) -> None:
+def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool) -> None:
     """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
     try:
         profile = load_configuration(missing_ok=True).profile(profile_name)
-        with show_progress(console, f"Checking profile '{profile_name}'"):
+        progress = (
+            nullcontext() if quiet else show_progress(console, f"Checking profile '{profile_name}'")
+        )
+        with progress:
             result = ping_profile(profile, timeout=timeout)
     except ConfigurationError as error:
-        error_console = error_console_from_context(context)
-        error_console.print(create_status_text(error_console, "error", str(error)))
+        if not quiet:
+            error_console = error_console_from_context(context)
+            error_console.print(create_status_text(error_console, "error", str(error)))
         raise click.exceptions.Exit(1) from error
     except PingError as error:
-        error_console = error_console_from_context(context)
-        detail = f"\nCause: {error.detail}" if verbose and error.detail else ""
-        error_console.print(
-            create_status_text(
-                error_console,
-                "error",
-                f"Could not connect for profile '{profile_name}': {error}{detail}",
+        if not quiet:
+            error_console = error_console_from_context(context)
+            detail = f"\nCause: {error.detail}" if error.detail else ""
+            error_console.print(
+                create_status_text(
+                    error_console,
+                    "error",
+                    f"Could not connect for profile '{profile_name}': {error}{detail}",
+                )
             )
-        )
         raise click.exceptions.Exit(1) from error
+    if quiet:
+        return
     console.print(
         create_status_text(
             console,
