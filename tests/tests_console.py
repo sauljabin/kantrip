@@ -7,9 +7,9 @@ from kantrip.console import (
     ARCANA_THEME,
     colors_enabled,
     create_console,
+    create_json_syntax,
     create_profile_table,
     create_status_text,
-    create_yaml_syntax,
     show_progress,
 )
 
@@ -119,11 +119,11 @@ class TestConsole(unittest.TestCase):
         self.assertNotIn("secret", output)
         self.assertNotIn("classified", output)
 
-    def test_yaml_syntax_uses_color(self) -> None:
+    def test_json_syntax_uses_color(self) -> None:
         stream = TerminalBuffer()
         console = create_console(stream=stream, environment={})
 
-        console.print(create_yaml_syntax("transport: plaintext\n"), end="")
+        console.print(create_json_syntax('{"transport": "plaintext"}\n'), end="")
 
         self.assertIn("\x1b[", stream.getvalue())
         self.assertIn("transport", stream.getvalue())

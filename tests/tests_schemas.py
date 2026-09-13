@@ -2,7 +2,6 @@ import json
 import unittest
 from pathlib import Path
 
-import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -17,15 +16,15 @@ class TestProfileSchema(unittest.TestCase):
         self._validator().validate(_profile_configuration())
 
     def test_documented_profile_example_matches_schema(self) -> None:
-        example = yaml.safe_load(
-            (PROJECT_ROOT / "examples" / "config.yaml").read_text(encoding="utf-8")
+        example = json.loads(
+            (PROJECT_ROOT / "examples" / "profile.json").read_text(encoding="utf-8")
         )
 
         self._validator().validate(example)
 
     def test_plain_confluent_registry_is_accepted_with_default_provider(self) -> None:
         profile = _profile_configuration()
-        profile["profiles"]["unit-local"]["registry"] = {
+        profile["registry"] = {
             "schema.registry.url": "http://schema.example.com",
         }
 
@@ -33,7 +32,7 @@ class TestProfileSchema(unittest.TestCase):
 
     def test_plain_apicurio_registry_is_accepted(self) -> None:
         profile = _profile_configuration()
-        profile["profiles"]["unit-local"]["registry"] = {
+        profile["registry"] = {
             "provider": "apicurio",
             "apicurio.registry.url": "http://schema.example.com/apis/registry/v3",
         }
@@ -52,7 +51,7 @@ class TestProfileSchema(unittest.TestCase):
         ):
             with self.subTest(registry=registry):
                 profile = _profile_configuration()
-                profile["profiles"]["unit-local"]["registry"] = registry
+                profile["registry"] = registry
                 self.assertFalse(self._validator().is_valid(profile))
 
     def test_secure_or_credentialed_registry_urls_are_rejected(self) -> None:
@@ -64,12 +63,12 @@ class TestProfileSchema(unittest.TestCase):
         ):
             with self.subTest(url=url):
                 profile = _profile_configuration()
-                profile["profiles"]["unit-local"]["registry"] = {"schema.registry.url": url}
+                profile["registry"] = {"schema.registry.url": url}
                 self.assertFalse(self._validator().is_valid(profile))
 
     def test_legacy_schema_registry_contract_is_rejected(self) -> None:
         profile = _profile_configuration()
-        profile["profiles"]["unit-local"]["schemaRegistry"] = {
+        profile["schemaRegistry"] = {
             "url": "http://schema.example.com",
             "auth": {"type": "none"},
         }
@@ -84,7 +83,7 @@ class TestProfileSchema(unittest.TestCase):
 
     def test_authenticated_or_encrypted_profiles_are_not_accepted(self) -> None:
         profile = _profile_configuration()
-        kafka = profile["profiles"]["unit-local"]["kafka"]
+        kafka = profile["kafka"]
         kafka["transport"] = "tls"
         kafka["auth"] = {"type": "plain", "username": "synthetic"}
 
@@ -101,18 +100,14 @@ class TestProfileSchema(unittest.TestCase):
 
 def _profile_configuration() -> dict:
     return {
-        "profiles": {
-            "unit-local": {
-                "id": "018f8f13-7c21-7cee-8000-000000000010",
-                "description": "Synthetic unit profile",
-                "labels": {"environment": "test"},
-                "kafka": {
-                    "bootstrapServers": ["localhost:19092"],
-                    "transport": "plaintext",
-                    "auth": {"type": "none"},
-                },
-            }
-        }
+        "id": "018f8f13-7c21-7cee-8000-000000000010",
+        "description": "Synthetic unit profile",
+        "labels": {"environment": "test"},
+        "kafka": {
+            "bootstrapServers": ["localhost:19092"],
+            "transport": "plaintext",
+            "auth": {"type": "none"},
+        },
     }
 
 

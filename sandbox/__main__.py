@@ -150,7 +150,7 @@ def smoke(
 
     with tempfile.TemporaryDirectory(prefix="kantrip-smoke-") as directory:
         smoke_environment = dict(environment)
-        smoke_environment["KANTRIP_CONFIG"] = str(Path(directory) / "config.yaml")
+        smoke_environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
         console.print(Text("Kantrip Sandbox", style="heading"))
         _show_section(console, "Setup")
         _add_profile(

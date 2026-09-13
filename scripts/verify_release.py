@@ -9,6 +9,7 @@ from email.parser import BytesParser
 from pathlib import Path
 
 WHEEL_REQUIRED = {
+    "kantrip/profiles.py",
     "kantrip/schemas/profile.schema.json",
 }
 
@@ -24,7 +25,8 @@ SDIST_REQUIRED = {
     "SECURITY.md",
     "THREAT_MODEL.md",
     "USAGE.md",
-    "examples/config.yaml",
+    "examples/profile.json",
+    "kantrip/profiles.py",
     "pyproject.toml",
     "schemas/profile.schema.json",
 }

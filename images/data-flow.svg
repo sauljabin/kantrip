@@ -35,7 +35,7 @@
 
   <text class="group" x="145" y="55">SOURCES</text>
   <rect class="source" x="35" y="80" width="220" height="82" rx="12"/>
-  <text class="label" x="145" y="113">Profile YAML</text>
+  <text class="label" x="145" y="113">Profile database</text>
   <text class="detail" x="145" y="138">metadata + secret references</text>
 
   <rect class="source" x="35" y="205" width="220" height="82" rx="12"/>

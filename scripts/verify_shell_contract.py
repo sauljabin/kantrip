@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES, KCAT_EXECUTABLES
-from kantrip.config import add_profile
+from kantrip.profiles import add_profile
 from scripts import run_terminal
 
 _FAKE_CLIENT = r"""#!{python}
@@ -86,10 +86,10 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             home.mkdir()
             fake_bin.mkdir()
             log_path = root / f"{shell_name}.jsonl"
-            config_path = root / "config.yaml"
+            database_path = root / "profiles.db"
             add_profile(
                 "contract",
-                config_path,
+                database_path,
                 bootstrap_servers=("contract.invalid:9092",),
                 registry_url="http://registry.invalid:8081",
             )
@@ -99,7 +99,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 shell=isolated_shell,
                 home=home,
                 fake_bin=fake_bin,
-                config_path=config_path,
+                database_path=database_path,
                 log_path=log_path,
             )
             _write_startup(shell_name, home, environment)
@@ -225,14 +225,14 @@ def _contract_environment(
     shell: str,
     home: Path,
     fake_bin: Path,
-    config_path: Path,
+    database_path: Path,
     log_path: Path,
 ) -> dict[str, str]:
     environment = dict(os.environ)
     environment.update(
         {
             "HOME": str(home),
-            "KANTRIP_CONFIG": str(config_path),
+            "KANTRIP_DATABASE": str(database_path),
             "KANTRIP_CONTRACT_LOG": str(log_path),
             "PATH": f"{fake_bin}{os.pathsep}{environment.get('PATH', os.defpath)}",
             "SHELL": shell,

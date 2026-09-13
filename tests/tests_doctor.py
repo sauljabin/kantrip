@@ -1,21 +1,24 @@
+import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.doctor import run_doctor
+from kantrip.profiles import add_profile, load_profiles
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 
 
 class TestDoctor(unittest.TestCase):
-    def test_reports_valid_configuration_and_installed_tools(self) -> None:
+    def test_reports_valid_profile_database_and_installed_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
@@ -26,7 +29,7 @@ class TestDoctor(unittest.TestCase):
 
         messages = [check.message for check in report.checks]
         self.assertTrue(report.healthy)
-        self.assertTrue(any("Configuration matches schema" in message for message in messages))
+        self.assertTrue(any("Profile database is valid" in message for message in messages))
         self.assertTrue(any(message.startswith("kcat: ") for message in messages))
         self.assertTrue(any("Apache Kafka CLI: all 7" in message for message in messages))
         self.assertTrue(any("Schema Registry console: all 6" in message for message in messages))
@@ -45,15 +48,16 @@ class TestDoctor(unittest.TestCase):
             )
         )
 
-    def test_invalid_configuration_is_unhealthy_without_contacting_kafka(self) -> None:
+    def test_invalid_database_is_unhealthy_without_contacting_kafka(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.yaml"
-            config_path.write_text("profiles: []\n", encoding="utf-8")
+            database_path = Path(directory) / "profiles.db"
+            database_path.write_bytes(b"not a sqlite database")
+            database_path.chmod(0o600)
 
             with patch("kantrip.doctor.shutil.which", return_value=None):
                 report = run_doctor(
                     {
-                        "KANTRIP_CONFIG": str(config_path),
+                        "KANTRIP_DATABASE": str(database_path),
                         "XDG_RUNTIME_DIR": directory,
                         "PATH": "",
                         "SHELL": "/bin/zsh",
@@ -62,19 +66,26 @@ class TestDoctor(unittest.TestCase):
 
         self.assertFalse(report.healthy)
         self.assertTrue(
-            any("configuration does not match schema" in check.message for check in report.checks)
+            any(
+                "profile database could not be read safely" in check.message
+                for check in report.checks
+            )
         )
 
     def test_unsupported_registry_profile_is_unhealthy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.yaml"
-            config_path.write_text(
-                _VALID_CONFIG.replace("http://localhost:8081", "https://localhost:8081"),
-                encoding="utf-8",
-            )
-            config_path.chmod(0o600)
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            profile = load_profiles(database_path).profile("local")
+            profile["registry"]["schema.registry.url"] = "https://localhost:8081"
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute(
+                    "UPDATE profiles SET document = ? WHERE name = 'local'",
+                    (json.dumps(profile, sort_keys=True, separators=(",", ":")),),
+                )
+                connection.commit()
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
@@ -84,17 +95,14 @@ class TestDoctor(unittest.TestCase):
                 report = run_doctor(environment)
 
         self.assertFalse(report.healthy)
-        self.assertTrue(
-            any("configuration does not match schema" in check.message for check in report.checks)
-        )
+        self.assertTrue(any("does not match schema" in check.message for check in report.checks))
 
     def test_names_a_missing_schema_registry_console_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
@@ -123,16 +131,15 @@ class TestDoctor(unittest.TestCase):
     def test_active_session_allows_a_benign_path_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config_path = root / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
             session_directory = root / "session"
             shim_directory = session_directory / "bin"
             shim_directory.mkdir(parents=True)
             virtual_environment = root / "venv" / "bin"
             virtual_environment.mkdir(parents=True)
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "KANTRIP_PROFILE": "local",
                 "KANTRIP_SESSION_ID": "synthetic-session",
@@ -155,9 +162,8 @@ class TestDoctor(unittest.TestCase):
     def test_active_session_rejects_an_adapter_shadow_earlier_on_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config_path = root / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
             session_directory = root / "session"
             shim_directory = session_directory / "bin"
             shim_directory.mkdir(parents=True)
@@ -167,7 +173,7 @@ class TestDoctor(unittest.TestCase):
             shadow.write_text("#!/bin/sh\n", encoding="utf-8")
             shadow.chmod(0o700)
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "KANTRIP_PROFILE": "local",
                 "KANTRIP_SESSION_ID": "synthetic-session",
@@ -191,11 +197,10 @@ class TestDoctor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
-            config_path = root / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
@@ -230,11 +235,10 @@ class TestDoctor(unittest.TestCase):
             runtime_root.mkdir(mode=0o700, parents=True)
             runtime_root.parent.chmod(0o700)
             (runtime_root / "unexpected").mkdir()
-            config_path = root / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
             environment = {
-                "KANTRIP_CONFIG": str(config_path),
+                "KANTRIP_DATABASE": str(database_path),
                 "XDG_RUNTIME_DIR": directory,
                 "PATH": "/tools",
                 "SHELL": "/tools/zsh",
@@ -273,20 +277,8 @@ def _installed_tool(name: str, path: str | None = None) -> str | None:
     return f"/tools/{name}" if name in installed else None
 
 
-_VALID_CONFIG = """\
-profiles:
-  local:
-    id: 018f8f13-7c21-7cee-8000-000000000001
-    kafka:
-      bootstrapServers:
-        - localhost:9092
-      transport: plaintext
-      auth:
-        type: none
-    registry:
-      provider: confluent
-      schema.registry.url: http://localhost:8081
-"""
+def _create_profile_database(path: Path) -> None:
+    add_profile("local", path, registry_url="http://localhost:8081")
 
 
 if __name__ == "__main__":

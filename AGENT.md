@@ -25,15 +25,22 @@
   persistent process manager, global context selector, or Kafka client
   replacement.
 - Keep the implemented profile schema in `schemas/`, examples in `examples/`, and
-  synthetic data with its tests. Update examples, tests, and migration notes with
-  schema changes. Release-bundled schemas are authoritative; filenames and
-  configuration omit application versions.
+  synthetic data with its tests. Update examples, tests, and documentation with
+  schema changes. Release-bundled profile schemas are authoritative; profile
+  documents omit application versions. The SQLite schema uses a separate
+  internal version.
 - Treat the environment documented in `USAGE.md` as public API. Add variables
   compatibly; renames or semantic breaks require release and migration guidance.
   Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
   Kantrip-owned profile/session metadata.
-- Profile add/remove is validated and atomic; add creates missing configuration,
-  never overwrites a profile, and list returns empty when configuration is absent.
+- Store profiles in the private SQLite database resolved through
+  `KANTRIP_DATABASE`, `XDG_DATA_HOME`, then the user's default data directory.
+  Keep its directory mode `0700`, database and sidecar modes `0600`, WAL enabled,
+  and writes bounded by `BEGIN IMMEDIATE` transactions. Reject symlinks, unsafe
+  ownership or permissions, corrupt contents, and unsupported schema versions.
+- Profile add/remove is validated and transactional; add creates the missing
+  database, never overwrites a profile, and list returns empty when the database
+  is absent. Read-only operations must not create filesystem state.
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent

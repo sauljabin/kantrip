@@ -19,13 +19,13 @@ connectivity.
 
 ### Plaintext profiles
 
-- Schema-validated YAML configuration with atomic profile updates
-- Multiple bootstrap servers, descriptions, labels, and client properties
+- Schema-validated profiles in a private transactional SQLite database
+- Multiple bootstrap servers, descriptions, and optional Registry endpoints
 - `add`, `remove`, `list`, and redacted `show` commands
 
 ### Local diagnostics
 
-- Configuration, permissions, profile, platform, shell, and session checks
+- Profile database, permissions, platform, shell, and session checks
 - Explicit Kafka protocol connectivity checks with `ping`
 - Installed-command discovery for Kantrip's supported adapters
 - Colored status output with plain-text and `NO_COLOR` support
@@ -93,9 +93,10 @@ kafka-topics --list
 exit
 ```
 
-`add` creates `~/.config/kantrip/config.yaml` and defaults to `localhost:9092`.
-Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a description, and
-`--registry-url http://HOST:PORT` for a plain Confluent Schema Registry. Add
+`add` creates `~/.local/share/kantrip/profiles.db` and defaults to
+`localhost:9092`. Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a
+description, and `--registry-url http://HOST:PORT` for a plain Confluent Schema
+Registry. Add
 `--registry-provider apicurio` for a native Apicurio Core Registry API v3 URL.
 Remove profiles with `kantrip remove PROFILE`; `list` shows both endpoints.
 
