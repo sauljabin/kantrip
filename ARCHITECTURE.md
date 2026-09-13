@@ -19,9 +19,11 @@ For each command or subshell, the user selects a profile. Kantrip then:
 5. Supervises the client in a bounded session.
 6. Removes session-owned connection material.
 
-Kantrip does not implement Kafka or Registry protocols, install clients, manage
-Kafka resources, select schemas, or keep an ambient active profile. Those
-responsibilities remain with the selected client and remote services.
+Kantrip prepares the connection for one execution; it does not perform the
+Kafka or Registry operation itself. It does not install or replace clients,
+manage topics, groups, or schemas, or keep a globally active profile. The
+selected client performs the requested operation using the connection material
+Kantrip supplies for that session.
 
 ## Data flow
 
