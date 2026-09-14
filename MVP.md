@@ -18,8 +18,6 @@ Complete Kantrip's local profile model with:
 - Authenticated Confluent-compatible and native Apicurio Registry connections.
 - Profile import from Java/librdkafka properties, Confluent-generated client
   properties, and Strimzi KafkaUser Secrets.
-- Profile editing that can add, update, or explicitly remove a Registry
-  connection.
 - New adapters for `kcl` and `kafkactl`.
 - Authenticated connectivity diagnostics.
 
@@ -38,7 +36,7 @@ supervising the active execution.
   internal and independent from product versions and profile documents.
 - Do not add compatibility paths for database formats that were never released.
   The first published release establishes the supported migration boundary,
-  while any one release may contain several ordered migration files.
+  while any one release may contain several ordered migration commands.
 - Keep resolved secrets out of the profile database, argv, logs, tracebacks,
   diagnostics, snapshots, and normal output.
 - Pass secrets to a selected child only through a private generated file or a
@@ -66,23 +64,7 @@ supervising the active execution.
 
 ## 1. Credential store and profile lifecycle
 
-### Supported stores
-
-- Add a narrow `SecretStore` protocol and an implementation backed by Python
-  `keyring`.
-- Allow only the native macOS Keychain backend and Linux Secret
-  Service-compatible backends. Detect and reject null, fail, plaintext,
-  encrypted-file, and unknown configured backends.
-- Use service `kantrip` and immutable profile-ID keys such as:
-
-  ```text
-  profile/<uuid>/kafka/password
-  profile/<uuid>/oauth/client-secret
-  profile/<uuid>/tls/private-key
-  profile/<uuid>/tls/private-key-password
-  profile/<uuid>/registry/password
-  profile/<uuid>/registry/token
-  ```
+### Remaining store work
 
 - Store textual PEM private keys as credential values. Validate realistic PEM
   sizes against both supported store families before declaring mTLS complete.
@@ -106,33 +88,26 @@ atomic transaction. Do not promise cross-store atomicity.
 - For profile removal, remove the profile in a SQLite transaction before deleting
   its exact credential keys. Report and reconcile any leftover orphan instead
   of restoring a profile whose secrets may already be partially deleted.
-- Keep pending exact-reference cleanup in a non-secret reconciliation table in
-  the profile database. Commit the intent before writing the credential store,
-  advance it atomically with the profile switch, retry it on later mutations and
-  through `doctor --repair`, and remove it only after cleanup succeeds. A normal
-  `doctor` run only reports it. Standard `keyring` APIs cannot enumerate
-  arbitrary orphaned entries, so reconciliation must not depend on backend
-  listing support.
-- Use SQLite write transactions for database concurrency and a cross-store
-  mutation lock around the journal/credential/database workflow.
+- Integrate the existing exact-reference reconciliation journal into every
+  secret-bearing mutation. Commit intent before a credential-store write can
+  create an orphan, advance it atomically with the profile switch, and retry it
+  on later mutations. Standard `keyring` APIs cannot enumerate arbitrary
+  orphaned entries, so no workflow may depend on backend listing support.
+- Use SQLite write transactions for database concurrency and the existing
+  maintenance lock around the journal/credential/database workflow.
 
 ### Commands
 
 - Extend `kantrip add NAME` with transport and authentication choices.
-- Add `kantrip edit NAME` for brokers, description, labels, transport,
-  authentication, and Registry configuration. With no options, open an
-  interactive editor.
-- Let `edit` add a Registry connection to a profile that has none and update the
-  provider, URL, TLS, or authentication of an existing Registry connection.
-- Require `--remove-registry` to remove the complete Registry block; omission of
-  Registry options or an empty value never removes it implicitly.
+- Extend `kantrip edit NAME` with transport, authentication, and Registry TLS or
+  authentication. With no options, open an interactive editor.
 - For each existing secret, offer explicit keep, replace, or remove decisions.
   Never display or prefill the current value.
 - Add `kantrip secret set PROFILE FIELD` with no-echo input.
 - Add confirmation to secret-bearing profile removal and `--force` to skip
   only the prompt, not validation.
-- Extend `doctor` with backend availability, locked-store, missing-reference,
-  orphan-reference, certificate-match, and certificate-expiry checks.
+- Extend `doctor` with locked-store, missing-reference, certificate-match, and
+  certificate-expiry checks.
 
 There must be no literal password, client-secret, token, JAAS, or private-key
 value option. Generic secret-provider automation beyond the explicit import
@@ -424,8 +399,8 @@ documented config-path environment variables so secrets never appear in argv.
 
 ## Delivery order
 
-1. Implement the credential-store abstraction and recoverable profile updates,
-   including Registry changes through `edit`.
+1. Complete recoverable secret-bearing profile updates on top of the credential
+   store, reconciliation journal, and plaintext `edit` lifecycle.
 2. Add TLS, PLAIN, SCRAM, and mTLS to the schema and shared renderers.
 3. Add properties import and Strimzi credential import.
 4. Extend the existing adapters and authenticated `ping` for those mechanisms.
@@ -442,13 +417,11 @@ renderer and adapter boundaries are proven before token lifecycle is added.
 
 ## Remaining completion criteria
 
-- Approved Keychain and Secret Service-compatible backends work; insecure or
-  unavailable backends fail clearly.
 - Concurrent profile updates, partial keyring failures, and orphan cleanup leave
   either the old usable profile or the new usable profile, never a silently
   half-updated profile.
-- `edit` can add, update, and explicitly remove a Registry connection without
-  displaying or unintentionally replacing existing secrets.
+- `edit` can secure an existing Registry connection without displaying or
+  unintentionally replacing existing secrets.
 - Properties import accepts verified Java, librdkafka, and
   Confluent-generated fixtures, extracts their secrets, and rejects ambiguous or
   unsupported security configuration.

@@ -12,9 +12,12 @@ from kantrip.profiles import (
     ProfileStoreError,
     database_maintenance_lock,
     migrate_profile_database,
+    reconcile_pending_secrets,
     resolve_database_path,
 )
+from kantrip.reconciliation import ReconciliationError
 from kantrip.runtime import SessionRuntimeError, scan_sessions
+from kantrip.secret_store import SecretStore, SecretStoreError
 
 RepairStatus = Literal["success", "cleanup", "error"]
 
@@ -39,8 +42,12 @@ class RepairReport:
         return all(action.status != "error" for action in self.actions)
 
 
-def run_repair(environment: Mapping[str, str] | None = None) -> RepairReport:
-    """Migrate profiles and completely clean safe stale session artifacts."""
+def run_repair(
+    environment: Mapping[str, str] | None = None,
+    *,
+    secret_store: SecretStore | None = None,
+) -> RepairReport:
+    """Migrate profiles, reconcile credentials, and clean stale sessions."""
     database_path = resolve_database_path(environment)
     actions: list[RepairAction] = []
     if not _exists(database_path):
@@ -70,10 +77,38 @@ def run_repair(environment: Mapping[str, str] | None = None) -> RepairReport:
                         f"(sequence {DATABASE_SCHEMA_VERSION})"
                     )
                 actions.append(RepairAction("success", message))
+                actions.append(
+                    _repair_credentials(database_path, environment, secret_store=secret_store)
+                )
             actions.append(_repair_sessions(environment))
     except ProfileStoreError as error:
         actions.append(RepairAction("error", str(error)))
     return RepairReport(tuple(actions))
+
+
+def _repair_credentials(
+    database_path: Path,
+    environment: Mapping[str, str] | None,
+    *,
+    secret_store: SecretStore | None,
+) -> RepairAction:
+    try:
+        result = reconcile_pending_secrets(
+            database_path,
+            environment=environment,
+            store=secret_store,
+            lock_held=True,
+        )
+    except (ProfileStoreError, ReconciliationError, SecretStoreError):
+        return RepairAction("error", "Credential reconciliation could not be completed safely")
+    if result.failed:
+        return RepairAction(
+            "error",
+            f"Credential reconciliation: removed {result.removed}; failed {result.failed}",
+        )
+    if result.removed:
+        return RepairAction("cleanup", f"Credential reconciliation: removed {result.removed}")
+    return RepairAction("success", "Credential reconciliation: no pending entries")
 
 
 def _repair_sessions(environment: Mapping[str, str] | None) -> RepairAction:

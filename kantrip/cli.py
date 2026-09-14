@@ -27,7 +27,13 @@ from kantrip.console import (
 from kantrip.doctor import run_doctor
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, ping_profile
-from kantrip.profiles import ProfileStoreError, add_profile, load_profiles, remove_profile
+from kantrip.profiles import (
+    ProfileStoreError,
+    add_profile,
+    edit_profile,
+    load_profiles,
+    remove_profile,
+)
 from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
@@ -102,13 +108,32 @@ def error_console_from_context(context: cloup.Context) -> Console:
 
 
 def _split_bootstrap_servers(
-    context: click.Context, parameter: click.Parameter, value: str
-) -> tuple[str, ...]:
+    context: click.Context, parameter: click.Parameter, value: str | None
+) -> tuple[str, ...] | None:
     del context, parameter
+    if value is None:
+        return None
     servers = tuple(server.strip() for server in value.split(","))
     if not servers or any(not server for server in servers):
         raise click.BadParameter("must be a comma-separated list of host:port addresses")
     return servers
+
+
+def _parse_labels(
+    context: click.Context,
+    parameter: click.Parameter,
+    values: tuple[str, ...],
+) -> dict[str, str]:
+    del context, parameter
+    labels: dict[str, str] = {}
+    for value in values:
+        name, separator, label_value = value.partition("=")
+        if not separator or not name:
+            raise click.BadParameter("must use KEY=VALUE")
+        if name in labels:
+            raise click.BadParameter(f"label '{name}' was supplied more than once")
+        labels[name] = label_value
+    return labels
 
 
 @cli.command("add")
@@ -152,6 +177,68 @@ def add_configured_profile(
     except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
     click.echo(f"Added profile '{profile_name}' to {profiles.path}")
+
+
+@cli.command("edit")
+@local_no_color
+@cloup.argument("profile_name", metavar="PROFILE")
+@cloup.option(
+    "-b",
+    "--bootstrap-servers",
+    callback=_split_bootstrap_servers,
+    help="Replace the comma-separated Kafka broker addresses.",
+)
+@cloup.option("-d", "--description", help="Replace the profile description.")
+@cloup.option("--clear-description", is_flag=True, help="Remove the profile description.")
+@cloup.option(
+    "--label",
+    "labels",
+    multiple=True,
+    callback=_parse_labels,
+    metavar="KEY=VALUE",
+    help="Add or replace a label; repeat for multiple labels.",
+)
+@cloup.option(
+    "--remove-label",
+    "remove_labels",
+    multiple=True,
+    metavar="KEY",
+    help="Remove a label; repeat for multiple labels.",
+)
+@cloup.option(
+    "--registry-provider",
+    type=cloup.Choice(("confluent", "apicurio")),
+    help="Replace the Registry provider.",
+)
+@cloup.option("--registry-url", help="Add or replace the plain Registry URL.")
+@cloup.option("--remove-registry", is_flag=True, help="Remove the complete Registry connection.")
+def edit_configured_profile(
+    profile_name: str,
+    bootstrap_servers: tuple[str, ...] | None,
+    description: str | None,
+    clear_description: bool,
+    labels: dict[str, str],
+    remove_labels: tuple[str, ...],
+    registry_provider: str | None,
+    registry_url: str | None,
+    remove_registry: bool,
+) -> None:
+    """Edit explicit fields of an existing profile."""
+    try:
+        profiles = edit_profile(
+            profile_name,
+            bootstrap_servers=bootstrap_servers,
+            description=description,
+            clear_description=clear_description,
+            labels=labels,
+            remove_labels=remove_labels,
+            registry_provider=registry_provider,
+            registry_url=registry_url,
+            remove_registry=remove_registry,
+        )
+    except ProfileStoreError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Updated profile '{profile_name}' in {profiles.path}")
 
 
 @cli.command("remove")
@@ -210,7 +297,7 @@ def current_profile() -> None:
 @cloup.option(
     "--repair",
     is_flag=True,
-    help="Apply safe database migrations and remove stale session artifacts.",
+    help="Apply migrations, reconcile credentials, and remove stale sessions.",
 )
 @cloup.option(
     "--verbose",
