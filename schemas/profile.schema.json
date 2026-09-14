@@ -1,21 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/sauljabin/kantrip/main/schemas/profile.schema.json",
-  "title": "Kantrip plaintext profile configuration",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["profiles"],
-  "properties": {
-    "profiles": {
-      "type": "object",
-      "propertyNames": {
-        "pattern": "^[^/\\\\\\u0000]{1,128}$"
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/profile"
-      }
-    }
-  },
+  "title": "Kantrip plaintext profile",
+  "$ref": "#/$defs/profile",
   "$defs": {
     "clientProperties": {
       "type": "object",

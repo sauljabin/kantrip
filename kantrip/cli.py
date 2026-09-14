@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -10,23 +11,22 @@ from typing import Any, TypeVar
 
 import click
 import cloup
-import yaml
 from rich.console import Console
 from rich.padding import Padding
 from rich.text import Text
 
 from kantrip import APP_VERSION
-from kantrip.config import ConfigurationError, add_profile, load_configuration, remove_profile
 from kantrip.console import (
     StatusKind,
     create_console,
+    create_json_syntax,
     create_profile_table,
     create_status_text,
-    create_yaml_syntax,
     show_progress,
 )
 from kantrip.doctor import run_doctor
 from kantrip.ping import PingError, ping_profile
+from kantrip.profiles import ProfileStoreError, add_profile, load_profiles, remove_profile
 from kantrip.redaction import redact_mapping
 from kantrip.runtime import SessionRuntimeError, scan_sessions
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
@@ -142,16 +142,16 @@ def add_configured_profile(
 ) -> None:
     """Add a plaintext profile."""
     try:
-        configuration = add_profile(
+        profiles = add_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
             description=description,
             registry_provider=registry_provider,
             registry_url=registry_url,
         )
-    except ConfigurationError as error:
+    except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(f"Added profile '{profile_name}' to {configuration.path}")
+    click.echo(f"Added profile '{profile_name}' to {profiles.path}")
 
 
 @cli.command("remove")
@@ -160,10 +160,10 @@ def add_configured_profile(
 def remove_configured_profile(profile_name: str) -> None:
     """Remove a profile."""
     try:
-        configuration = remove_profile(profile_name)
-    except ConfigurationError as error:
+        profiles = remove_profile(profile_name)
+    except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
-    click.echo(f"Removed profile '{profile_name}' from {configuration.path}")
+    click.echo(f"Removed profile '{profile_name}' from {profiles.path}")
 
 
 @cli.command("list")
@@ -172,11 +172,11 @@ def remove_configured_profile(profile_name: str) -> None:
 def list_profiles(context: cloup.Context) -> None:
     """List configured profiles."""
     try:
-        configuration = load_configuration(missing_ok=True)
-    except ConfigurationError as error:
+        profiles = load_profiles(missing_ok=True)
+    except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
-    if configuration.profiles:
-        console_from_context(context).print(create_profile_table(configuration.profiles))
+    if profiles.profiles:
+        console_from_context(context).print(create_profile_table(profiles.profiles))
 
 
 @cli.command("show")
@@ -186,11 +186,11 @@ def list_profiles(context: cloup.Context) -> None:
 def show_profile(context: cloup.Context, profile_name: str) -> None:
     """Show a profile with sensitive-looking values redacted."""
     try:
-        profile = load_configuration(missing_ok=True).profile(profile_name)
-    except ConfigurationError as error:
+        profile = load_profiles(missing_ok=True).profile(profile_name)
+    except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
-    contents = yaml.safe_dump(redact_mapping(profile), sort_keys=False)
-    console_from_context(context).print(create_yaml_syntax(contents), end="")
+    contents = json.dumps(redact_mapping(profile), indent=2) + "\n"
+    console_from_context(context).print(create_json_syntax(contents), end="")
 
 
 @cli.command("current")
@@ -250,7 +250,7 @@ def cleanup_sessions(context: cloup.Context, dry_run: bool) -> None:
 )
 @cloup.pass_context
 def doctor(context: cloup.Context, verbose: bool) -> None:
-    """Check Kantrip's local configuration and command environment."""
+    """Check Kantrip's profile store and command environment."""
     console = console_from_context(context)
     report = run_doctor()
     console.print(Text("Kantrip Doctor", style="heading"))
@@ -314,13 +314,13 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
     """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
     try:
-        profile = load_configuration(missing_ok=True).profile(profile_name)
+        profile = load_profiles(missing_ok=True).profile(profile_name)
         progress = (
             nullcontext() if quiet else show_progress(console, f"Checking profile '{profile_name}'")
         )
         with progress:
             result = ping_profile(profile, timeout=timeout)
-    except ConfigurationError as error:
+    except ProfileStoreError as error:
         if not quiet:
             error_console = error_console_from_context(context)
             error_console.print(create_status_text(error_console, "error", str(error)))
@@ -372,9 +372,9 @@ def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
     """Run a command or interactive subshell with PROFILE."""
     try:
         ensure_session_available()
-        profile = load_configuration(missing_ok=True).profile(profile_name)
+        profile = load_profiles(missing_ok=True).profile(profile_name)
         exit_code = run_profile_session(profile_name, profile, command)
-    except (ConfigurationError, SessionError) as error:
+    except (ProfileStoreError, SessionError) as error:
         raise click.ClickException(str(error)) from error
     raise click.exceptions.Exit(exit_code)
 

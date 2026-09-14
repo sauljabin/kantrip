@@ -8,6 +8,9 @@
 <a href="https://github.com/sponsors/sauljabin"><img alt="Sponsor on GitHub" src="https://img.shields.io/badge/sponsor-GitHub-EA4AAA?style=flat-square&logo=githubsponsors&logoColor=white"></a>
 <br>
 <a href="https://pypi.org/project/kantrip"><img alt="PyPI version" src="https://img.shields.io/pypi/v/kantrip?style=flat-square&logo=pypi&logoColor=white&label=pypi"></a>
+<br>
+<a href="https://pypi.org/project/kantrip"><img alt="Linux support" src="https://img.shields.io/badge/os-Linux-7C3AED?style=flat-square&logo=linux&logoColor=white"></a>
+<a href="https://pypi.org/project/kantrip"><img alt="macOS support" src="https://img.shields.io/badge/os-macOS-7C3AED?style=flat-square&logo=apple&logoColor=white"></a>
 </p>
 
 Kantrip securely manages plaintext Kafka profiles for kcat, the official Kafka
@@ -19,13 +22,13 @@ connectivity.
 
 ### Plaintext profiles
 
-- Schema-validated YAML configuration with atomic profile updates
-- Multiple bootstrap servers, descriptions, labels, and client properties
+- Schema-validated profiles in a private transactional SQLite database
+- Multiple bootstrap servers, descriptions, and optional Registry endpoints
 - `add`, `remove`, `list`, and redacted `show` commands
 
 ### Local diagnostics
 
-- Configuration, permissions, profile, platform, shell, and session checks
+- Profile database, permissions, platform, shell, and session checks
 - Explicit Kafka protocol connectivity checks with `ping`
 - Installed-command discovery for Kantrip's supported adapters
 - Colored status output with plain-text and `NO_COLOR` support
@@ -93,9 +96,10 @@ kafka-topics --list
 exit
 ```
 
-`add` creates `~/.config/kantrip/config.yaml` and defaults to `localhost:9092`.
-Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a description, and
-`--registry-url http://HOST:PORT` for a plain Confluent Schema Registry. Add
+`add` creates `~/.local/share/kantrip/profiles.db` and defaults to
+`localhost:9092`. Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a
+description, and `--registry-url http://HOST:PORT` for a plain Confluent Schema
+Registry. Add
 `--registry-provider apicurio` for a native Apicurio Core Registry API v3 URL.
 Remove profiles with `kantrip remove PROFILE`; `list` shows both endpoints.
 

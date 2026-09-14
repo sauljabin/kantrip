@@ -35,14 +35,19 @@ diagnostics reuse the same resolution path.
 
 ## Profiles and connection material
 
-Profiles are schema-validated YAML documents with an immutable UUID, Kafka
-connection metadata, and at most one independent Registry connection. YAML
-contains non-secret values and opaque secret references, never credentials,
-bearer tokens, raw JAAS, or private keys.
+Profiles are schema-validated JSON documents stored one per row in a private
+SQLite database. Each has an immutable UUID, Kafka connection metadata, and at
+most one independent Registry connection. Documents contain non-secret values
+and opaque secret references, never credentials, bearer tokens, raw JAAS, or
+private keys.
 
-Configuration follows `KANTRIP_CONFIG`, `XDG_CONFIG_HOME`, then
-`~/.config/kantrip/config.yaml`. Mutations are locked and replace the mode
-`0600` file atomically.
+Database lookup follows `KANTRIP_DATABASE`, `XDG_DATA_HOME`, then
+`~/.local/share/kantrip/profiles.db`. Its directory is user-owned mode `0700`;
+the database and SQLite sidecars are mode `0600`. Symlinks, unsafe ownership or
+permissions, corrupt schemas, and unsupported internal versions fail closed.
+WAL permits readers while writes are serialized with bounded
+`BEGIN IMMEDIATE` transactions. The profile document schema is independent of
+the internal database schema version.
 
 Long-lived secrets use immutable profile-ID-based keys in macOS Keychain or a
 Linux Secret Service-compatible backend. Kantrip rejects unavailable,
@@ -74,20 +79,22 @@ replayed as unvalidated configuration.
 
 ## Profile lifecycle and imports
 
-Profile mutations share validation, locking, secret staging, atomic YAML
-replacement, and reconciliation. `edit` may add or update a Registry; only an
-explicit removal deletes it. Existing secrets have explicit keep, replace, and
-remove semantics and are never displayed or prefilled.
+Profile mutations share validation, cross-store locking, secret staging,
+transactional database updates, and reconciliation. `edit` may add or update a
+Registry; only an explicit removal deletes it. Existing secrets have explicit
+keep, replace, and remove semantics and are never displayed or prefilled.
 
-YAML and the credential store cannot form one atomic transaction. Kantrip uses
-immutable secret references and a non-secret reconciliation journal to make
-partial failures recoverable:
+SQLite and the credential store cannot participate in one atomic transaction.
+Kantrip therefore stores non-secret reconciliation records in the same database
+and uses immutable secret references to make partial failures recoverable:
 
-- Record planned reference changes before a keyring write can create an orphan.
-- Stage new secrets before switching the YAML reference.
-- On a failed YAML update, remove staged secrets and retain the old profile.
-- Delete superseded secrets only after the YAML switch.
-- Retain failed cleanup work for idempotent retry by a mutation or `doctor`.
+- Commit cleanup intent before a credential-store write can create an orphan.
+- Stage new secrets under new references.
+- Atomically switch the profile document and advance its journal record in one
+  SQLite transaction.
+- On a failed database update, remove staged secrets and retain the old profile.
+- Delete superseded secrets only after the profile switch, retaining failed
+  cleanup work for idempotent retry by a mutation or `doctor`.
 
 Java, librdkafka, Confluent-generated, and Strimzi KafkaUser TLS or SCRAM files
 import into the same profile model. Importers use format-specific parsers,
@@ -231,8 +238,8 @@ meaning.
 ## Architectural strengths
 
 - Explicit profile selection prevents ambient context drift.
-- Long-lived secrets remain outside YAML and are resolved only for the selected
-  execution.
+- Long-lived secrets remain outside the profile database and are resolved only
+  for the selected execution.
 - One typed model and native renderers prevent dialect mixing and arbitrary
   configuration passthrough.
 - Capability checks fail before unsupported authentication can degrade.
@@ -250,7 +257,7 @@ meaning.
   kernel compromise, or administrator access defeat local controls.
 - Secrets temporarily exist in memory and sometimes private files; deletion is
   not forensic erasure.
-- YAML and credential-store updates are recoverable, not atomic. Loss of both
+- SQLite and credential-store updates are recoverable, not atomic. Loss of both
   journal and referenced state can leave undiscoverable orphans.
 - Compatibility depends on external client interfaces and tested versions.
 - Profiles intentionally exclude application behavior and topic-dependent

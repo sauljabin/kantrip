@@ -14,8 +14,8 @@ system or user account.
 Kantrip aims to preserve these properties:
 
 - Every Kafka connection is associated with an explicitly selected profile.
-- Long-lived secrets are absent from YAML, argv, logs, tracebacks, diagnostics,
-  snapshots, and normal terminal output.
+- Long-lived secrets are absent from the profile database, argv, logs,
+  tracebacks, diagnostics, snapshots, and normal terminal output.
 - Only the selected child receives the minimum connection material required by
   its verified adapter.
 - Imported configuration cannot bypass the typed connection model or weaken TLS
@@ -61,7 +61,8 @@ Kantrip trusts:
 
 Kantrip treats as untrusted until validated:
 
-- Profile YAML, imported files, stdin, paths, profile names, labels, and URLs.
+- Stored profile documents, imported files, stdin, paths, profile names, labels,
+  and URLs.
 - Environment variables inherited from the caller.
 - Client arguments that may override a profile connection.
 - Executable lookup and shell aliases, functions, abbreviations, and `PATH`
@@ -76,11 +77,12 @@ policy.
 
 ## Trust boundaries and entry points
 
-### Configuration boundary
+### Profile storage boundary
 
-The YAML profile document crosses into Kantrip through schema validation and
-typed parsing. Secret references become usable only after the configured
-credential backend is approved and each exact reference resolves.
+Each JSON profile document crosses from the private SQLite database through
+schema validation and typed parsing. Secret references become usable only after
+the configured credential backend is approved and each exact reference
+resolves.
 
 ### Import boundary
 
@@ -125,7 +127,10 @@ Controls:
 - Require every secret reference to match the owning profile UUID and expected
   credential field.
 - Keep the optional Registry connection structurally independent from Kafka.
-- Atomically replace the mode-`0600` YAML document under a profile-write lock.
+- Keep the user-owned database directory at mode `0700` and SQLite files at
+  mode `0600`; reject symlinks and unsafe metadata.
+- Serialize profile writes with bounded `BEGIN IMMEDIATE` transactions and
+  validate every document read from the database.
 - Redact profile values before presentation.
 
 Residual risk: filesystem permissions provide confidentiality and accidental
@@ -134,9 +139,9 @@ same user can alter profile endpoints or references.
 
 ### Secret disclosure at rest
 
-Threats include credentials committed to YAML, insecure keyring fallback,
-world-readable files, orphaned values after failed updates, and unintended
-copies of imported secrets.
+Threats include credentials committed to profile documents, insecure keyring
+fallback, world-readable files, orphaned values after failed updates, and
+unintended copies of imported secrets.
 
 Controls:
 
@@ -144,11 +149,11 @@ Controls:
   Service-compatible backend.
 - Reject null, fail, plaintext, encrypted-file, unavailable, locked, and unknown
   backends rather than degrading silently.
-- Store only opaque immutable references in YAML.
-- Stage new references before switching YAML and reconcile exact superseded
-  references afterward.
-- Write cleanup intent to an atomic non-secret journal before a cross-store
-  mutation can create an orphan.
+- Store only opaque immutable references in profile documents.
+- Stage new references before switching the profile transaction and reconcile
+  exact superseded references afterward.
+- Write cleanup intent to a transactional non-secret database journal before a
+  cross-store mutation can create an orphan.
 - Never modify, delete, or duplicate a user-owned import source.
 
 Residual risk: standard keyring APIs cannot enumerate arbitrary entries. If the
@@ -350,7 +355,7 @@ can prevent operation.
   profile metadata, or interfere with runtime files subject to OS controls.
 - Temporary private files reduce accidental exposure but do not eliminate
   on-disk secret material or provide forensic deletion.
-- Native keyring operations and YAML replacement are not one atomic transaction;
+- Native keyring operations and SQLite updates are not one atomic transaction;
   reconciliation narrows but cannot eliminate every orphan scenario.
 - Security support is only as complete as the tested client/version matrix. A
   client upgrade can require a new mapping before Kantrip can safely launch it.
@@ -360,8 +365,8 @@ can prevent operation.
 - Successful connectivity does not establish authorization beyond the exact
   probe performed.
 - Profile metadata such as broker names and Registry URLs remains in the local
-  YAML file. Kantrip treats it as sensitive-looking operational data, not as a
-  secret-store asset.
+  SQLite database. Kantrip treats it as sensitive-looking operational data,
+  not as a secret-store asset.
 
 ## Out of scope
 

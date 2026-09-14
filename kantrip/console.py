@@ -105,9 +105,9 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
     return table
 
 
-def create_yaml_syntax(contents: str) -> Syntax:
-    """Create syntax-colored YAML without a forced background."""
-    return Syntax(contents, "yaml", theme="ansi_dark", background_color="default")
+def create_json_syntax(contents: str) -> Syntax:
+    """Create syntax-colored JSON without a forced background."""
+    return Syntax(contents, "json", theme="ansi_dark", background_color="default")
 
 
 def create_status_text(console: Console, status: StatusKind, message: str) -> Text:
@@ -134,8 +134,8 @@ __all__ = [
     "StatusKind",
     "colors_enabled",
     "create_console",
+    "create_json_syntax",
     "create_profile_table",
     "create_status_text",
-    "create_yaml_syntax",
     "show_progress",
 ]

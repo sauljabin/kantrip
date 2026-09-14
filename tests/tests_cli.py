@@ -10,9 +10,9 @@ from click.testing import CliRunner
 
 from kantrip import APP_VERSION
 from kantrip.cli import cli
-from kantrip.config import load_configuration
 from kantrip.console import create_console
 from kantrip.ping import PingError, PingResult, RegistryPingResult
+from kantrip.profiles import add_profile, load_profiles
 from kantrip.runtime import SessionRuntimeError, SessionScan
 
 
@@ -35,7 +35,7 @@ class TestCli(unittest.TestCase):
 
     def test_no_color_configures_consoles_globally(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            environment = {"KANTRIP_CONFIG": str(Path(directory) / "missing.yaml")}
+            environment = {"KANTRIP_DATABASE": str(Path(directory) / "missing.db")}
             with patch("kantrip.cli.create_console", wraps=create_console) as create:
                 result = self.runner.invoke(cli, ["--no-color", "list"], env=environment)
 
@@ -44,7 +44,7 @@ class TestCli(unittest.TestCase):
 
     def test_no_color_configures_consoles_after_the_subcommand(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            environment = {"KANTRIP_CONFIG": str(Path(directory) / "missing.yaml")}
+            environment = {"KANTRIP_DATABASE": str(Path(directory) / "missing.db")}
             with patch("kantrip.cli.create_console", wraps=create_console) as create:
                 result = self.runner.invoke(cli, ["list", "--no-color"], env=environment)
 
@@ -123,11 +123,11 @@ class TestCli(unittest.TestCase):
         self.assertIn("Missing argument 'PROFILE'", result.output)
         self.assertNotIn("No such option", result.output)
 
-    def test_profile_commands_use_resolved_file(self) -> None:
+    def test_profile_commands_use_resolved_database(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path, registry=True)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
 
             listed = self.runner.invoke(cli, ["list"], env=environment)
             shown = self.runner.invoke(cli, ["show", "local"], env=environment)
@@ -141,12 +141,12 @@ class TestCli(unittest.TestCase):
         self.assertIn("localhost:8081", listed.output)
         self.assertNotIn("\x1b[", listed.output)
         self.assertEqual(0, shown.exit_code, shown.output)
-        self.assertIn("bootstrapServers:", shown.output)
+        self.assertIn('"bootstrapServers":', shown.output)
 
     def test_add_and_remove_manage_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "kantrip" / "config.yaml"
-            environment = {"KANTRIP_CONFIG": str(config_path)}
+            database_path = Path(directory) / "kantrip" / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
             added = self.runner.invoke(
                 cli,
                 [
@@ -161,7 +161,7 @@ class TestCli(unittest.TestCase):
                 ],
                 env=environment,
             )
-            profile = load_configuration(config_path).profile("development")
+            profile = load_profiles(database_path).profile("development")
             listed = self.runner.invoke(cli, ["list"], env=environment)
             removed = self.runner.invoke(cli, ["remove", "development"], env=environment)
             empty = self.runner.invoke(cli, ["list"], env=environment)
@@ -186,17 +186,17 @@ class TestCli(unittest.TestCase):
 
     def test_add_rejects_empty_comma_separated_bootstrap_server(self) -> None:
         result = self.runner.invoke(
-            cli, ["add", "invalid", "-b", "localhost:9092,"], env={"KANTRIP_CONFIG": "x"}
+            cli, ["add", "invalid", "-b", "localhost:9092,"], env={"KANTRIP_DATABASE": "x"}
         )
 
         self.assertNotEqual(0, result.exit_code)
         self.assertIn("comma-separated list of host:port addresses", result.output)
 
-    def test_list_is_empty_when_configuration_is_missing(self) -> None:
+    def test_list_is_empty_when_database_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "missing.yaml"
+            database_path = Path(directory) / "missing.db"
 
-            result = self.runner.invoke(cli, ["list"], env={"KANTRIP_CONFIG": str(config_path)})
+            result = self.runner.invoke(cli, ["list"], env={"KANTRIP_DATABASE": str(database_path)})
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertEqual("", result.output)
@@ -212,9 +212,8 @@ class TestCli(unittest.TestCase):
 
     def test_doctor_uses_readable_status_markers_without_color(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.yaml"
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            config_path.chmod(0o600)
+            database_path = Path(directory) / "profiles.db"
+            _add_test_profile(database_path)
 
             with patch("kantrip.cli.run_doctor") as run:
                 from kantrip.doctor import DoctorCheck, DoctorReport
@@ -229,7 +228,7 @@ class TestCli(unittest.TestCase):
                 result = self.runner.invoke(
                     cli,
                     ["--no-color", "doctor"],
-                    env={"KANTRIP_CONFIG": str(config_path)},
+                    env={"KANTRIP_DATABASE": str(database_path)},
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
@@ -273,9 +272,9 @@ class TestCli(unittest.TestCase):
 
     def test_ping_reports_kafka_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
                 return_value=PingResult(broker_count=2),
@@ -293,9 +292,9 @@ class TestCli(unittest.TestCase):
 
     def test_ping_reports_confluent_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path, registry=True)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
                 return_value=PingResult(
@@ -316,9 +315,9 @@ class TestCli(unittest.TestCase):
 
     def test_ping_reports_apicurio_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_REGISTRY_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path, registry=True)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
                 return_value=PingResult(
@@ -337,8 +336,8 @@ class TestCli(unittest.TestCase):
 
     def test_add_apicurio_requires_and_persists_its_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "config.yaml"
-            environment = {"KANTRIP_CONFIG": str(config_path)}
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
             result = self.runner.invoke(
                 cli,
                 [
@@ -352,7 +351,7 @@ class TestCli(unittest.TestCase):
                 env=environment,
             )
 
-            profile = load_configuration(config_path).profile("native")
+            profile = load_profiles(database_path).profile("native")
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertEqual("apicurio", profile["registry"]["provider"])
@@ -362,7 +361,7 @@ class TestCli(unittest.TestCase):
         result = self.runner.invoke(
             cli,
             ["add", "native", "--registry-provider", "apicurio"],
-            env={"KANTRIP_CONFIG": "config.yaml"},
+            env={"KANTRIP_DATABASE": "profiles.db"},
         )
 
         self.assertNotEqual(0, result.exit_code)
@@ -370,9 +369,9 @@ class TestCli(unittest.TestCase):
 
     def test_ping_failure_includes_the_sanitized_underlying_exception(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
                 side_effect=PingError(
@@ -396,9 +395,9 @@ class TestCli(unittest.TestCase):
 
     def test_ping_quiet_emits_nothing_on_connection_failure(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
                 side_effect=PingError(
@@ -418,9 +417,9 @@ class TestCli(unittest.TestCase):
 
     def test_ping_quiet_emits_nothing_on_success(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
                 return_value=PingResult(broker_count=1),
@@ -435,12 +434,12 @@ class TestCli(unittest.TestCase):
         self.assertEqual("", result.stdout)
         self.assertEqual("", result.stderr)
 
-    def test_ping_quiet_emits_nothing_on_configuration_failure(self) -> None:
+    def test_ping_quiet_emits_nothing_on_profile_store_failure(self) -> None:
         with self.runner.isolated_filesystem():
             result = self.runner.invoke(
                 cli,
                 ["ping", "missing", "--quiet"],
-                env={"KANTRIP_CONFIG": str(Path("missing.yaml").resolve())},
+                env={"KANTRIP_DATABASE": str(Path("missing.db").resolve())},
             )
 
         self.assertEqual(1, result.exit_code, result.output)
@@ -456,9 +455,9 @@ class TestCli(unittest.TestCase):
 
     def test_exec_preserves_command_arguments_and_exit_status(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch("kantrip.cli.run_profile_session", return_value=17) as run:
                 result = self.runner.invoke(
                     cli, ["exec", "local", "--", "kcat", "-L"], env=environment
@@ -469,9 +468,9 @@ class TestCli(unittest.TestCase):
 
     def test_exec_passes_child_no_color_through_after_separator(self) -> None:
         with self.runner.isolated_filesystem():
-            config_path = Path("config.yaml")
-            config_path.write_text(_VALID_CONFIG, encoding="utf-8")
-            environment = {"KANTRIP_CONFIG": str(config_path.resolve())}
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch("kantrip.cli.run_profile_session", return_value=0) as run:
                 result = self.runner.invoke(
                     cli,
@@ -497,6 +496,7 @@ class TestCli(unittest.TestCase):
             temporary_path = Path(temporary_directory)
             environment = os.environ | {
                 "HOME": str(temporary_path),
+                "XDG_DATA_HOME": str(temporary_path / "data"),
                 "XDG_CONFIG_HOME": str(temporary_path / "config"),
                 "XDG_STATE_HOME": str(temporary_path / "state"),
                 "XDG_RUNTIME_DIR": str(temporary_path / "runtime"),
@@ -515,24 +515,13 @@ class TestCli(unittest.TestCase):
             self.assertEqual([], list(temporary_path.iterdir()))
 
 
-_VALID_CONFIG = """\
-profiles:
-  local:
-    id: 018f8f13-7c21-7cee-8000-000000000001
-    description: Local development
-    kafka:
-      bootstrapServers:
-        - localhost:9092
-      transport: plaintext
-      auth:
-        type: none
-"""
-
-_VALID_REGISTRY_CONFIG = _VALID_CONFIG + """\
-    registry:
-      provider: confluent
-      schema.registry.url: http://localhost:8081
-"""
+def _add_test_profile(path: Path, *, registry: bool = False) -> None:
+    add_profile(
+        "local",
+        path,
+        description="Local development",
+        registry_url="http://localhost:8081" if registry else None,
+    )
 
 
 if __name__ == "__main__":

@@ -258,7 +258,6 @@ dependencies = [
     { name = "cloup" },
     { name = "confluent-kafka" },
     { name = "jsonschema" },
-    { name = "pyyaml" },
     { name = "rich" },
 ]
 
@@ -268,6 +267,7 @@ dev = [
     { name = "black" },
     { name = "mypy" },
     { name = "pre-commit" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "types-pyyaml" },
     { name = "typos" },
@@ -279,7 +279,6 @@ requires-dist = [
     { name = "cloup", specifier = ">=3.1,<4" },
     { name = "confluent-kafka", specifier = ">=2.15,<3" },
     { name = "jsonschema", specifier = ">=4.25,<5" },
-    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "rich", specifier = ">=14.2,<16" },
 ]
 
@@ -289,6 +288,7 @@ dev = [
     { name = "black" },
     { name = "mypy" },
     { name = "pre-commit" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff" },
     { name = "types-pyyaml" },
     { name = "typos" },

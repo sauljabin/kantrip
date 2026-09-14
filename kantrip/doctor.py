@@ -25,11 +25,11 @@ from kantrip.adapters import (
     KCAT_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
 )
-from kantrip.config import (
-    Configuration,
-    ConfigurationError,
-    load_configuration,
-    resolve_config_path,
+from kantrip.profiles import (
+    ProfileCollection,
+    ProfileStoreError,
+    load_profiles,
+    resolve_database_path,
 )
 from kantrip.registry import RegistryProfileError, plain_registry_connection
 from kantrip.runtime import (
@@ -108,13 +108,13 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
         _check_platform(),
         _check_shell(env),
     ]
-    configuration, config_checks = _check_configuration(env)
+    profiles, profile_checks = _check_profile_database(env)
     checks = [
         *_assign_section("System", system_checks),
-        *_assign_section("Configuration", config_checks),
+        *_assign_section("Profiles", profile_checks),
         *_assign_section(
             "Session",
-            [*_check_session(configuration, env), *_check_runtime_sessions(env)],
+            [*_check_session(profiles, env), *_check_runtime_sessions(env)],
         ),
         *_assign_section("Clients", _check_commands(env)),
     ]
@@ -155,69 +155,67 @@ def _check_shell(environment: Mapping[str, str]) -> DoctorCheck:
     return DoctorCheck("success", f"Interactive shell: {shell}")
 
 
-def _check_configuration(
+def _check_profile_database(
     environment: Mapping[str, str],
-) -> tuple[Configuration | None, list[DoctorCheck]]:
-    path = resolve_config_path(environment)
-    if not path.exists():
-        return None, [DoctorCheck("warning", f"Configuration file was not found: {path}")]
+) -> tuple[ProfileCollection | None, list[DoctorCheck]]:
+    path = resolve_database_path(environment)
+    path_check = DoctorCheck("success", f"Profile database: {path}", verbose_only=True)
     try:
-        configuration = load_configuration(path)
-    except ConfigurationError as error:
-        return None, [DoctorCheck("error", str(error))]
+        path.lstat()
+    except FileNotFoundError:
+        return None, [DoctorCheck("warning", "Profile database was not found"), path_check]
+    except OSError:
+        return None, [DoctorCheck("error", "Profile database could not be inspected"), path_check]
+    try:
+        profiles = load_profiles(path)
+    except ProfileStoreError as error:
+        return None, [DoctorCheck("error", str(error)), path_check]
 
-    profile_count = len(configuration.profiles)
+    profile_count = len(profiles.profiles)
     profile_label = "profile" if profile_count == 1 else "profiles"
     checks = [
         DoctorCheck(
             "success",
-            f"Configuration matches schema: {path} ({profile_count} {profile_label})",
-        )
+            f"Profile database is valid ({profile_count} {profile_label})",
+        ),
+        path_check,
     ]
-    checks.append(_check_profile_ids(configuration))
-    checks.append(_check_config_file(path))
-    checks.append(_check_profiles(configuration))
-    checks.extend(_check_registry_profiles(configuration))
-    return configuration, checks
+    checks.append(_check_database_file(path))
+    checks.append(_check_profiles(profiles))
+    checks.extend(_check_registry_profiles(profiles))
+    return profiles, checks
 
 
-def _check_config_file(path: Path) -> DoctorCheck:
+def _check_database_file(path: Path) -> DoctorCheck:
     try:
-        metadata = path.stat()
+        metadata = path.lstat()
     except OSError:
-        return DoctorCheck("error", f"Configuration metadata could not be read: {path}")
+        return DoctorCheck("error", "Profile database metadata could not be read")
     if not stat.S_ISREG(metadata.st_mode):
-        return DoctorCheck("error", f"Configuration is not a regular file: {path}")
+        return DoctorCheck("error", "Profile database is not a regular file")
     getuid = getattr(os, "getuid", None)
     if getuid is not None and metadata.st_uid != getuid():
-        return DoctorCheck("warning", f"Configuration is owned by another user: {path}")
+        return DoctorCheck("error", "Profile database is owned by another user")
     exposed_permissions = stat.S_IMODE(metadata.st_mode) & 0o077
     if exposed_permissions:
         return DoctorCheck(
-            "warning",
-            f"Configuration permissions are broader than 0600: {path} "
+            "error",
+            "Profile database permissions are broader than 0600 "
             f"({stat.S_IMODE(metadata.st_mode):04o})",
         )
-    return DoctorCheck("success", f"Configuration file permissions are private ({path})")
+    return DoctorCheck("success", "Profile database permissions are private")
 
 
-def _check_profile_ids(configuration: Configuration) -> DoctorCheck:
-    ids = [str(profile["id"]) for profile in configuration.profiles.values()]
-    if len(ids) != len(set(ids)):
-        return DoctorCheck("error", "Configuration contains duplicate profile IDs")
-    return DoctorCheck("success", "Profile IDs are unique", verbose_only=True)
-
-
-def _check_profiles(configuration: Configuration) -> DoctorCheck:
-    if not configuration.profiles:
+def _check_profiles(profiles: ProfileCollection) -> DoctorCheck:
+    if not profiles.profiles:
         return DoctorCheck("warning", "No profiles are configured")
     return DoctorCheck("success", "All configured Kafka profiles are executable")
 
 
-def _check_registry_profiles(configuration: Configuration) -> list[DoctorCheck]:
+def _check_registry_profiles(profiles: ProfileCollection) -> list[DoctorCheck]:
     configured = 0
     checks: list[DoctorCheck] = []
-    for name, profile in configuration.profiles.items():
+    for name, profile in profiles.profiles.items():
         if "registry" not in profile:
             continue
         configured += 1
@@ -244,7 +242,7 @@ def _check_registry_profiles(configuration: Configuration) -> list[DoctorCheck]:
 
 
 def _check_session(
-    configuration: Configuration | None,
+    profiles: ProfileCollection | None,
     environment: Mapping[str, str],
 ) -> list[DoctorCheck]:
     variables = {
@@ -260,9 +258,9 @@ def _check_session(
     profile_name = variables["KANTRIP_PROFILE"] or ""
     session_directory = Path(variables["KANTRIP_SESSION_DIR"] or "")
     checks: list[DoctorCheck] = []
-    if configuration is None or profile_name not in configuration.profiles:
+    if profiles is None or profile_name not in profiles.profiles:
         checks.append(
-            DoctorCheck("error", f"Active profile '{profile_name}' is not in the configuration")
+            DoctorCheck("error", f"Active profile '{profile_name}' is not in the profile database")
         )
     else:
         checks.append(DoctorCheck("success", f"Active profile exists: {profile_name}"))

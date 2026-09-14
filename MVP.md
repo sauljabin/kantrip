@@ -33,10 +33,10 @@ supervising the active execution.
 
 ## Engineering boundaries
 
-- Extend the existing unversioned profile document. Do not add speculative
-  top-level `version` or `defaults` fields.
-- Keep resolved secrets out of YAML, argv, logs, tracebacks, diagnostics,
-  snapshots, and normal output.
+- Extend the existing per-profile document. Do not add speculative application
+  `version` or `defaults` fields; database schema versioning remains internal.
+- Keep resolved secrets out of the profile database, argv, logs, tracebacks,
+  diagnostics, snapshots, and normal output.
 - Pass secrets to a selected child only through a private generated file or a
   child-only environment variable supported by that client.
 - Define connection configuration narrowly as endpoint discovery, transport
@@ -88,27 +88,28 @@ supervising the active execution.
 
 ### Recoverable updates
 
-The profile YAML and OS credential store cannot participate in one atomic
-transaction. Do not promise cross-store atomicity.
+The SQLite profile database and OS credential store cannot participate in one
+atomic transaction. Do not promise cross-store atomicity.
 
 - For add or secret replacement, write new secrets under new immutable
-  references, atomically switch the validated YAML references, then delete
+  references, atomically switch the validated profile references, then delete
   superseded entries.
-- If the YAML update fails, delete the newly staged entries and leave the old
+- If the database update fails, delete the newly staged entries and leave the old
   profile usable.
-- If old-secret deletion fails after the YAML switch, keep the new profile
+- If old-secret deletion fails after the profile switch, keep the new profile
   usable, report the orphan safely, and let `doctor` or an idempotent retry
   remove the exact old reference.
-- For profile removal, remove the profile atomically from YAML before deleting
+- For profile removal, remove the profile in a SQLite transaction before deleting
   its exact credential keys. Report and reconcile any leftover orphan instead
   of restoring a profile whose secrets may already be partially deleted.
-- Keep pending exact-reference cleanup in an atomic, non-secret reconciliation
-  journal beside the profile configuration. Write the intent before switching
-  YAML, retry it on later mutations and in `doctor`, and remove it only after
-  cleanup succeeds. Standard `keyring` APIs cannot enumerate arbitrary orphaned
-  entries, so reconciliation must not depend on backend listing support.
-- Serialize profile writes with a lock so two Kantrip processes cannot lose
-  each other's updates.
+- Keep pending exact-reference cleanup in a non-secret reconciliation table in
+  the profile database. Commit the intent before writing the credential store,
+  advance it atomically with the profile switch, retry it on later mutations and
+  in `doctor`, and remove it only after cleanup succeeds. Standard `keyring`
+  APIs cannot enumerate arbitrary orphaned entries, so reconciliation must not
+  depend on backend listing support.
+- Use SQLite write transactions for database concurrency and a cross-store
+  mutation lock around the journal/credential/database workflow.
 
 ### Commands
 
@@ -135,7 +136,7 @@ commands is not part of this MVP.
 ## 2. Profile import
 
 Importers create a new Kantrip profile through the same schema validation,
-credential staging, YAML commit, and reconciliation workflow as `kantrip add`.
+credential staging, SQLite commit, and reconciliation workflow as `kantrip add`.
 They never overwrite an existing profile.
 
 ### Importing client properties
@@ -174,8 +175,8 @@ client properties emitted by Confluent's public client-config generator.
   misspelled or newer security property from being silently discarded.
 - Replace the current generic `properties.common`, `properties.java`, and
   `properties.librdkafka` escape hatch with typed connection fields as part of
-  the secure-profile schema change. Existing non-connection entries receive a
-  migration warning and are not injected into secure sessions.
+  the secure-profile schema change. Existing non-connection entries become
+  invalid and are not injected into secure sessions.
 - Treat an input file as user-owned and never modify or delete it. Recommend
   stdin for generated files that contain secrets so users do not need to leave
   another plaintext copy on disk.
@@ -229,8 +230,8 @@ infrastructure.
 ### Standard Kafka client properties
 
 Kantrip stores one provider-neutral connection model. Import and rendering use
-the following product-native property allowlist; profile YAML does not expose
-these names as an arbitrary property map.
+the following product-native property allowlist; profile documents do not
+expose these names as an arbitrary property map.
 
 | Connection concern | Java client properties | librdkafka properties |
 | --- | --- | --- |
