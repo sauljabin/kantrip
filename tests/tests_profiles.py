@@ -15,10 +15,15 @@ from kantrip.profiles import (
     DATABASE_SCHEMA_VERSION,
     ProfileStoreError,
     add_profile,
+    edit_profile,
+    inspect_pending_secret_cleanup,
     load_profiles,
+    reconcile_pending_secrets,
     remove_profile,
     resolve_database_path,
 )
+from kantrip.reconciliation import queue_secret_cleanup
+from kantrip.secret_store import SecretStoreError, secret_reference
 
 
 class TestProfiles(unittest.TestCase):
@@ -65,18 +70,21 @@ class TestProfiles(unittest.TestCase):
             with closing(sqlite3.connect(path)) as connection:
                 journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                migration = connection.execute(
+                migrations = connection.execute(
                     "SELECT sequence, name, checksum, applied_at, applied_by "
-                    "FROM schema_migrations"
-                ).fetchone()
+                    "FROM schema_migrations ORDER BY sequence"
+                ).fetchall()
 
             self.assertEqual("wal", journal_mode)
             self.assertEqual(DATABASE_SCHEMA_VERSION, version)
-            self.assertEqual(1, migration[0])
-            self.assertEqual(MIGRATIONS[0].name, migration[1])
-            self.assertEqual(MIGRATIONS[0].checksum, migration[2])
-            self.assertTrue(migration[3])
-            self.assertTrue(migration[4])
+            self.assertEqual(
+                [migration.sequence for migration in MIGRATIONS], [row[0] for row in migrations]
+            )
+            for expected, row in zip(MIGRATIONS, migrations, strict=True):
+                self.assertEqual(expected.name, row[1])
+                self.assertEqual(expected.checksum, row[2])
+                self.assertTrue(row[3])
+                self.assertTrue(row[4])
             self.assertEqual([], list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*")))
             self.assertEqual(
                 0o600,
@@ -95,16 +103,54 @@ class TestProfiles(unittest.TestCase):
                 load_profiles(path)
             self.assertEqual([], list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*")))
 
+    def test_upgrades_sequence_one_to_the_reconciliation_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("DROP TABLE credential_reconciliation")
+                connection.execute("DELETE FROM schema_migrations WHERE sequence = 2")
+                connection.execute("PRAGMA user_version = 1")
+                connection.commit()
+
+            profiles = load_profiles(path)
+
+            self.assertIn("local", profiles.profiles)
+            with closing(sqlite3.connect(path)) as connection:
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+                history = connection.execute(
+                    "SELECT sequence FROM schema_migrations ORDER BY sequence"
+                ).fetchall()
+                journal_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'credential_reconciliation'"
+                ).fetchone()
+            backups = list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*"))
+            self.assertEqual(2, version)
+            self.assertEqual([(1,), (2,)], history)
+            self.assertIsNotNone(journal_exists)
+            self.assertEqual(1, len(backups))
+            self.assertEqual(0o600, backups[0].stat().st_mode & 0o777)
+
     def test_each_migration_pass_keeps_a_uniquely_timestamped_private_backup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
             add_profile("local", path)
-            second = Migration(2, "second", ("UPDATE profiles SET revision = revision",))
-            third = Migration(3, "third", ("UPDATE profiles SET revision = revision",))
+            next_sequence = len(MIGRATIONS) + 1
+            second = Migration(
+                next_sequence,
+                "next migration",
+                ("UPDATE profiles SET revision = revision",),
+            )
+            third = Migration(
+                next_sequence + 1,
+                "following migration",
+                ("UPDATE profiles SET revision = revision",),
+            )
 
             with (
                 patch("kantrip.migrations.MIGRATIONS", (*MIGRATIONS, second)),
-                patch("kantrip.migrations.LATEST_SEQUENCE", 2),
+                patch("kantrip.migrations.LATEST_SEQUENCE", next_sequence),
                 patch(
                     "kantrip.profiles._backup_timestamp",
                     return_value="2026-09-14T01-02-03.000004Z",
@@ -113,7 +159,7 @@ class TestProfiles(unittest.TestCase):
                 load_profiles(path)
             with (
                 patch("kantrip.migrations.MIGRATIONS", (*MIGRATIONS, second, third)),
-                patch("kantrip.migrations.LATEST_SEQUENCE", 3),
+                patch("kantrip.migrations.LATEST_SEQUENCE", next_sequence + 1),
                 patch(
                     "kantrip.profiles._backup_timestamp",
                     return_value="2026-09-15T02-03-04.000005Z",
@@ -130,7 +176,10 @@ class TestProfiles(unittest.TestCase):
                 first_version = connection.execute("PRAGMA user_version").fetchone()[0]
             with closing(sqlite3.connect(backups[1])) as connection:
                 second_version = connection.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual((1, 2), (first_version, second_version))
+            self.assertEqual(
+                (len(MIGRATIONS), next_sequence),
+                (first_version, second_version),
+            )
 
     def test_rejects_modified_migration_history(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -151,9 +200,9 @@ class TestProfiles(unittest.TestCase):
             add_profile("local", path)
             with closing(sqlite3.connect(path)) as connection:
                 connection.execute(
-                    "INSERT INTO schema_migrations VALUES (2, 'unknown', 'checksum', 'now', 'test')"
+                    "INSERT INTO schema_migrations VALUES (3, 'unknown', 'checksum', 'now', 'test')"
                 )
-                connection.execute("PRAGMA user_version = 2")
+                connection.execute("PRAGMA user_version = 3")
                 connection.commit()
 
             with self.assertRaisesRegex(ProfileStoreError, "unknown migrations"):
@@ -203,7 +252,7 @@ class TestProfiles(unittest.TestCase):
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
 
-            self.assertEqual(1, migration_count)
+            self.assertEqual(len(MIGRATIONS), migration_count)
             self.assertEqual(4, len(load_profiles(path).profiles))
 
     def test_missing_database_can_be_loaded_without_side_effects(self) -> None:
@@ -255,6 +304,125 @@ class TestProfiles(unittest.TestCase):
             },
             profiles.profile("local")["registry"],
         )
+
+    def test_edits_plain_profile_fields_and_advances_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            original = add_profile(
+                "local",
+                path,
+                description="Old description",
+                registry_url="http://localhost:8081",
+            ).profile("local")
+
+            profiles = edit_profile(
+                "local",
+                path,
+                bootstrap_servers=("broker-1.example.com:9092", "broker-2.example.com:9092"),
+                description="New description",
+                labels={"environment": "development", "owner": "platform"},
+                registry_provider="apicurio",
+                registry_url="http://localhost:8082/apis/registry/v3",
+            )
+
+            updated = profiles.profile("local")
+            self.assertEqual(original["id"], updated["id"])
+            self.assertEqual(
+                ["broker-1.example.com:9092", "broker-2.example.com:9092"],
+                updated["kafka"]["bootstrapServers"],
+            )
+            self.assertEqual("New description", updated["description"])
+            self.assertEqual({"environment": "development", "owner": "platform"}, updated["labels"])
+            self.assertEqual(
+                {
+                    "provider": "apicurio",
+                    "apicurio.registry.url": "http://localhost:8082/apis/registry/v3",
+                },
+                updated["registry"],
+            )
+            with closing(sqlite3.connect(path)) as connection:
+                revision = connection.execute(
+                    "SELECT revision FROM profiles WHERE name = 'local'"
+                ).fetchone()[0]
+            self.assertEqual(2, revision)
+
+    def test_edit_can_add_and_explicitly_remove_a_default_confluent_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+
+            added = edit_profile(
+                "local",
+                path,
+                registry_url="http://localhost:8081",
+            ).profile("local")
+            removed = edit_profile("local", path, remove_registry=True).profile("local")
+
+        self.assertEqual(
+            {
+                "provider": "confluent",
+                "schema.registry.url": "http://localhost:8081",
+            },
+            added["registry"],
+        )
+        self.assertNotIn("registry", removed)
+
+    def test_edit_rejects_conflicts_without_mutating_the_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            before = add_profile("local", path, description="Keep me").profile("local")
+            cases = (
+                ({}, "no profile changes"),
+                (
+                    {"description": "Replace", "clear_description": True},
+                    "cannot be combined",
+                ),
+                (
+                    {"registry_provider": "apicurio"},
+                    "requires --registry-url",
+                ),
+                (
+                    {"labels": {"owner": "team"}, "remove_labels": ("owner",)},
+                    "cannot be set and removed",
+                ),
+            )
+            for arguments, message in cases:
+                with self.subTest(arguments=arguments):
+                    with self.assertRaisesRegex(ProfileStoreError, message):
+                        edit_profile("local", path, **arguments)
+                    self.assertEqual(before, load_profiles(path).profile("local"))
+
+    def test_reconciles_only_exact_journaled_secret_references(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            profile = add_profile("local", path).profile("local")
+            reference = secret_reference(profile["id"], "kafka/password")
+            with closing(sqlite3.connect(path)) as connection:
+                queue_secret_cleanup(connection, reference)
+                connection.commit()
+            store = _RecordingSecretStore()
+
+            pending = inspect_pending_secret_cleanup(path)
+            result = reconcile_pending_secrets(path, store=store)
+
+            self.assertEqual((reference,), tuple(record.secret_reference for record in pending))
+            self.assertEqual((reference,), tuple(store.deleted))
+            self.assertEqual((1, 1, 0), (result.pending, result.removed, result.failed))
+            self.assertEqual((), inspect_pending_secret_cleanup(path))
+
+    def test_failed_secret_reconciliation_remains_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            profile = add_profile("local", path).profile("local")
+            reference = secret_reference(profile["id"], "registry/token")
+            with closing(sqlite3.connect(path)) as connection:
+                queue_secret_cleanup(connection, reference)
+                connection.commit()
+
+            result = reconcile_pending_secrets(path, store=_RecordingSecretStore(fail=True))
+
+            self.assertEqual((1, 0, 1), (result.pending, result.removed, result.failed))
+            self.assertEqual(1, len(inspect_pending_secret_cleanup(path)))
 
     def test_rejects_a_stored_registry_without_a_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -388,6 +556,25 @@ class TestProfiles(unittest.TestCase):
                 connection.commit()
             with self.assertRaisesRegex(ProfileStoreError, "inconsistent identity"):
                 load_profiles(path)
+
+
+class _RecordingSecretStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.deleted: list[str] = []
+
+    def get(self, reference: str) -> str:
+        del reference
+        raise NotImplementedError
+
+    def set(self, reference: str, value: str) -> None:
+        del reference, value
+        raise NotImplementedError
+
+    def delete(self, reference: str) -> None:
+        if self.fail:
+            raise SecretStoreError("synthetic failure")
+        self.deleted.append(reference)
 
 
 if __name__ == "__main__":

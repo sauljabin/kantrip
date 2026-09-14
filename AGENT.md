@@ -38,11 +38,11 @@
   Keep its directory mode `0700`, database and sidecar modes `0600`, WAL enabled,
   and writes bounded by `BEGIN IMMEDIATE` transactions. Reject symlinks, unsafe
   ownership or permissions, corrupt contents, and unsupported schema versions.
-- Evolve the database through one bundled linear chain with one immutable file
-  per migration. Use a positive integer `sequence` as each migration's only
-  identity and order; store its immutable name, checksum, applied timestamp, and
-  applying Kantrip version in `schema_migrations`. Never derive migration
-  identity from product SemVer or profile document fields.
+- Evolve the database through one bundled linear chain in `kantrip/migrations/`,
+  with one immutable file per migration. Use a positive integer `sequence` as
+  each migration's only identity and order; store its immutable name, checksum,
+  applied timestamp, and applying Kantrip version in `schema_migrations`. Never
+  derive migration identity from product SemVer or profile document fields.
 - Treat released migrations as immutable and forward-only. Mirror the highest
   applied sequence in `PRAGMA user_version`, update schema and history in one
   transaction under the maintenance lock, create a uniquely timestamped backup
@@ -52,11 +52,21 @@
   never published in a release. Before the first release, reject every non-empty
   history-less database and all former YAML. The first published database starts
   the supported migration boundary.
-- Profile add/remove is validated and transactional; add creates the missing
-  database, never overwrites a profile, and list returns empty when the database
-  is absent. Profile-dependent commands may migrate an existing supported
-  database, but reads never create a missing repository. Normal `doctor`
-  inspection never creates or modifies filesystem state.
+- Profile add/edit/remove is validated and transactional; add creates the
+  missing database and never overwrites a profile, edit preserves its immutable
+  ID and changes only explicit fields, and list returns empty when the database
+  is absent. Registry removal requires `--remove-registry`. Profile-dependent
+  commands may migrate an existing supported database, but reads never create a
+  missing repository. Normal `doctor` inspection never creates or modifies
+  filesystem state.
+- Access credentials only through the narrow `SecretStore` protocol. Approve
+  only macOS Keychain on macOS and Secret Service-compatible keyring backends on
+  Linux; reject null, plaintext, encrypted-file, chained, and unknown backends.
+  Use service `kantrip` and canonical immutable `profile/<uuid>/<field>` keys.
+- Keep exact pending credential deletions in `credential_reconciliation`.
+  Validate every record and reference, delete only that exact credential, and
+  remove its journal row only after deletion succeeds. Normal doctor reports
+  pending work; `doctor --repair` retries it under the maintenance lock.
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
@@ -135,6 +145,11 @@
 - `python -m scripts.verify_shell_contract` tests Bash, Zsh, and Fish through PTYs
   and fake clients. Keep assertions in Python and delete safe-metadata event logs
   with their temporary directory.
+- Keep reproducible, high-value exploratory scenarios in `MANUAL_TESTING.md`.
+  Every scenario needs explicit setup, actions, and expected results.
+  `DEVELOPMENT.md` contains environment and contributor workflows, not manual
+  test cases. Manual checks complement rather than replace offline tests and the
+  sandbox smoke workflow.
 
 ## Verification
 

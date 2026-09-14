@@ -29,11 +29,11 @@ connection:
 kantrip doctor
 ```
 
-Doctor groups local checks under System, Profiles, Session, and Clients, names
-missing commands, and summarizes health. It validates the profile database,
-registry support, active-session state, recoverable runtime artifacts, and the
-installed shell, kcat, Kafka, Confluent Schema Registry, and Kaskade commands.
-Use `--verbose` for paths and individual checks.
+Doctor groups local checks under System, Profiles, Credentials, Session, and
+Clients, names missing commands, and summarizes health. It validates the profile
+database, approved OS credential backend, Registry support, reconciliation
+state, active-session state, recoverable runtime artifacts, and installed
+clients. Use `--verbose` for paths, backend identity, and individual checks.
 
 Missing optional clients or a first-run profile database produce warnings. An
 invalid database, unsupported registry settings, or inconsistent session state
@@ -42,8 +42,9 @@ exits with status 1. Doctor never contacts Kafka or a registry.
 Profile-dependent commands automatically apply known SQLite migrations. A
 normal `doctor` run only reports pending work; it does not create or modify
 storage. Use `kantrip doctor --repair` for an explicit maintenance pass that
-migrates the profile database, removes validated stale sessions, and then runs
-the diagnostics again. Kantrip has no separate migration or cleanup command.
+migrates the profile database, reconciles exact pending credential cleanup,
+removes validated stale sessions, and then runs the diagnostics again. Kantrip
+has no separate migration or cleanup command.
 Migration backups include their UTC creation time and a unique suffix, so later
 migrations preserve earlier recovery points. Unreleased databases without
 migration history are unsupported and must be recreated.
@@ -99,7 +100,23 @@ kantrip add development-apicurio \
 
 `--registry-provider` without `--registry-url` is invalid.
 
-`add` creates the database when needed and never overwrites a profile.
+`add` creates the database when needed and never overwrites a profile. Edit
+explicit plaintext fields without changing the profile identity:
+
+```bash
+kantrip edit development \
+  --bootstrap-servers kafka-3.example.com:9092,kafka-4.example.com:9092 \
+  --description 'Shared development cluster' \
+  --label environment=development \
+  --registry-url http://registry.example.com:8081
+```
+
+`edit` adds or updates labels and can add a Registry to a profile that has none.
+When only `--registry-url` is supplied, the new Registry defaults to Confluent.
+Use `--clear-description`, repeatable `--remove-label KEY`, or
+`--remove-registry` for explicit removal. Omitting an option preserves its
+current value; calling `edit` without any change fails safely.
+
 Remove one with:
 
 ```bash
@@ -446,8 +463,8 @@ the first mutation; read-only commands do not create it.
 
 Profiles support plaintext Kafka metadata and one optional registry connection.
 The `provider` is explicit in every stored profile. When `--registry-url` is
-supplied without `--registry-provider`, `kantrip add` selects and persists
-Confluent:
+supplied without `--registry-provider`, `kantrip add` and `kantrip edit` select
+and persist Confluent:
 
 ```json
 {

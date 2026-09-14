@@ -30,10 +30,12 @@ from kantrip.profiles import (
     DATABASE_MAINTENANCE_SUFFIX,
     ProfileCollection,
     ProfileStoreError,
+    inspect_pending_secret_cleanup,
     inspect_profile_database,
     load_profiles,
     resolve_database_path,
 )
+from kantrip.reconciliation import ReconciliationError
 from kantrip.registry import RegistryProfileError, plain_registry_connection
 from kantrip.runtime import (
     AUTOMATIC_SCAN_LIMIT,
@@ -41,6 +43,7 @@ from kantrip.runtime import (
     resolve_runtime_root,
     scan_sessions,
 )
+from kantrip.secret_store import SecretStoreError, load_secret_store
 from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
@@ -115,6 +118,7 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
     checks = [
         *_assign_section("System", system_checks),
         *_assign_section("Profiles", profile_checks),
+        *_assign_section("Credentials", _check_credentials(env)),
         *_assign_section(
             "Session",
             [*_check_session(profiles, env), *_check_runtime_sessions(env)],
@@ -122,6 +126,43 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
         *_assign_section("Clients", _check_commands(env)),
     ]
     return DoctorReport(tuple(checks))
+
+
+def _check_credentials(environment: Mapping[str, str]) -> list[DoctorCheck]:
+    checks: list[DoctorCheck] = []
+    try:
+        store = load_secret_store()
+    except SecretStoreError:
+        checks.append(DoctorCheck("error", "Credential store backend is unavailable or unsafe"))
+    else:
+        checks.append(DoctorCheck("success", f"Credential store: {store.info.display_name}"))
+        checks.append(
+            DoctorCheck(
+                "success",
+                f"Credential store backend: {store.info.backend}",
+                verbose_only=True,
+            )
+        )
+    try:
+        pending = inspect_pending_secret_cleanup(environment=environment)
+    except ProfileStoreError as error:
+        if "requires migration" in str(error):
+            checks.append(
+                DoctorCheck("warning", "Credential reconciliation requires database migration")
+            )
+        else:
+            checks.append(DoctorCheck("error", "Credential reconciliation state is unavailable"))
+    except ReconciliationError:
+        checks.append(DoctorCheck("error", "Credential reconciliation state is invalid"))
+    else:
+        count = len(pending)
+        status: CheckStatus = "warning" if count else "success"
+        noun = "entry" if count == 1 else "entries"
+        message = f"Credential reconciliation: {count} pending {noun}"
+        if count:
+            message = f"{message}; run 'kantrip doctor --repair'"
+        checks.append(DoctorCheck(status, message))
+    return checks
 
 
 def _assign_section(section: str, checks: Sequence[DoctorCheck]) -> list[DoctorCheck]:

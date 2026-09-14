@@ -9,8 +9,11 @@ from email.parser import BytesParser
 from pathlib import Path
 
 WHEEL_REQUIRED = {
+    "kantrip/migrations/migration_0002_add_reconciliation_journal.py",
     "kantrip/profiles.py",
+    "kantrip/reconciliation.py",
     "kantrip/schemas/profile.schema.json",
+    "kantrip/secret_store.py",
 }
 
 SDIST_REQUIRED = {
@@ -19,6 +22,7 @@ SDIST_REQUIRED = {
     "COMPATIBILITY.md",
     "DEVELOPMENT.md",
     "LICENSE",
+    "MANUAL_TESTING.md",
     "MVP.md",
     "README.md",
     "RELEASE_CHECKLIST.md",
@@ -37,9 +41,12 @@ SDIST_REQUIRED = {
     "images/session-cleanup-decision.svg",
     "images/session-lifecycle.svg",
     "kantrip/maintenance.py",
-    "kantrip/migration_0001_initial_profile_store.py",
-    "kantrip/migrations.py",
+    "kantrip/migrations/__init__.py",
+    "kantrip/migrations/migration_0001_initial_profile_store.py",
+    "kantrip/migrations/migration_0002_add_reconciliation_journal.py",
     "kantrip/profiles.py",
+    "kantrip/reconciliation.py",
+    "kantrip/secret_store.py",
     "pyproject.toml",
     "schemas/profile.schema.json",
 }

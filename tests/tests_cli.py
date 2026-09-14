@@ -57,6 +57,7 @@ class TestCli(unittest.TestCase):
     def test_command_help_documents_local_no_color(self) -> None:
         for command in (
             "add",
+            "edit",
             "remove",
             "list",
             "show",
@@ -144,6 +145,71 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
+
+    def test_edit_updates_and_removes_explicit_profile_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            _add_test_profile(database_path)
+
+            updated = self.runner.invoke(
+                cli,
+                [
+                    "edit",
+                    "local",
+                    "--bootstrap-servers",
+                    "broker-1.example.com:9092,broker-2.example.com:9092",
+                    "--description",
+                    "Shared development",
+                    "--label",
+                    "environment=development",
+                    "--registry-url",
+                    "http://localhost:8081",
+                    "--no-color",
+                ],
+                env=environment,
+            )
+            profile = load_profiles(database_path).profile("local")
+            removed = self.runner.invoke(
+                cli,
+                [
+                    "edit",
+                    "local",
+                    "--clear-description",
+                    "--remove-label",
+                    "environment",
+                    "--remove-registry",
+                ],
+                env=environment,
+            )
+            final_profile = load_profiles(database_path).profile("local")
+
+        self.assertEqual(0, updated.exit_code, updated.output)
+        self.assertIn("Updated profile 'local'", updated.output)
+        self.assertEqual(
+            ["broker-1.example.com:9092", "broker-2.example.com:9092"],
+            profile["kafka"]["bootstrapServers"],
+        )
+        self.assertEqual("Shared development", profile["description"])
+        self.assertEqual({"environment": "development"}, profile["labels"])
+        self.assertEqual("confluent", profile["registry"]["provider"])
+        self.assertEqual(0, removed.exit_code, removed.output)
+        self.assertNotIn("description", final_profile)
+        self.assertNotIn("labels", final_profile)
+        self.assertNotIn("registry", final_profile)
+
+    def test_edit_requires_an_explicit_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _add_test_profile(database_path)
+            result = self.runner.invoke(
+                cli,
+                ["edit", "local"],
+                env={"KANTRIP_DATABASE": str(database_path)},
+            )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("no profile changes were requested", result.output)
 
     def test_add_rejects_empty_comma_separated_bootstrap_server(self) -> None:
         result = self.runner.invoke(

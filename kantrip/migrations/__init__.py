@@ -8,7 +8,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from kantrip import migration_0001_initial_profile_store as initial
+from . import migration_0001_initial_profile_store as initial
+from . import migration_0002_add_reconciliation_journal as reconciliation
 
 
 class MigrationError(ValueError):
@@ -77,7 +78,10 @@ _CREATE_HISTORY = """
     )
     """
 
-MIGRATIONS = (Migration(initial.SEQUENCE, initial.NAME, initial.STATEMENTS),)
+MIGRATIONS = (
+    Migration(initial.SEQUENCE, initial.NAME, initial.STATEMENTS),
+    Migration(reconciliation.SEQUENCE, reconciliation.NAME, reconciliation.STATEMENTS),
+)
 LATEST_SEQUENCE = MIGRATIONS[-1].sequence
 
 
@@ -205,10 +209,15 @@ def _table_names(connection: sqlite3.Connection) -> set[str]:
 
 
 def _verify_current_schema(connection: sqlite3.Connection) -> None:
-    if _table_names(connection) != {"profiles", "schema_migrations"}:
+    if _table_names(connection) != {
+        "credential_reconciliation",
+        "profiles",
+        "schema_migrations",
+    }:
         raise MigrationError("profile database schema is invalid")
     _verify_profiles_schema(connection)
     _verify_history_schema(connection)
+    _verify_reconciliation_schema(connection)
 
 
 def _verify_profiles_schema(connection: sqlite3.Connection) -> None:
@@ -244,6 +253,27 @@ def _verify_history_schema(connection: sqlite3.Connection) -> None:
     ]
     if [tuple(row) for row in columns] != expected_columns:
         raise MigrationError("profile database migration history schema is invalid")
+
+
+def _verify_reconciliation_schema(connection: sqlite3.Connection) -> None:
+    columns = connection.execute("PRAGMA table_info(credential_reconciliation)").fetchall()
+    expected_columns = [
+        (0, "id", "TEXT", 1, None, 1),
+        (1, "secret_reference", "TEXT", 1, None, 0),
+        (2, "created_at", "TEXT", 1, None, 0),
+    ]
+    if [tuple(row) for row in columns] != expected_columns:
+        raise MigrationError("credential reconciliation schema is invalid")
+    unique_columns = {
+        tuple(
+            row["name"]
+            for row in connection.execute(f"PRAGMA index_info({index['name']})").fetchall()
+        )
+        for index in connection.execute("PRAGMA index_list(credential_reconciliation)").fetchall()
+        if index["unique"]
+    }
+    if unique_columns != {("id",), ("secret_reference",)}:
+        raise MigrationError("credential reconciliation schema is invalid")
 
 
 def _database_version(connection: sqlite3.Connection) -> int:

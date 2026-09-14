@@ -70,12 +70,13 @@ and order, plus an immutable name and checksum. The history records when it ran
 and which Kantrip version applied it, but product SemVer does not identify or
 order migrations. A release may contain zero, one, or several migration files.
 
-The initial SQLite profile store is migration sequence `1`. New databases apply
-the complete bundled chain. Databases from published releases apply each pending
-migration in ascending order before a profile-dependent command continues. An
-unreleased database shape receives no compatibility path: every non-empty
-database without migration history fails closed. There is no YAML migration
-path and no user-facing migration command or script.
+The initial SQLite profile store is migration sequence `1`; sequence `2` adds
+the credential reconciliation journal. New databases apply the complete bundled
+chain. Databases from published releases apply each pending migration in
+ascending order before a profile-dependent command continues. An unreleased
+database shape receives no compatibility path: every non-empty database without
+migration history fails closed. There is no YAML migration path and no
+user-facing migration command or script.
 
 `schema_migrations` is authoritative and `PRAGMA user_version` mirrors its
 highest applied sequence. Missing or duplicate sequences, an altered checksum,
@@ -127,8 +128,10 @@ Registry; only an explicit removal deletes it. Existing secrets have explicit
 keep, replace, and remove semantics and are never displayed or prefilled.
 
 SQLite and the credential store cannot participate in one atomic transaction.
-Kantrip therefore stores non-secret reconciliation records in the same database
-and uses immutable secret references to make partial failures recoverable:
+Kantrip therefore stores non-secret exact-delete records in
+`credential_reconciliation` and uses immutable secret references to make
+partial failures recoverable. The journal never stores a value and never asks a
+backend to enumerate credentials:
 
 - Commit cleanup intent before a credential-store write can create an orphan.
 - Stage new secrets under new references.

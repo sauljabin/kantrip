@@ -25,11 +25,11 @@ connectivity.
 - Schema-validated profiles in a private transactional SQLite database
 - Ordered automatic schema migrations with private recovery backups
 - Multiple bootstrap servers, descriptions, and optional Registry endpoints
-- `add`, `remove`, `list`, and redacted `show` commands
+- `add`, `edit`, `remove`, `list`, and redacted `show` commands
 
 ### Local diagnostics
 
-- Profile database, permissions, platform, shell, and session checks
+- Profile database, credential backend, permissions, platform, shell, and session checks
 - Read-only diagnostics with explicit deterministic repair through `doctor --repair`
 - Explicit Kafka protocol connectivity checks with `ping`
 - Installed-command discovery for Kantrip's supported adapters
@@ -60,7 +60,8 @@ connectivity.
 
 The MVP roadmap has three stages:
 
-1. Add local credential-store integration and recoverable profile updates.
+1. Complete secret-bearing profile updates on the local credential-store and
+   reconciliation foundation.
 2. Add TLS, authenticated Kafka profiles, imports, and adapters.
 3. Add authenticated Registry connections, OAuth integration, and authenticated
    connectivity checks.
@@ -103,7 +104,8 @@ exit
 description, and `--registry-url http://HOST:PORT` for a plain Confluent Schema
 Registry. Add
 `--registry-provider apicurio` for a native Apicurio Core Registry API v3 URL.
-Remove profiles with `kantrip remove PROFILE`; `list` shows both endpoints.
+Update brokers, descriptions, labels, or Registry settings with
+`kantrip edit PROFILE`; remove profiles with `kantrip remove PROFILE`.
 
 ## Command compatibility
 
@@ -117,6 +119,9 @@ See the [usage guide](https://github.com/sauljabin/kantrip/blob/main/USAGE.md).
 ## Development
 
 See the [development guide](https://github.com/sauljabin/kantrip/blob/main/DEVELOPMENT.md).
+
+Run the valuable exploratory scenarios in the
+[manual testing guide](https://github.com/sauljabin/kantrip/blob/main/MANUAL_TESTING.md).
 
 ## Releases
 

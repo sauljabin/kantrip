@@ -9,10 +9,23 @@ from unittest.mock import patch
 
 from kantrip.doctor import run_doctor
 from kantrip.profiles import DATABASE_BACKUP_PREFIX, add_profile, load_profiles
+from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
+from kantrip.secret_store import SecretStoreError, SecretStoreInfo, secret_reference
 
 
 class TestDoctor(unittest.TestCase):
+    def setUp(self) -> None:
+        store = unittest.mock.Mock(
+            info=SecretStoreInfo(
+                "keyring.backends.SecretService.Keyring",
+                "Secret Service",
+            )
+        )
+        patcher = patch("kantrip.doctor.load_secret_store", return_value=store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_reports_valid_profile_database_and_installed_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
@@ -306,6 +319,67 @@ class TestDoctor(unittest.TestCase):
         self.assertFalse(report.healthy)
         self.assertTrue(
             any("Runtime invalid: 1 session" in check.message for check in report.checks)
+        )
+
+    def test_pending_credential_cleanup_is_reported_without_modification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            profile = load_profiles(database_path).profile("local")
+            reference = secret_reference(profile["id"], "registry/token")
+            with closing(sqlite3.connect(database_path)) as connection:
+                queue_secret_cleanup(connection, reference)
+                connection.commit()
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            with patch("kantrip.doctor.shutil.which", side_effect=_installed_tool):
+                report = run_doctor(environment)
+            with closing(sqlite3.connect(database_path)) as connection:
+                pending = connection.execute(
+                    "SELECT secret_reference FROM credential_reconciliation"
+                ).fetchall()
+
+        self.assertTrue(report.healthy)
+        self.assertEqual([(reference,)], pending)
+        self.assertTrue(
+            any(
+                check.status == "warning"
+                and "Credential reconciliation: 1 pending entry" in check.message
+                for check in report.checks
+            )
+        )
+
+    def test_unapproved_credential_backend_is_unhealthy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            with (
+                patch(
+                    "kantrip.doctor.load_secret_store",
+                    side_effect=SecretStoreError("unsafe backend"),
+                ),
+                patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+            ):
+                report = run_doctor(environment)
+
+        self.assertFalse(report.healthy)
+        self.assertTrue(
+            any(
+                "Credential store backend is unavailable or unsafe" in check.message
+                for check in report.checks
+            )
         )
 
 

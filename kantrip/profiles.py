@@ -13,6 +13,7 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager, nullcontext
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,11 +31,19 @@ from kantrip.migrations import (
     apply_migrations,
     inspect_migrations,
 )
+from kantrip.reconciliation import (
+    CleanupRecord,
+    ReconciliationError,
+    ReconciliationResult,
+    pending_secret_cleanup,
+    reconcile_secret_cleanup,
+)
 from kantrip.registry import (
     CONFLUENT_PROVIDER,
     RegistryProfileError,
     plain_registry_connection,
 )
+from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
 
 DATABASE_FILENAME = "profiles.db"
 DATABASE_SCHEMA_VERSION = LATEST_SEQUENCE
@@ -164,6 +173,61 @@ def migrate_profile_database(
         return _migrate_existing_database(database_path)
 
 
+def inspect_pending_secret_cleanup(
+    path: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> tuple[CleanupRecord, ...]:
+    """Read and validate credential reconciliation state without modifying it."""
+    database_path = path if path is not None else resolve_database_path(environment)
+    if not _path_entry_exists(database_path):
+        return ()
+    _validate_private_parent(database_path.parent)
+    _validate_database_file(database_path)
+    try:
+        with closing(_connect(database_path, writable=False)) as connection:
+            state = _inspect_migration_state(connection)
+            if state.requires_migration:
+                raise ProfileStoreError(_pending_migration_message(state))
+            return pending_secret_cleanup(connection)
+    except (ProfileStoreError, ReconciliationError):
+        raise
+    except sqlite3.Error as error:
+        raise ProfileStoreError("credential reconciliation journal could not be read") from error
+
+
+def reconcile_pending_secrets(
+    path: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+    store: SecretStore | None = None,
+    lock_held: bool = False,
+) -> ReconciliationResult:
+    """Reconcile every exact pending credential reference under the mutation lock."""
+    database_path = path if path is not None else resolve_database_path(environment)
+    if not _path_entry_exists(database_path):
+        return ReconciliationResult(0, 0, 0)
+    _validate_private_parent(database_path.parent)
+    _validate_database_file(database_path)
+    lock = nullcontext() if lock_held else database_maintenance_lock(database_path)
+    try:
+        with lock, closing(_connect(database_path, writable=True)) as connection:
+            state = _inspect_migration_state(connection)
+            if state.requires_migration:
+                raise ProfileStoreError(_pending_migration_message(state))
+            records = pending_secret_cleanup(connection)
+            if not records:
+                return ReconciliationResult(0, 0, 0)
+            selected_store = store or load_secret_store()
+            return reconcile_secret_cleanup(connection, selected_store)
+    except (ProfileStoreError, ReconciliationError, SecretStoreError):
+        raise
+    except sqlite3.Error as error:
+        raise ProfileStoreError("credential reconciliation journal could not be updated") from error
+    finally:
+        _harden_sqlite_files(database_path)
+
+
 @contextmanager
 def database_maintenance_lock(path: Path) -> Iterator[None]:
     """Serialize database migration and explicit maintenance work."""
@@ -250,6 +314,187 @@ def remove_profile(
         raise
     except sqlite3.Error as error:
         raise ProfileStoreError("profile database could not be updated safely") from error
+
+
+def edit_profile(
+    profile_name: str,
+    path: Path | None = None,
+    *,
+    bootstrap_servers: tuple[str, ...] | None = None,
+    description: str | None = None,
+    clear_description: bool = False,
+    labels: Mapping[str, str] | None = None,
+    remove_labels: tuple[str, ...] = (),
+    registry_provider: str | None = None,
+    registry_url: str | None = None,
+    remove_registry: bool = False,
+    environment: Mapping[str, str] | None = None,
+) -> ProfileCollection:
+    """Update explicit fields of one existing profile transactionally."""
+    _validate_profile_name(profile_name)
+    _validate_edit_request(
+        bootstrap_servers=bootstrap_servers,
+        description=description,
+        clear_description=clear_description,
+        labels=labels,
+        remove_labels=remove_labels,
+        registry_provider=registry_provider,
+        registry_url=registry_url,
+        remove_registry=remove_registry,
+    )
+    database_path = path if path is not None else resolve_database_path(environment)
+    if not _path_entry_exists(database_path):
+        raise ProfileStoreError(f"profile '{profile_name}' was not found")
+    try:
+        with _writable_connection(database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                profiles = _load_profile_rows(connection)
+                current = profiles.get(profile_name)
+                if current is None:
+                    raise ProfileStoreError(f"profile '{profile_name}' was not found")
+                updated = _apply_profile_edits(
+                    current,
+                    bootstrap_servers=bootstrap_servers,
+                    description=description,
+                    clear_description=clear_description,
+                    labels=labels or {},
+                    remove_labels=remove_labels,
+                    registry_provider=registry_provider,
+                    registry_url=registry_url,
+                    remove_registry=remove_registry,
+                )
+                _validate_profile(updated)
+                try:
+                    plain_registry_connection(updated)
+                except RegistryProfileError as error:
+                    raise ProfileStoreError(str(error)) from error
+                cursor = connection.execute(
+                    "UPDATE profiles SET revision = revision + 1, document = ? "
+                    "WHERE name = ? AND id = ?",
+                    (_encode_profile(updated), profile_name, current["id"]),
+                )
+                if cursor.rowcount != 1:
+                    raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly")
+                connection.execute("COMMIT")
+            except BaseException:
+                _rollback(connection)
+                raise
+            return ProfileCollection(database_path, _load_profile_rows(connection))
+    except ProfileStoreError:
+        raise
+    except sqlite3.Error as error:
+        raise ProfileStoreError("profile database could not be updated safely") from error
+
+
+def _validate_edit_request(
+    *,
+    bootstrap_servers: tuple[str, ...] | None,
+    description: str | None,
+    clear_description: bool,
+    labels: Mapping[str, str] | None,
+    remove_labels: tuple[str, ...],
+    registry_provider: str | None,
+    registry_url: str | None,
+    remove_registry: bool,
+) -> None:
+    has_change = any(
+        (
+            bootstrap_servers is not None,
+            description is not None,
+            clear_description,
+            bool(labels),
+            bool(remove_labels),
+            registry_provider is not None,
+            registry_url is not None,
+            remove_registry,
+        )
+    )
+    if not has_change:
+        raise ProfileStoreError("no profile changes were requested")
+    if description is not None and clear_description:
+        raise ProfileStoreError("--description cannot be combined with --clear-description")
+    if remove_registry and (registry_provider is not None or registry_url is not None):
+        raise ProfileStoreError("--remove-registry cannot be combined with Registry update options")
+    if labels and set(labels).intersection(remove_labels):
+        raise ProfileStoreError("a label cannot be set and removed in the same edit")
+
+
+def _apply_profile_edits(
+    current: Mapping[str, Any],
+    *,
+    bootstrap_servers: tuple[str, ...] | None,
+    description: str | None,
+    clear_description: bool,
+    labels: Mapping[str, str],
+    remove_labels: tuple[str, ...],
+    registry_provider: str | None,
+    registry_url: str | None,
+    remove_registry: bool,
+) -> dict[str, Any]:
+    updated = deepcopy(dict(current))
+    if bootstrap_servers is not None:
+        updated["kafka"]["bootstrapServers"] = list(bootstrap_servers)
+    if clear_description:
+        updated.pop("description", None)
+    elif description is not None:
+        updated["description"] = description
+    _apply_label_edits(updated, labels, remove_labels)
+    _apply_registry_edits(updated, registry_provider, registry_url, remove_registry)
+    return updated
+
+
+def _apply_label_edits(
+    profile: dict[str, Any],
+    labels: Mapping[str, str],
+    remove_labels: tuple[str, ...],
+) -> None:
+    current_labels = dict(profile.get("labels", {}))
+    current_labels.update(labels)
+    for name in remove_labels:
+        current_labels.pop(name, None)
+    if current_labels:
+        profile["labels"] = current_labels
+    else:
+        profile.pop("labels", None)
+
+
+def _apply_registry_edits(
+    profile: dict[str, Any],
+    provider: str | None,
+    url: str | None,
+    remove: bool,
+) -> None:
+    if remove:
+        profile.pop("registry", None)
+        return
+    if provider is None and url is None:
+        return
+    existing = profile.get("registry")
+    if not isinstance(existing, Mapping) and url is None:
+        raise ProfileStoreError("--registry-provider requires --registry-url for a new Registry")
+    selected_provider = provider or (
+        str(existing["provider"]) if isinstance(existing, Mapping) else CONFLUENT_PROVIDER
+    )
+    if url is None:
+        assert isinstance(existing, Mapping)
+        old_property = (
+            "apicurio.registry.url"
+            if existing.get("provider") == "apicurio"
+            else "schema.registry.url"
+        )
+        selected_url = existing.get(old_property)
+        if not isinstance(selected_url, str):
+            raise ProfileStoreError("stored Registry URL is invalid")
+    else:
+        selected_url = url
+    property_name = (
+        "apicurio.registry.url" if selected_provider == "apicurio" else "schema.registry.url"
+    )
+    profile["registry"] = {
+        "provider": selected_provider,
+        property_name: selected_url,
+    }
 
 
 def _new_profile(
@@ -604,9 +849,12 @@ __all__ = [
     "ProfileStoreError",
     "add_profile",
     "database_maintenance_lock",
+    "edit_profile",
+    "inspect_pending_secret_cleanup",
     "inspect_profile_database",
     "load_profiles",
     "migrate_profile_database",
+    "reconcile_pending_secrets",
     "remove_profile",
     "resolve_database_path",
 ]
