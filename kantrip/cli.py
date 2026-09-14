@@ -25,10 +25,10 @@ from kantrip.console import (
     show_progress,
 )
 from kantrip.doctor import run_doctor
+from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, ping_profile
 from kantrip.profiles import ProfileStoreError, add_profile, load_profiles, remove_profile
 from kantrip.redaction import redact_mapping
-from kantrip.runtime import SessionRuntimeError, scan_sessions
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
@@ -205,53 +205,36 @@ def current_profile() -> None:
     click.echo(profile_name)
 
 
-@cli.command("cleanup")
-@local_no_color
-@cloup.option(
-    "--dry-run",
-    is_flag=True,
-    help="Report stale sessions without removing them.",
-)
-@cloup.pass_context
-def cleanup_sessions(context: cloup.Context, dry_run: bool) -> None:
-    """Remove validated session artifacts left by abnormal termination."""
-    try:
-        report = scan_sessions(remove=not dry_run)
-    except SessionRuntimeError as error:
-        error_console = error_console_from_context(context)
-        error_console.print(create_status_text(error_console, "error", str(error)))
-        raise click.exceptions.Exit(1) from error
-    console = console_from_context(context)
-    action = "Would remove" if dry_run else "Removed"
-    affected = report.stale if dry_run else report.removed
-    console.print(
-        create_status_text(
-            console,
-            "cleanup",
-            f"{action} {affected} stale session{'s' if affected != 1 else ''}; "
-            f"active: {report.active}; recent: {report.recent}; invalid: {report.invalid}; "
-            f"failed: {report.failed}; truncated: {'yes' if report.truncated else 'no'}",
-        )
-    )
-    if report.has_errors:
-        error_console = error_console_from_context(context)
-        error_console.print(
-            create_status_text(error_console, "error", "Session cleanup was incomplete")
-        )
-        raise click.exceptions.Exit(1)
-
-
 @cli.command("doctor")
 @local_no_color
+@cloup.option(
+    "--repair",
+    is_flag=True,
+    help="Apply safe database migrations and remove stale session artifacts.",
+)
 @cloup.option(
     "--verbose",
     is_flag=True,
     help="Show every diagnostic, including resolved paths and profile IDs.",
 )
 @cloup.pass_context
-def doctor(context: cloup.Context, verbose: bool) -> None:
-    """Check Kantrip's profile store and command environment."""
+def doctor(context: cloup.Context, repair: bool, verbose: bool) -> None:
+    """Inspect Kantrip, optionally applying deterministic local repairs."""
     console = console_from_context(context)
+    repair_healthy = True
+    if repair:
+        repair_report = run_repair()
+        repair_healthy = repair_report.healthy
+        console.print(Text("Kantrip Repair", style="heading"))
+        for action in repair_report.actions:
+            console.print(
+                Padding(
+                    create_status_text(console, action.status, action.message),
+                    (0, 0, 0, 2),
+                    expand=False,
+                )
+            )
+        console.print()
     report = run_doctor()
     console.print(Text("Kantrip Doctor", style="heading"))
     for section, checks in report.sections(verbose=verbose):
@@ -285,7 +268,7 @@ def doctor(context: cloup.Context, verbose: bool) -> None:
         summary_status = "success"
         summary = "Healthy"
     console.print(create_status_text(console, summary_status, summary))
-    if not report.healthy:
+    if not repair_healthy or not report.healthy:
         raise click.exceptions.Exit(1)
 
 

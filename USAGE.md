@@ -39,6 +39,15 @@ Missing optional clients or a first-run profile database produce warnings. An
 invalid database, unsupported registry settings, or inconsistent session state
 exits with status 1. Doctor never contacts Kafka or a registry.
 
+Profile-dependent commands automatically apply known SQLite migrations. A
+normal `doctor` run only reports pending work; it does not create or modify
+storage. Use `kantrip doctor --repair` for an explicit maintenance pass that
+migrates the profile database, removes validated stale sessions, and then runs
+the diagnostics again. Kantrip has no separate migration or cleanup command.
+Migration backups include their UTC creation time and a unique suffix, so later
+migrations preserve earlier recovery points. Unreleased databases without
+migration history are unsupported and must be recreated.
+
 ## Kafka and registry connectivity
 
 Check Kafka and, when configured, registry connectivity:
@@ -150,18 +159,18 @@ Every session holds a liveness lock; PIDs are metadata and are not used alone to
 decide whether a session is active.
 
 Before `exec`, Kantrip inspects at most 256 direct runtime entries and removes
-validated unlocked sessions older than five minutes. Inspect or clean all
-remaining artifacts explicitly with:
+validated unlocked sessions older than five minutes. Inspect the complete local
+state without modifying it, or explicitly repair safe deterministic issues, with:
 
 ```bash
-kantrip cleanup --dry-run
-kantrip cleanup
+kantrip doctor
+kantrip doctor --repair
 ```
 
-Cleanup refuses malformed markers, symlinks, unsafe permissions, wrong owners,
-and paths outside the runtime root. `doctor` reports active, recent, stale, and
-invalid runtime entries without modifying them; runtime paths appear only with
-`--verbose`.
+Repair applies known database migrations and removes every validated stale
+session. It refuses malformed markers, symlinks, unsafe permissions, wrong
+owners, and paths outside the runtime root. Active and recent sessions remain
+untouched. Runtime paths appear only with `--verbose`.
 
 ## Displaying the active profile in your prompt
 

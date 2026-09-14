@@ -6,8 +6,12 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
+from kantrip.migrations import MIGRATIONS, Migration
 from kantrip.profiles import (
+    DATABASE_BACKUP_PREFIX,
+    DATABASE_MAINTENANCE_SUFFIX,
     DATABASE_SCHEMA_VERSION,
     ProfileStoreError,
     add_profile,
@@ -61,9 +65,110 @@ class TestProfiles(unittest.TestCase):
             with closing(sqlite3.connect(path)) as connection:
                 journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
+                migration = connection.execute(
+                    "SELECT sequence, name, checksum, applied_at, applied_by "
+                    "FROM schema_migrations"
+                ).fetchone()
 
-        self.assertEqual("wal", journal_mode)
-        self.assertEqual(DATABASE_SCHEMA_VERSION, version)
+            self.assertEqual("wal", journal_mode)
+            self.assertEqual(DATABASE_SCHEMA_VERSION, version)
+            self.assertEqual(1, migration[0])
+            self.assertEqual(MIGRATIONS[0].name, migration[1])
+            self.assertEqual(MIGRATIONS[0].checksum, migration[2])
+            self.assertTrue(migration[3])
+            self.assertTrue(migration[4])
+            self.assertEqual([], list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*")))
+            self.assertEqual(
+                0o600,
+                Path(f"{path}{DATABASE_MAINTENANCE_SUFFIX}").stat().st_mode & 0o777,
+            )
+
+    def test_rejects_a_nonempty_database_without_migration_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("DROP TABLE schema_migrations")
+                connection.commit()
+
+            with self.assertRaisesRegex(ProfileStoreError, "schema is invalid"):
+                load_profiles(path)
+            self.assertEqual([], list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*")))
+
+    def test_each_migration_pass_keeps_a_uniquely_timestamped_private_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+            second = Migration(2, "second", ("UPDATE profiles SET revision = revision",))
+            third = Migration(3, "third", ("UPDATE profiles SET revision = revision",))
+
+            with (
+                patch("kantrip.migrations.MIGRATIONS", (*MIGRATIONS, second)),
+                patch("kantrip.migrations.LATEST_SEQUENCE", 2),
+                patch(
+                    "kantrip.profiles._backup_timestamp",
+                    return_value="2026-09-14T01-02-03.000004Z",
+                ),
+            ):
+                load_profiles(path)
+            with (
+                patch("kantrip.migrations.MIGRATIONS", (*MIGRATIONS, second, third)),
+                patch("kantrip.migrations.LATEST_SEQUENCE", 3),
+                patch(
+                    "kantrip.profiles._backup_timestamp",
+                    return_value="2026-09-15T02-03-04.000005Z",
+                ),
+            ):
+                load_profiles(path)
+
+            backups = sorted(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*"))
+            self.assertEqual(2, len(backups))
+            self.assertIn("2026-09-14T01-02-03.000004Z", backups[0].name)
+            self.assertIn("2026-09-15T02-03-04.000005Z", backups[1].name)
+            self.assertTrue(all(backup.stat().st_mode & 0o777 == 0o600 for backup in backups))
+            with closing(sqlite3.connect(backups[0])) as connection:
+                first_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            with closing(sqlite3.connect(backups[1])) as connection:
+                second_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            self.assertEqual((1, 2), (first_version, second_version))
+
+    def test_rejects_modified_migration_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "UPDATE schema_migrations SET checksum = 'modified' WHERE sequence = 1"
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(ProfileStoreError, "migration 1 was modified"):
+                load_profiles(path)
+
+    def test_rejects_unknown_applied_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES (2, 'unknown', 'checksum', 'now', 'test')"
+                )
+                connection.execute("PRAGMA user_version = 2")
+                connection.commit()
+
+            with self.assertRaisesRegex(ProfileStoreError, "unknown migrations"):
+                load_profiles(path)
+
+    def test_rejects_migration_history_that_disagrees_with_user_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("PRAGMA user_version = 0")
+                connection.commit()
+
+            with self.assertRaisesRegex(ProfileStoreError, "does not match"):
+                load_profiles(path)
 
     def test_concurrent_writers_do_not_lose_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -81,6 +186,25 @@ class TestProfiles(unittest.TestCase):
                 ["initial", *(f"profile-{index}" for index in range(8))],
                 list(load_profiles(path).profiles),
             )
+
+    def test_concurrent_initialization_applies_the_migration_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = [
+                    executor.submit(add_profile, f"profile-{index}", path) for index in range(4)
+                ]
+                for future in futures:
+                    future.result()
+
+            with closing(sqlite3.connect(path)) as connection:
+                migration_count = connection.execute(
+                    "SELECT COUNT(*) FROM schema_migrations"
+                ).fetchone()[0]
+
+            self.assertEqual(1, migration_count)
+            self.assertEqual(4, len(load_profiles(path).profiles))
 
     def test_missing_database_can_be_loaded_without_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

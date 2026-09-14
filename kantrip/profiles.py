@@ -2,22 +2,35 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import re
 import sqlite3
 import stat
+import time
 import uuid
 from collections.abc import Iterator, Mapping
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
+from kantrip import APP_VERSION
+from kantrip.migrations import (
+    LATEST_SEQUENCE,
+    MigrationError,
+    MigrationResult,
+    MigrationState,
+    apply_migrations,
+    inspect_migrations,
+)
 from kantrip.registry import (
     CONFLUENT_PROVIDER,
     RegistryProfileError,
@@ -25,12 +38,20 @@ from kantrip.registry import (
 )
 
 DATABASE_FILENAME = "profiles.db"
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = LATEST_SEQUENCE
 DATABASE_TIMEOUT_SECONDS = 5.0
+DATABASE_BACKUP_PREFIX = ".pre-migration-"
+DATABASE_MAINTENANCE_SUFFIX = ".maintenance.lock"
 SCHEMA_FILENAME = "profile.schema.json"
 DEFAULT_BOOTSTRAP_SERVER = "localhost:9092"
 _PROFILE_NAME_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
-_SQLITE_PRIVATE_SUFFIXES = ("", "-journal", "-shm", "-wal")
+_SQLITE_PRIVATE_SUFFIXES = (
+    "",
+    "-journal",
+    "-shm",
+    "-wal",
+    DATABASE_MAINTENANCE_SUFFIX,
+)
 
 
 class ProfileStoreError(ValueError):
@@ -74,8 +95,9 @@ def load_profiles(
     *,
     environment: Mapping[str, str] | None = None,
     missing_ok: bool = False,
+    migrate: bool = True,
 ) -> ProfileCollection:
-    """Load and validate a snapshot without creating persistent state."""
+    """Load a validated snapshot, applying known migrations when requested."""
     database_path = path if path is not None else resolve_database_path(environment)
     if not _path_entry_exists(database_path):
         if missing_ok:
@@ -86,12 +108,74 @@ def load_profiles(
     _validate_database_file(database_path)
     try:
         with closing(_connect(database_path, writable=False)) as connection:
-            _verify_database_schema(connection)
+            state = _inspect_migration_state(connection)
+            if not state.requires_migration:
+                return ProfileCollection(database_path, _load_profile_rows(connection))
+        if not migrate:
+            raise ProfileStoreError(_pending_migration_message(state))
+        migrate_profile_database(database_path)
+        with closing(_connect(database_path, writable=False)) as connection:
+            state = _inspect_migration_state(connection)
+            if state.requires_migration:
+                raise ProfileStoreError(_pending_migration_message(state))
             return ProfileCollection(database_path, _load_profile_rows(connection))
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
         raise ProfileStoreError("profile database could not be read safely") from error
+
+
+def inspect_profile_database(
+    path: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> MigrationState:
+    """Inspect migration state without modifying the database or its directory."""
+    database_path = path if path is not None else resolve_database_path(environment)
+    if not _path_entry_exists(database_path):
+        raise ProfileStoreError(f"profile database was not found: {database_path}")
+    _validate_private_parent(database_path.parent)
+    _validate_database_file(database_path)
+    try:
+        with closing(_connect(database_path, writable=False)) as connection:
+            return _inspect_migration_state(connection)
+    except ProfileStoreError:
+        raise
+    except sqlite3.Error as error:
+        raise ProfileStoreError("profile database could not be read safely") from error
+
+
+def migrate_profile_database(
+    path: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+    missing_ok: bool = False,
+    lock_held: bool = False,
+) -> MigrationResult:
+    """Bring one existing database to the latest bundled migration sequence."""
+    database_path = path if path is not None else resolve_database_path(environment)
+    if not _path_entry_exists(database_path):
+        if missing_ok:
+            return MigrationResult(0, 0)
+        raise ProfileStoreError(f"profile database was not found: {database_path}")
+    _validate_private_parent(database_path.parent)
+    _validate_database_file(database_path)
+    lock = nullcontext() if lock_held else database_maintenance_lock(database_path)
+    with lock:
+        return _migrate_existing_database(database_path)
+
+
+@contextmanager
+def database_maintenance_lock(path: Path) -> Iterator[None]:
+    """Serialize database migration and explicit maintenance work."""
+    _validate_private_parent(path.parent)
+    lock_path = Path(f"{path}{DATABASE_MAINTENANCE_SUFFIX}")
+    descriptor = _open_private_lock(lock_path)
+    try:
+        _acquire_bounded_lock(descriptor)
+        yield
+    finally:
+        os.close(descriptor)
 
 
 def add_profile(
@@ -205,22 +289,23 @@ def _new_profile(
 @contextmanager
 def _writable_connection(path: Path) -> Iterator[sqlite3.Connection]:
     _ensure_private_parent(path.parent)
-    _create_or_validate_database_file(path)
-    connection: sqlite3.Connection | None = None
-    try:
-        connection = _connect(path, writable=True)
-        path.chmod(0o600)
-        _validate_database_file(path)
-        _initialize_or_verify_database(connection)
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
-        yield connection
-    except OSError as error:
-        raise ProfileStoreError("profile database could not be opened safely") from error
-    finally:
-        if connection is not None:
-            connection.close()
-        _harden_sqlite_files(path)
+    with database_maintenance_lock(path):
+        _create_or_validate_database_file(path)
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = _connect(path, writable=True)
+            path.chmod(0o600)
+            _validate_database_file(path)
+            _migrate_connection(connection, path)
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            yield connection
+        except OSError as error:
+            raise ProfileStoreError("profile database could not be opened safely") from error
+        finally:
+            if connection is not None:
+                connection.close()
+            _harden_sqlite_files(path)
 
 
 def _connect(path: Path, *, writable: bool) -> sqlite3.Connection:
@@ -244,71 +329,45 @@ def _connect(path: Path, *, writable: bool) -> sqlite3.Connection:
     return connection
 
 
-def _initialize_or_verify_database(connection: sqlite3.Connection) -> None:
-    connection.execute("BEGIN IMMEDIATE")
+def _migrate_existing_database(path: Path) -> MigrationResult:
+    _validate_private_parent(path.parent)
+    _validate_database_file(path)
     try:
-        version = _database_version(connection)
-        if version == 0:
-            existing_tables = connection.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-            if existing_tables:
-                raise ProfileStoreError("profile database schema is invalid")
-            connection.execute("""
-                CREATE TABLE profiles (
-                    name TEXT PRIMARY KEY NOT NULL,
-                    id TEXT UNIQUE NOT NULL,
-                    revision INTEGER NOT NULL CHECK (revision > 0),
-                    document TEXT NOT NULL
-                )
-                """)
-            connection.execute(f"PRAGMA user_version = {DATABASE_SCHEMA_VERSION}")
-        elif version != DATABASE_SCHEMA_VERSION:
-            raise ProfileStoreError(f"profile database version {version} is not supported")
-        connection.execute("COMMIT")
-    except BaseException:
-        _rollback(connection)
+        with closing(_connect(path, writable=True)) as connection:
+            result = _migrate_connection(connection, path)
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+            return result
+    except ProfileStoreError:
         raise
-    _verify_database_schema(connection)
+    except sqlite3.Error as error:
+        raise ProfileStoreError("profile database could not be migrated safely") from error
+    finally:
+        _harden_sqlite_files(path)
 
 
-def _verify_database_schema(connection: sqlite3.Connection) -> None:
-    version = _database_version(connection)
-    if version != DATABASE_SCHEMA_VERSION:
-        raise ProfileStoreError(f"profile database version {version} is not supported")
-    objects = connection.execute(
-        "SELECT type, name, tbl_name FROM sqlite_master "
-        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
-    ).fetchall()
-    if [tuple(row) for row in objects] != [("table", "profiles", "profiles")]:
-        raise ProfileStoreError("profile database schema is invalid")
-    columns = connection.execute("PRAGMA table_info(profiles)").fetchall()
-    expected_columns = [
-        (0, "name", "TEXT", 1, None, 1),
-        (1, "id", "TEXT", 1, None, 0),
-        (2, "revision", "INTEGER", 1, None, 0),
-        (3, "document", "TEXT", 1, None, 0),
-    ]
-    if [tuple(row) for row in columns] != expected_columns:
-        raise ProfileStoreError("profile database schema is invalid")
-    unique_columns = {
-        tuple(
-            row["name"]
-            for row in connection.execute(f"PRAGMA index_info({index['name']})").fetchall()
-        )
-        for index in connection.execute("PRAGMA index_list(profiles)").fetchall()
-        if index["unique"]
-    }
-    if unique_columns != {("name",), ("id",)}:
-        raise ProfileStoreError("profile database schema is invalid")
+def _migrate_connection(connection: sqlite3.Connection, path: Path) -> MigrationResult:
+    state = _inspect_migration_state(connection)
+    if not state.requires_migration:
+        return MigrationResult(state.current_sequence, state.current_sequence)
+    if not state.new_database:
+        _create_database_backup(connection, path)
+    try:
+        return apply_migrations(connection, applied_by=APP_VERSION)
+    except MigrationError as error:
+        raise ProfileStoreError(str(error)) from error
 
 
-def _database_version(connection: sqlite3.Connection) -> int:
-    row = connection.execute("PRAGMA user_version").fetchone()
-    if row is None:
-        raise ProfileStoreError("profile database version could not be read")
-    return int(row[0])
+def _inspect_migration_state(connection: sqlite3.Connection) -> MigrationState:
+    try:
+        return inspect_migrations(connection)
+    except MigrationError as error:
+        raise ProfileStoreError(str(error)) from error
+
+
+def _pending_migration_message(state: MigrationState) -> str:
+    sequences = ", ".join(str(sequence) for sequence in state.pending_sequences)
+    return f"profile database requires migration sequence {sequences}"
 
 
 def _rollback(connection: sqlite3.Connection) -> None:
@@ -448,6 +507,69 @@ def _create_or_validate_database_file(path: Path) -> None:
     _validate_database_file(path)
 
 
+def _open_private_lock(path: Path) -> int:
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as error:
+        raise ProfileStoreError("database maintenance lock could not be opened safely") from error
+    metadata = os.fstat(descriptor)
+    owner_uid = getattr(os, "getuid", lambda: metadata.st_uid)()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != owner_uid
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        os.close(descriptor)
+        raise ProfileStoreError("database maintenance lock is not private and user-owned")
+    return descriptor
+
+
+def _acquire_bounded_lock(descriptor: int) -> None:
+    deadline = time.monotonic() + DATABASE_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN):
+                raise ProfileStoreError(
+                    "database maintenance lock could not be acquired"
+                ) from error
+            if time.monotonic() >= deadline:
+                raise ProfileStoreError("database maintenance is busy") from error
+            time.sleep(0.05)
+
+
+def _create_database_backup(connection: sqlite3.Connection, path: Path) -> None:
+    timestamp = _backup_timestamp()
+    backup_path = Path(f"{path}{DATABASE_BACKUP_PREFIX}{timestamp}-{uuid.uuid4().hex}")
+    temporary_path = path.parent / f".{path.name}.backup-{uuid.uuid4().hex}.tmp"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(temporary_path, flags, 0o600)
+        os.close(descriptor)
+        descriptor = None
+        with closing(sqlite3.connect(temporary_path)) as destination:
+            connection.backup(destination)
+        temporary_path.chmod(0o600)
+        os.link(temporary_path, backup_path, follow_symlinks=False)
+        temporary_path.unlink()
+    except (OSError, sqlite3.Error) as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary_path.unlink()
+        except OSError:
+            pass
+        raise ProfileStoreError("profile database backup could not be created safely") from error
+
+
+def _backup_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S.%fZ")
+
+
 def _harden_sqlite_files(path: Path) -> None:
     for suffix in _SQLITE_PRIVATE_SUFFIXES:
         candidate = Path(f"{path}{suffix}")
@@ -479,12 +601,17 @@ def _load_schema() -> dict[str, Any]:
 
 
 __all__ = [
+    "DATABASE_BACKUP_PREFIX",
     "DATABASE_FILENAME",
+    "DATABASE_MAINTENANCE_SUFFIX",
     "DATABASE_SCHEMA_VERSION",
     "ProfileCollection",
     "ProfileStoreError",
     "add_profile",
+    "database_maintenance_lock",
+    "inspect_profile_database",
     "load_profiles",
+    "migrate_profile_database",
     "remove_profile",
     "resolve_database_path",
 ]

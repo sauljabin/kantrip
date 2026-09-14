@@ -11,9 +11,9 @@ from click.testing import CliRunner
 from kantrip import APP_VERSION
 from kantrip.cli import cli
 from kantrip.console import create_console
+from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult
 from kantrip.profiles import add_profile, load_profiles
-from kantrip.runtime import SessionRuntimeError, SessionScan
 
 
 class TestCli(unittest.TestCase):
@@ -61,7 +61,6 @@ class TestCli(unittest.TestCase):
             "list",
             "show",
             "current",
-            "cleanup",
             "doctor",
             "ping",
             "exec",
@@ -72,49 +71,11 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(0, result.exit_code, result.output)
                 self.assertIn("--no-color", result.output)
 
-    def test_cleanup_dry_run_reports_without_removing(self) -> None:
-        report = SessionScan(
-            Path("/runtime"),
-            exists=True,
-            active=1,
-            recent=2,
-            stale=3,
-        )
-        with patch("kantrip.cli.scan_sessions", return_value=report) as scan:
-            result = self.runner.invoke(cli, ["cleanup", "--dry-run", "--no-color"])
+    def test_cleanup_command_is_not_exposed(self) -> None:
+        result = self.runner.invoke(cli, ["cleanup"])
 
-        self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("Would remove 3 stale sessions", result.output)
-        self.assertIn("active: 1; recent: 2", result.output)
-        scan.assert_called_once_with(remove=False)
-
-    def test_cleanup_removes_stale_sessions(self) -> None:
-        report = SessionScan(Path("/runtime"), exists=True, removed=2)
-        with patch("kantrip.cli.scan_sessions", return_value=report) as scan:
-            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
-
-        self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("Removed 2 stale sessions", result.output)
-        scan.assert_called_once_with(remove=True)
-
-    def test_cleanup_fails_when_the_scan_is_incomplete(self) -> None:
-        report = SessionScan(Path("/runtime"), exists=True, invalid=1)
-        with patch("kantrip.cli.scan_sessions", return_value=report):
-            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
-
-        self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("invalid: 1", result.stdout)
-        self.assertIn("Session cleanup was incomplete", result.stderr)
-
-    def test_cleanup_fails_for_an_unsafe_runtime_root(self) -> None:
-        with patch(
-            "kantrip.cli.scan_sessions",
-            side_effect=SessionRuntimeError("session runtime is unsafe"),
-        ):
-            result = self.runner.invoke(cli, ["cleanup", "--no-color"])
-
-        self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("session runtime is unsafe", result.stderr)
+        self.assertEqual(2, result.exit_code, result.output)
+        self.assertIn("No such command 'cleanup'", result.output)
 
     def test_local_no_color_preserves_parser_errors(self) -> None:
         result = self.runner.invoke(cli, ["show", "--no-color"])
@@ -252,12 +213,52 @@ class TestCli(unittest.TestCase):
         self.assertIn("└─ [passed] resolved executable path", result.output)
         self.assertIn("[passed] Healthy", result.output)
 
-    def test_doctor_help_lists_only_long_verbose_option(self) -> None:
+    def test_doctor_repair_runs_maintenance_before_diagnostics(self) -> None:
+        with (
+            patch("kantrip.cli.run_repair") as repair,
+            patch("kantrip.cli.run_doctor") as run,
+        ):
+            from kantrip.doctor import DoctorCheck, DoctorReport
+
+            repair.return_value = RepairReport(
+                (
+                    RepairAction("success", "Applied database migrations: 1"),
+                    RepairAction("cleanup", "Sessions: removed 2 stale"),
+                )
+            )
+            run.return_value = DoctorReport((DoctorCheck("success", "configuration is valid"),))
+            result = self.runner.invoke(cli, ["doctor", "--repair", "--no-color"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertLess(
+            result.output.index("Kantrip Repair"), result.output.index("Kantrip Doctor")
+        )
+        self.assertIn("[passed] Applied database migrations: 1", result.output)
+        self.assertIn("[cleanup] Sessions: removed 2 stale", result.output)
+        repair.assert_called_once_with()
+        run.assert_called_once_with()
+
+    def test_doctor_repair_exits_nonzero_when_maintenance_fails(self) -> None:
+        with (
+            patch("kantrip.cli.run_repair") as repair,
+            patch("kantrip.cli.run_doctor") as run,
+        ):
+            from kantrip.doctor import DoctorCheck, DoctorReport
+
+            repair.return_value = RepairReport((RepairAction("error", "migration failed"),))
+            run.return_value = DoctorReport((DoctorCheck("success", "configuration is valid"),))
+            result = self.runner.invoke(cli, ["doctor", "--repair", "--no-color"])
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("[failed] migration failed", result.output)
+
+    def test_doctor_help_lists_only_long_maintenance_options(self) -> None:
         result = self.runner.invoke(cli, ["doctor", "--help"])
 
         self.assertEqual(0, result.exit_code, result.output)
-        verbose_line = next(line for line in result.output.splitlines() if "--verbose" in line)
-        self.assertTrue(verbose_line.lstrip().startswith("--verbose "))
+        for option in ("--repair", "--verbose"):
+            line = next(line for line in result.output.splitlines() if option in line)
+            self.assertTrue(line.lstrip().startswith(f"{option} "))
 
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
         with patch("kantrip.cli.run_doctor") as run:

@@ -67,6 +67,36 @@ private-data-free fixtures with their tests.
 When an application variable changes, update `USAGE.md`, architecture guidance,
 and tests together.
 
+## Database migrations
+
+Keep database evolution independent from product releases. Each bundled
+migration file has one positive integer `sequence`, an immutable descriptive
+name, and a checksum. The sequence is its only identity and order; the product
+version that applies it is history metadata, not part of the migration name.
+
+Before merging a database change:
+
+- Choose the next sequence on `main`; resolve branch collisions before merge.
+- Keep each schema change in its own bundled migration file. Never edit or
+  renumber a migration that has appeared in a release; add a new forward file
+  instead. One product release may include several migration files.
+- Update the schema, `schema_migrations`, and `PRAGMA user_version` in the same
+  bounded transaction.
+- Test a fresh database, an idempotent reopen, every supported upgrade path,
+  rollback, uniquely timestamped backups, checksum tampering, missing or future
+  sequences, and concurrent initialization.
+- Keep migration definitions inside the package. Do not require users to run a
+  SQL file or expose separate migration commands.
+- Do not implement compatibility for an unreleased database shape. The first
+  published release establishes the oldest supported migration state; one
+  product release may still bundle several ordered migration sequences.
+- Keep normal `doctor` execution read-only. Exercise explicit maintenance only
+  through `doctor --repair`.
+
+Tests should create a repository at a selected migration sequence and then run
+the current chain. A published package release is not required to establish an
+upgrade fixture.
+
 ## Build artifacts
 
 Build the wheel and source distribution:

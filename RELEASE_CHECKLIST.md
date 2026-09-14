@@ -20,6 +20,13 @@ release authorization, requesting it only if absent.
 - [ ] Confirm the version classification, backward compatibility, known issues,
   and relevant security advisories. Identify breaking changes and required
   migration guidance before choosing the release type.
+- [ ] Compare bundled database migrations with the previous release. Confirm
+  that no released sequence, name, or payload changed; new sequences are ordered
+  and checksummed; and product SemVer is used only as application metadata.
+- [ ] Test database creation from empty state and upgrades from every supported
+  prior released sequence. Verify rollback, uniquely timestamped private
+  backups, preservation of earlier backups, migration history, and
+  `PRAGMA user_version` before publishing a schema change.
 - [ ] Verify lockfile consistency, code analysis, unit tests, and the shell
   contract using the workflows in [Development](DEVELOPMENT.md#scripts).
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,

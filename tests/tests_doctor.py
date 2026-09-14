@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.doctor import run_doctor
-from kantrip.profiles import add_profile, load_profiles
+from kantrip.profiles import DATABASE_BACKUP_PREFIX, add_profile, load_profiles
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 
 
@@ -68,6 +68,62 @@ class TestDoctor(unittest.TestCase):
         self.assertTrue(
             any(
                 "profile database could not be read safely" in check.message
+                for check in report.checks
+            )
+        )
+
+    def test_historyless_database_is_rejected_without_modification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            with closing(sqlite3.connect(database_path)) as connection:
+                connection.execute("DROP TABLE schema_migrations")
+                connection.commit()
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            with patch("kantrip.doctor.shutil.which", side_effect=_installed_tool):
+                report = run_doctor(environment)
+            with closing(sqlite3.connect(database_path)) as connection:
+                history_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'schema_migrations'"
+                ).fetchone()
+
+        self.assertFalse(report.healthy)
+        self.assertIsNone(history_exists)
+        self.assertTrue(
+            any("profile database schema is invalid" in check.message for check in report.checks)
+        )
+
+    def test_exposed_migration_backup_is_unhealthy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            backup = Path(
+                f"{database_path}{DATABASE_BACKUP_PREFIX}2026-09-14T01-02-03.000004Z-synthetic"
+            )
+            backup.write_bytes(b"synthetic backup")
+            backup.chmod(0o644)
+
+            with patch("kantrip.doctor.shutil.which", side_effect=_installed_tool):
+                report = run_doctor(
+                    {
+                        "KANTRIP_DATABASE": str(database_path),
+                        "XDG_RUNTIME_DIR": directory,
+                        "PATH": "/tools",
+                        "SHELL": "/tools/zsh",
+                    }
+                )
+
+        self.assertFalse(report.healthy)
+        self.assertTrue(
+            any(
+                "Migration backup permissions are broader" in check.message
                 for check in report.checks
             )
         )

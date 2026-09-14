@@ -38,9 +38,25 @@
   Keep its directory mode `0700`, database and sidecar modes `0600`, WAL enabled,
   and writes bounded by `BEGIN IMMEDIATE` transactions. Reject symlinks, unsafe
   ownership or permissions, corrupt contents, and unsupported schema versions.
+- Evolve the database through one bundled linear chain with one immutable file
+  per migration. Use a positive integer `sequence` as each migration's only
+  identity and order; store its immutable name, checksum, applied timestamp, and
+  applying Kantrip version in `schema_migrations`. Never derive migration
+  identity from product SemVer or profile document fields.
+- Treat released migrations as immutable and forward-only. Mirror the highest
+  applied sequence in `PRAGMA user_version`, update schema and history in one
+  transaction under the maintenance lock, create a uniquely timestamped backup
+  before pending work, and fail closed on gaps, unknown entries, checksum
+  changes, or version disagreement. Never overwrite an earlier migration backup.
+- Do not add compatibility or baseline adoption for database formats that were
+  never published in a release. Before the first release, reject every non-empty
+  history-less database and all former YAML. The first published database starts
+  the supported migration boundary.
 - Profile add/remove is validated and transactional; add creates the missing
   database, never overwrites a profile, and list returns empty when the database
-  is absent. Read-only operations must not create filesystem state.
+  is absent. Profile-dependent commands may migrate an existing supported
+  database, but reads never create a missing repository. Normal `doctor`
+  inspection never creates or modifies filesystem state.
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
@@ -54,6 +70,10 @@
   minutes, and inspect no more than 256 entries automatically before `exec`.
 - Cleanup must be descriptor-relative, refuse symlinks and unsafe metadata, and
   never remove active sessions or paths outside the validated runtime root.
+- Keep `doctor` read-only unless the user supplies `--repair`. Unified repair is
+  non-interactive and idempotent: migrate, validate, reconcile exact journal
+  entries, clean validated stale sessions, then diagnose again under one lock.
+  Do not add public task-specific migration or cleanup commands or flags.
 
 ## Client Adapters and Shells
 
@@ -139,6 +159,9 @@ when the banner, console theme, or SVG helper changes.
 - Never hard-code the current release version in documentation, templates,
   examples, or commands. Use `kantrip --version`, `MAJOR.MINOR.PATCH`, or Git
   metadata so releases need no follow-up edits.
+- Keep database migration sequences independent from releases. A release may
+  contain zero, one, or several migrations; record its resolved version only as
+  `applied_by` metadata.
 - Commits and pull-request titles use Conventional Commits:
   `<type>(<optional scope>): <imperative summary>`. Keep the summary short and do
   not use it as a change list.
