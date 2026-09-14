@@ -10,12 +10,12 @@ Use a fresh private workspace for scenarios that do not explicitly define a
 different setup:
 
 ```bash
-export KANTRIP_MANUAL_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kantrip-manual.XXXXXX")"
-chmod 700 "$KANTRIP_MANUAL_ROOT"
-mkdir -m 700 "$KANTRIP_MANUAL_ROOT/runtime"
-export KANTRIP_DATABASE="$KANTRIP_MANUAL_ROOT/data/profiles.db"
-export XDG_RUNTIME_DIR="$KANTRIP_MANUAL_ROOT/runtime"
+. ./scripts/manual-environment.sh
 ```
+
+The helper creates a unique private directory and exports
+`KANTRIP_MANUAL_ROOT`, `KANTRIP_DATABASE`, and `XDG_RUNTIME_DIR` into the current
+shell. It refuses to replace an active manual environment.
 
 For scenarios that use two terminals, copy the resolved values of these three
 variables into the second terminal. Remove the exact temporary directory after
@@ -23,6 +23,7 @@ the scenarios are complete:
 
 ```bash
 rm -rf "$KANTRIP_MANUAL_ROOT"
+unset KANTRIP_MANUAL_ROOT KANTRIP_DATABASE XDG_RUNTIME_DIR
 ```
 
 ## Edit a profile without changing its identity

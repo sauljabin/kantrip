@@ -47,6 +47,7 @@ SDIST_REQUIRED = {
     "kantrip/secret_store.py",
     "pyproject.toml",
     "schemas/profile.schema.json",
+    "scripts/manual-environment.sh",
 }
 
 
