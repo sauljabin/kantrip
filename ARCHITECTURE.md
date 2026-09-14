@@ -105,6 +105,10 @@ verification, client identity, credential acquisition, and authentication
 routing. They exclude producer, consumer, topic, group, serializer, retry,
 cache, telemetry, schema-selection, and other application behavior.
 
+Every stored Registry connection names its provider explicitly. The CLI may
+select Confluent as a convenience default, but it persists that choice rather
+than relying on schema normalization or read-time inference.
+
 Importers allowlist connection properties and report ignored property names
 without their values. Unknown security-like settings, conflicting aliases, and
 options that disable certificate or hostname verification fail closed.

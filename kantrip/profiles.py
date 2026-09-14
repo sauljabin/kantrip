@@ -13,7 +13,6 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager, nullcontext
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -397,20 +396,16 @@ def _load_profile_rows(connection: sqlite3.Connection) -> dict[str, dict[str, An
             raise ProfileStoreError(f"stored profile '{name}' has inconsistent identity")
         if type(row["revision"]) is not int or row["revision"] < 1:
             raise ProfileStoreError(f"stored profile '{name}' has an invalid revision")
-        profiles[name] = _normalize_registry(profile)
+        _validate_stored_registry(profile)
+        profiles[name] = profile
     return profiles
 
 
-def _normalize_registry(profile: dict[str, Any]) -> dict[str, Any]:
-    normalized = deepcopy(profile)
-    registry = normalized.get("registry")
-    if isinstance(registry, dict) and "provider" not in registry:
-        registry["provider"] = CONFLUENT_PROVIDER
+def _validate_stored_registry(profile: Mapping[str, Any]) -> None:
     try:
-        plain_registry_connection(normalized)
+        plain_registry_connection(profile)
     except RegistryProfileError as error:
         raise ProfileStoreError(f"stored registry profile is not executable: {error}") from error
-    return normalized
 
 
 def _encode_profile(profile: Mapping[str, Any]) -> str:

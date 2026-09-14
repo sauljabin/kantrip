@@ -256,6 +256,25 @@ class TestProfiles(unittest.TestCase):
             profiles.profile("local")["registry"],
         )
 
+    def test_rejects_a_stored_registry_without_a_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            profile = add_profile(
+                "local",
+                path,
+                registry_url="http://localhost:8081",
+            ).profile("local")
+            del profile["registry"]["provider"]
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "UPDATE profiles SET document = ? WHERE name = 'local'",
+                    (json.dumps(profile, sort_keys=True, separators=(",", ":")),),
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(ProfileStoreError, "does not match schema at registry"):
+                load_profiles(path)
+
     def test_add_rejects_invalid_input_without_creating_a_database(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"

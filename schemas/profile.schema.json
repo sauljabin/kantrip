@@ -70,11 +70,10 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schema.registry.url"],
+          "required": ["provider", "schema.registry.url"],
           "properties": {
             "provider": {
-              "const": "confluent",
-              "default": "confluent"
+              "const": "confluent"
             },
             "schema.registry.url": {
               "$ref": "#/$defs/registryUrl"

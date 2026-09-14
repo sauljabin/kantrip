@@ -84,9 +84,10 @@
   equivalents. All receive `--bootstrap-server`; consumers/producers receive
   their config option and admin tools receive `--command-config`, using private
   Java properties.
-- Profiles use one optional `registry` object. Its provider defaults to
-  `confluent`; canonical generated profiles persist it explicitly. Confluent
-  uses the official `schema.registry.url` serializer/deserializer property and native Apicurio
+- Profiles use one optional `registry` object whose stored `provider` is always
+  explicit. `kantrip add --registry-url` selects and persists `confluent` when
+  `--registry-provider` is omitted. Confluent uses the official
+  `schema.registry.url` serializer/deserializer property and native Apicurio
   uses `apicurio.registry.url`. The providers are mutually exclusive and only
   plain `http://` URLs are supported.
 - Confluent's Avro, JSON Schema, and Protobuf console producers and consumers
