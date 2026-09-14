@@ -36,7 +36,7 @@ supervising the active execution.
   internal and independent from product versions and profile documents.
 - Do not add compatibility paths for database formats that were never released.
   The first published release establishes the supported migration boundary,
-  while any one release may contain several ordered migration files.
+  while any one release may contain several ordered migration commands.
 - Keep resolved secrets out of the profile database, argv, logs, tracebacks,
   diagnostics, snapshots, and normal output.
 - Pass secrets to a selected child only through a private generated file or a

@@ -64,11 +64,14 @@ Kafka and Registry credentials are never inherited across those boundaries.
 
 ![Kantrip database migration flow](images/database-migration.svg)
 
-Kantrip owns a linear migration history inside the profile database. Each
-migration file has one positive integer `sequence`, which is both its identity
-and order, plus an immutable name and checksum. The history records when it ran
-and which Kantrip version applied it, but product SemVer does not identify or
-order migrations. A release may contain zero, one, or several migration files.
+Kantrip owns a linear migration history inside the profile database. The engine
+executes immutable `SqlMigration` commands registered explicitly in one
+`MigrationChain`; it does not discover modules or files dynamically. Each
+command has one positive integer `sequence`, which is both its identity and
+order, plus an immutable name and SQL payload. Its checksum covers all three.
+The history records when it ran and which Kantrip version applied it, but
+product SemVer does not identify or order migrations. A release may contain
+zero, one, or several migration commands.
 
 The initial SQLite profile store is migration sequence `1`; sequence `2` adds
 the credential reconciliation journal. New databases apply the complete bundled

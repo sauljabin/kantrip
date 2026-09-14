@@ -8,7 +8,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from kantrip.migrations import MIGRATIONS, Migration
+from kantrip.migrations import MIGRATIONS, MigrationChain, SqlMigration
 from kantrip.profiles import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
@@ -137,20 +137,25 @@ class TestProfiles(unittest.TestCase):
             path = Path(directory) / "profiles.db"
             add_profile("local", path)
             next_sequence = len(MIGRATIONS) + 1
-            second = Migration(
-                next_sequence,
-                "next migration",
-                ("UPDATE profiles SET revision = revision",),
-            )
-            third = Migration(
-                next_sequence + 1,
-                "following migration",
-                ("UPDATE profiles SET revision = revision",),
-            )
+
+            class NextMigration(SqlMigration):
+                sequence = next_sequence
+                name = "next migration"
+                statements = ("UPDATE profiles SET revision = revision",)
+
+            class FollowingMigration(SqlMigration):
+                sequence = next_sequence + 1
+                name = "following migration"
+                statements = ("UPDATE profiles SET revision = revision",)
+
+            second = NextMigration()
+            third = FollowingMigration()
 
             with (
-                patch("kantrip.migrations.MIGRATIONS", (*MIGRATIONS, second)),
-                patch("kantrip.migrations.LATEST_SEQUENCE", next_sequence),
+                patch(
+                    "kantrip.migrations.MIGRATIONS",
+                    MigrationChain(*MIGRATIONS, second),
+                ),
                 patch(
                     "kantrip.profiles._backup_timestamp",
                     return_value="2026-09-14T01-02-03.000004Z",
@@ -158,8 +163,10 @@ class TestProfiles(unittest.TestCase):
             ):
                 load_profiles(path)
             with (
-                patch("kantrip.migrations.MIGRATIONS", (*MIGRATIONS, second, third)),
-                patch("kantrip.migrations.LATEST_SEQUENCE", next_sequence + 1),
+                patch(
+                    "kantrip.migrations.MIGRATIONS",
+                    MigrationChain(*MIGRATIONS, second, third),
+                ),
                 patch(
                     "kantrip.profiles._backup_timestamp",
                     return_value="2026-09-15T02-03-04.000005Z",

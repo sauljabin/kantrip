@@ -77,17 +77,21 @@ and tests together.
 
 ## Database migrations
 
-Keep database evolution independent from product releases. The engine and its
-ordered files live in `kantrip/migrations/`. Each bundled migration file has one
-positive integer `sequence`, an immutable descriptive name, and a checksum. The
-sequence is its only identity and order; the product version that applies it is
-history metadata, not part of the migration name.
+Keep database evolution independent from product releases. The transaction and
+history engine lives in `kantrip/migrations/engine.py`. Migration commands and
+their explicit `MigrationChain` registry live in `kantrip/migrations/versions.py`.
+Each `SqlMigration` subclass has one positive integer `sequence`, an immutable
+descriptive name, and an immutable SQL tuple. The sequence is its only identity
+and order; the product version that applies it is history metadata, not part of
+the migration name. The engine derives a checksum from that complete identity
+and payload.
 
 Before merging a database change:
 
 - Choose the next sequence on `main`; resolve branch collisions before merge.
-- Keep each schema change in its own bundled migration file. Never edit or
-  renumber a migration that has appeared in a release; add a forward migration.
+- Keep each schema change in its own `SqlMigration` subclass and append one
+  instance to the explicit registry. Never edit or renumber a migration that has
+  appeared in a release; add a forward migration.
 - Update the schema, `schema_migrations`, and `PRAGMA user_version` in the same
   bounded transaction.
 - Test a fresh database, idempotent reopen, supported upgrade paths, rollback,
