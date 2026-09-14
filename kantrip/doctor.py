@@ -26,8 +26,11 @@ from kantrip.adapters import (
     SCHEMA_REGISTRY_EXECUTABLES,
 )
 from kantrip.profiles import (
+    DATABASE_BACKUP_PREFIX,
+    DATABASE_MAINTENANCE_SUFFIX,
     ProfileCollection,
     ProfileStoreError,
+    inspect_profile_database,
     load_profiles,
     resolve_database_path,
 )
@@ -167,7 +170,22 @@ def _check_profile_database(
     except OSError:
         return None, [DoctorCheck("error", "Profile database could not be inspected"), path_check]
     try:
-        profiles = load_profiles(path)
+        migration_state = inspect_profile_database(path)
+    except ProfileStoreError as error:
+        return None, [DoctorCheck("error", str(error)), path_check]
+
+    if migration_state.requires_migration:
+        count = len(migration_state.pending_sequences)
+        label = "migration" if count == 1 else "migrations"
+        message = f"Database has {count} pending {label}"
+        return None, [
+            DoctorCheck("warning", f"{message}; run 'kantrip doctor --repair'"),
+            path_check,
+            *_check_database_artifacts(path),
+        ]
+
+    try:
+        profiles = load_profiles(path, migrate=False)
     except ProfileStoreError as error:
         return None, [DoctorCheck("error", str(error)), path_check]
 
@@ -176,34 +194,67 @@ def _check_profile_database(
     checks = [
         DoctorCheck(
             "success",
-            f"Profile database is valid ({profile_count} {profile_label})",
+            f"Profile database is valid ({profile_count} {profile_label}, "
+            f"sequence {migration_state.current_sequence})",
         ),
         path_check,
     ]
-    checks.append(_check_database_file(path))
+    checks.extend(_check_database_artifacts(path))
     checks.append(_check_profiles(profiles))
     checks.extend(_check_registry_profiles(profiles))
     return profiles, checks
 
 
-def _check_database_file(path: Path) -> DoctorCheck:
+def _check_database_artifacts(path: Path) -> list[DoctorCheck]:
+    checks = [_check_private_database_file(path, "Profile database")]
+    optional = (
+        (Path(f"{path}-journal"), "SQLite journal"),
+        (Path(f"{path}-shm"), "SQLite shared-memory file"),
+        (Path(f"{path}-wal"), "SQLite WAL"),
+        (Path(f"{path}{DATABASE_MAINTENANCE_SUFFIX}"), "Maintenance lock"),
+    )
+    for candidate, label in optional:
+        try:
+            candidate.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            checks.append(DoctorCheck("error", f"{label} metadata could not be read"))
+        else:
+            checks.append(_check_private_database_file(candidate, label))
+    try:
+        backups = sorted(
+            candidate
+            for candidate in path.parent.iterdir()
+            if candidate.name.startswith(f"{path.name}{DATABASE_BACKUP_PREFIX}")
+        )
+    except OSError:
+        checks.append(DoctorCheck("error", "Migration backups could not be inspected"))
+    else:
+        checks.extend(
+            _check_private_database_file(candidate, "Migration backup") for candidate in backups
+        )
+    errors = [check for check in checks if check.status == "error"]
+    return errors or [DoctorCheck("success", "Profile database files are private")]
+
+
+def _check_private_database_file(path: Path, label: str) -> DoctorCheck:
     try:
         metadata = path.lstat()
     except OSError:
-        return DoctorCheck("error", "Profile database metadata could not be read")
+        return DoctorCheck("error", f"{label} metadata could not be read")
     if not stat.S_ISREG(metadata.st_mode):
-        return DoctorCheck("error", "Profile database is not a regular file")
+        return DoctorCheck("error", f"{label} is not a regular file")
     getuid = getattr(os, "getuid", None)
     if getuid is not None and metadata.st_uid != getuid():
-        return DoctorCheck("error", "Profile database is owned by another user")
+        return DoctorCheck("error", f"{label} is owned by another user")
     exposed_permissions = stat.S_IMODE(metadata.st_mode) & 0o077
     if exposed_permissions:
         return DoctorCheck(
             "error",
-            "Profile database permissions are broader than 0600 "
-            f"({stat.S_IMODE(metadata.st_mode):04o})",
+            f"{label} permissions are broader than 0600 " f"({stat.S_IMODE(metadata.st_mode):04o})",
         )
-    return DoctorCheck("success", "Profile database permissions are private")
+    return DoctorCheck("success", f"{label} permissions are private")
 
 
 def _check_profiles(profiles: ProfileCollection) -> DoctorCheck:

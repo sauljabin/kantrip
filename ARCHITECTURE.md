@@ -60,12 +60,54 @@ OAuth 2.0 client credentials. A Registry may independently use TLS and
 authentication through Confluent-compatible or native Apicurio properties.
 Kafka and Registry credentials are never inherited across those boundaries.
 
+## Schema evolution and maintenance
+
+![Kantrip database migration flow](images/database-migration.svg)
+
+Kantrip owns a linear migration history inside the profile database. Each
+migration file has one positive integer `sequence`, which is both its identity
+and order, plus an immutable name and checksum. The history records when it ran
+and which Kantrip version applied it, but product SemVer does not identify or
+order migrations. A release may contain zero, one, or several migration files.
+
+The initial SQLite profile store is migration sequence `1`. New databases apply
+the complete bundled chain. Databases from published releases apply each pending
+migration in ascending order before a profile-dependent command continues. An
+unreleased database shape receives no compatibility path: every non-empty
+database without migration history fails closed. There is no YAML migration
+path and no user-facing migration command or script.
+
+`schema_migrations` is authoritative and `PRAGMA user_version` mirrors its
+highest applied sequence. Missing or duplicate sequences, an altered checksum,
+an unknown applied migration, a newer sequence, or disagreement with the pragma
+fails closed. Applied migrations are never edited or renumbered; corrections
+roll forward through a new sequence.
+
+Pending work acquires the cross-process maintenance lock and creates one private
+consistent backup before applying the pending chain. Its name is
+`profiles.db.pre-migration-<UTC timestamp>-<unique id>`, so a later migration
+never overwrites an earlier recovery point. Schema changes run inside a bounded
+`BEGIN IMMEDIATE` transaction. Kantrip updates the history and pragma only with
+the schema change, validates the result before commit, retains every backup, and
+never downgrades a database.
+
+A normal `doctor` run opens storage read-only and reports pending work without
+creating files. `doctor --repair` is the single explicit operational workflow:
+under one lock it migrates, validates, reconciles exact credential-journal
+records, removes validated stale sessions, and diagnoses the resulting state.
+It never guesses how to repair corrupt, ambiguous, active, recent, or externally
+owned objects.
+
 ## Connection-only configuration
 
 Profiles describe connections: endpoints, transport security, server
 verification, client identity, credential acquisition, and authentication
 routing. They exclude producer, consumer, topic, group, serializer, retry,
 cache, telemetry, schema-selection, and other application behavior.
+
+Every stored Registry connection names its provider explicitly. The CLI may
+select Confluent as a convenience default, but it persists that choice rather
+than relying on schema normalization or read-time inference.
 
 Importers allowlist connection properties and report ignored property names
 without their values. Unknown security-like settings, conflicting aliases, and
@@ -94,7 +136,8 @@ and uses immutable secret references to make partial failures recoverable:
   SQLite transaction.
 - On a failed database update, remove staged secrets and retain the old profile.
 - Delete superseded secrets only after the profile switch, retaining failed
-  cleanup work for idempotent retry by a mutation or `doctor`.
+  cleanup work for idempotent retry by a mutation or `doctor --repair`; a normal
+  `doctor` run only reports the pending record.
 
 Java, librdkafka, Confluent-generated, and Strimzi KafkaUser TLS or SCRAM files
 import into the same profile model. Importers use format-specific parsers,
@@ -202,10 +245,11 @@ Runtime entries are classified as follows:
 The lock is authoritative; age only protects a newly unlocked or partially
 initialized session from immediate deletion. Invalid entries remain untouched.
 
-The automatic janitor scans at most 256 direct entries before `exec`.
-`kantrip cleanup` performs a complete scan, while `--dry-run` neither creates
-nor deletes runtime state. Cleanup returns nonzero for unsafe roots, invalid
-entries, incomplete scans, or deletion failures; active and recent sessions are
+The automatic janitor scans at most 256 direct entries before `exec`. A normal
+`doctor` run previews the complete classification without changing it;
+`doctor --repair` removes every valid stale session it can safely process.
+Repair returns nonzero for unsafe roots, invalid entries, incomplete scans,
+deletion failures, or any other remaining error. Active and recent sessions are
 not errors.
 
 Deletion is descriptor-relative. Before removing a direct child, Kantrip
@@ -213,18 +257,20 @@ validates its name, owner, modes, marker, lock, age, contents, and inode; it
 rejects symlinks and path replacement. The same lock prevents concurrent
 cleaners from deleting an active session.
 
-`doctor` reuses the scanner without mutation. It treats active sessions as
-valid, recent or stale entries as warnings, and unsafe state as errors. Runtime
-paths appear only with `--verbose`.
+The doctor scanner treats active sessions as valid, recent or stale entries as
+warnings, and unsafe state as errors. Runtime paths appear only with
+`--verbose`.
 
 Nested sessions and processes that escape through `setsid` or daemonization are
 unsupported. Kantrip exposes no persistent background-session API.
 
 ## Diagnostics and output
 
-`doctor` validates profiles, permissions, credential-store availability,
-secret references, reconciliation state, certificates, runtime sessions, and
-installed client capabilities without resolving values for display.
+`doctor` validates migration state, profiles, permissions, credential-store
+availability, secret references, reconciliation state, certificates, runtime
+sessions, and installed client capabilities without resolving values for
+display. Its default mode is always read-only; `--repair` explicitly enables
+only the deterministic maintenance sequence described above.
 
 `ping` reuses normal connection construction for bounded Kafka metadata and
 provider-specific Registry requests. Its result is limited to the operation it
@@ -245,6 +291,8 @@ meaning.
 - Capability checks fail before unsupported authentication can degrade.
 - Immutable references and reconciliation preserve a usable profile across
   partial credential-store failures.
+- Ordered migrations, immutable checksums, backups, and fail-closed history
+  validation make local schema evolution auditable and recoverable.
 - Process boundaries, liveness locks, and recovery give temporary secrets a
   bounded lifecycle.
 - Native clients retain protocol handling and OAuth refresh.
@@ -259,6 +307,8 @@ meaning.
   not forensic erasure.
 - SQLite and credential-store updates are recoverable, not atomic. Loss of both
   journal and referenced state can leave undiscoverable orphans.
+- Schema migrations are forward-only. An older Kantrip binary cannot open a
+  database containing migrations it does not recognize.
 - Compatibility depends on external client interfaces and tested versions.
 - Profiles intentionally exclude application behavior and topic-dependent
   schema configuration.

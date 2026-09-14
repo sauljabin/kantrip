@@ -23,12 +23,14 @@ connectivity.
 ### Plaintext profiles
 
 - Schema-validated profiles in a private transactional SQLite database
+- Ordered automatic schema migrations with private recovery backups
 - Multiple bootstrap servers, descriptions, and optional Registry endpoints
 - `add`, `remove`, `list`, and redacted `show` commands
 
 ### Local diagnostics
 
 - Profile database, permissions, platform, shell, and session checks
+- Read-only diagnostics with explicit deterministic repair through `doctor --repair`
 - Explicit Kafka protocol connectivity checks with `ping`
 - Installed-command discovery for Kantrip's supported adapters
 - Colored status output with plain-text and `NO_COLOR` support
@@ -45,7 +47,7 @@ connectivity.
   Registry, and native Apicurio Registry decoding
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Process-group and PTY supervision with child exit-status preservation
-- Crash-safe runtime locks, automatic stale-session recovery, and `cleanup`
+- Crash-safe runtime locks, automatic stale-session recovery, and `doctor --repair`
 
 ### Terminal experience
 
@@ -59,8 +61,8 @@ connectivity.
 The MVP roadmap has three stages:
 
 1. Add local credential-store integration and recoverable profile updates.
-2. Add TLS and authenticated Kafka profiles and adapters.
-3. Add authenticated registry connections, OAuth integration, and authenticated
+2. Add TLS, authenticated Kafka profiles, imports, and adapters.
+3. Add authenticated Registry connections, OAuth integration, and authenticated
    connectivity checks.
 
 See the [MVP roadmap](MVP.md) for scope and non-goals.

@@ -4,15 +4,26 @@ from kantrip.registry import RegistryProfileError, display_registry, plain_regis
 
 
 class TestRegistry(unittest.TestCase):
-    def test_resolves_confluent_as_the_default_provider(self) -> None:
+    def test_resolves_confluent(self) -> None:
         connection = plain_registry_connection(
-            {"registry": {"schema.registry.url": "http://registry.invalid:8081"}}
+            {
+                "registry": {
+                    "provider": "confluent",
+                    "schema.registry.url": "http://registry.invalid:8081",
+                }
+            }
         )
 
         self.assertIsNotNone(connection)
         assert connection is not None
         self.assertEqual("confluent", connection.provider)
         self.assertEqual("schema.registry.url", connection.property_name)
+
+    def test_rejects_a_missing_provider(self) -> None:
+        with self.assertRaisesRegex(RegistryProfileError, "registry.provider must"):
+            plain_registry_connection(
+                {"registry": {"schema.registry.url": "http://registry.invalid:8081"}}
+            )
 
     def test_resolves_native_apicurio(self) -> None:
         connection = plain_registry_connection(
@@ -49,15 +60,18 @@ class TestRegistry(unittest.TestCase):
             "http://registry.invalid:70000",
         ):
             with self.subTest(url=url), self.assertRaises(RegistryProfileError):
-                plain_registry_connection({"registry": {"schema.registry.url": url}})
+                plain_registry_connection(
+                    {"registry": {"provider": "confluent", "schema.registry.url": url}}
+                )
 
     def test_display_redacts_credentials_query_and_fragment(self) -> None:
         rendered = display_registry(
             {
                 "registry": {
+                    "provider": "confluent",
                     "schema.registry.url": (
                         "http://user:secret@registry.invalid:8081/path?token=synthetic#fragment"
-                    )
+                    ),
                 }
             }
         )

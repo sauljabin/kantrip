@@ -22,6 +22,8 @@ Kantrip aims to preserve these properties:
   verification silently.
 - Kafka and Registry identities remain independent.
 - Session-owned files have a bounded lifecycle and recover safely after a crash.
+- Database upgrades apply only known immutable migrations and cannot leave a
+  silently partial schema.
 - Profile mutations leave either the previous usable profile or the new usable
   profile, with incomplete cleanup recorded for retry.
 
@@ -37,6 +39,8 @@ external client or remote service.
 - mTLS private keys and private-key passwords.
 - Registry basic-auth credentials.
 - Profile-to-broker, Registry, certificate, and secret-reference associations.
+- Migration history, checksums, internal sequence, and private pre-migration
+  backups.
 - Generated Java, librdkafka, Registry, TOML, YAML, and INI client files.
 - Session environment variables, runtime paths, locks, markers, and shims.
 - The integrity of the executable and adapter selected for a profile.
@@ -105,9 +109,10 @@ profile CA. Application authorization is evaluated by those remote services.
 
 ### Recovery boundary
 
-Runtime directories found during startup or explicit cleanup are untrusted
-filesystem objects. Ownership, permissions, shape, marker, lock state, age, and
-path containment must all validate before deletion.
+Database state and runtime directories found during startup or explicit repair
+are untrusted local inputs. Migration history must match the bundled immutable
+chain before schema changes. Runtime ownership, permissions, shape, marker,
+lock state, age, and path containment must all validate before deletion.
 
 ## Threats and controls
 
@@ -136,6 +141,39 @@ Controls:
 Residual risk: filesystem permissions provide confidentiality and accidental
 integrity protection, not cryptographic authenticity. Malware running as the
 same user can alter profile endpoints or references.
+
+### Schema migration tampering and partial upgrades
+
+Threats include changing an applied migration, forging its history, skipping or
+reordering sequences, opening a newer database with an older binary, concurrent
+upgrades, disk exhaustion, and interruption between schema and metadata writes.
+
+Controls:
+
+- Use one positive integer sequence as each migration's immutable identity and
+  order; do not derive it from product SemVer.
+- Store the applied sequence, name, checksum, time, and applying Kantrip version
+  in the private profile database.
+- Require contiguous known history and matching checksums; mirror the highest
+  sequence in `PRAGMA user_version` and fail closed on disagreement.
+- Reject every non-empty database without migration history. Compatibility
+  begins with the first published database state, not unreleased development
+  schemas.
+- Acquire one cross-process maintenance lock, create a private consistent
+  uniquely timestamped pre-migration backup without overwriting earlier
+  recovery points, and use a bounded `BEGIN IMMEDIATE` transaction.
+- Update schema, history, and `user_version` together, validate before commit,
+  and roll back on failure.
+- Apply only bundled forward migrations in ascending order. Never downgrade,
+  execute a user-provided migration script, or edit a released migration.
+- Keep normal `doctor` inspection read-only and require the explicit
+  `doctor --repair` mode for a complete maintenance pass.
+
+Residual risk: transactions and backups protect against interruption and known
+failure paths, not a logically incorrect migration that passes its validation.
+A same-user attacker can alter both the database and local application files;
+checksum validation is integrity evidence against accidental drift, not a
+cryptographic trust anchor.
 
 ### Secret disclosure at rest
 
@@ -278,8 +316,8 @@ Controls:
 - Reject symlinks and use descriptor-relative or equivalently symlink-safe
   deletion.
 - Treat only validated, unlocked sessions older than five minutes as stale,
-  limit automatic cleanup to 256 entries, and expose
-  `kantrip cleanup --dry-run`.
+  limit automatic cleanup to 256 entries, preview the complete state through
+  read-only `doctor`, and require `doctor --repair` for complete removal.
 
 Residual risk: a process that deliberately daemonizes or creates a new session
 can escape supervision and retain copied material. `SIGKILL`, host crashes, and
@@ -314,8 +352,8 @@ reliably redact arbitrary child output without corrupting it.
 ### Availability and resource exhaustion
 
 Threats include locked credential stores, hanging clients, unavailable identity
-providers, malformed import files, large private keys, and many stale session
-directories.
+providers, malformed import files, large private keys, many stale session
+directories, and a migration blocked by another writer or insufficient disk.
 
 Controls:
 
@@ -324,6 +362,8 @@ Controls:
 - Validate realistic credential sizes against supported backends.
 - Fail before launch when required secrets, clients, or mappings are missing.
 - Scan only direct children of the validated runtime root automatically.
+- Bound maintenance lock acquisition and preserve every uniquely named private
+  pre-migration backup.
 
 Residual risk: Kantrip does not provide high availability. A locked keyring,
 unavailable external service, exhausted filesystem, or hostile same-user process
@@ -342,6 +382,8 @@ can prevent operation.
   protocol stack.
 - Recoverable cross-store updates and lock-based crash cleanup address failure
   modes commonly omitted from local credential wrappers.
+- Ordered migration history and fail-closed checksum validation make schema
+  evolution explicit without coupling it to product releases.
 - Kafka and Registry security are modeled independently, reducing credential
   reuse and accidental identity inheritance.
 
@@ -370,6 +412,7 @@ can prevent operation.
 
 ## Out of scope
 
+- Database downgrade support and executing user-provided migration code.
 - Compromise of the user account, kernel, administrator, credential-store
   implementation, Python runtime, dependency, or selected client executable.
 - Sandboxing, malware prevention, record-level confidentiality, broker ACL

@@ -180,6 +180,7 @@ else:
                 "auth": {"type": "none"},
             },
             "registry": {
+                "provider": "confluent",
                 "schema.registry.url": "http://registry.invalid:8081",
             },
         }

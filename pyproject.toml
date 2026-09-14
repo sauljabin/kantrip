@@ -80,6 +80,7 @@ include = [
     "/THREAT_MODEL.md",
     "/USAGE.md",
     "/examples",
+    "/images",
     "/kantrip",
     "/schemas",
     "/scripts",

@@ -45,7 +45,7 @@ def plain_registry_connection(profile: Mapping[str, Any]) -> RegistryConnection 
     if not isinstance(registry, Mapping):
         raise RegistryProfileError("registry must be an object in the selected Kantrip profile")
 
-    provider_value = registry.get("provider", CONFLUENT_PROVIDER)
+    provider_value = registry.get("provider")
     if provider_value not in {APICURIO_PROVIDER, CONFLUENT_PROVIDER}:
         raise RegistryProfileError("registry.provider must be confluent or apicurio")
     provider = cast(RegistryProvider, provider_value)
@@ -71,7 +71,9 @@ def display_registry(profile: Mapping[str, Any]) -> str:
     registry = profile.get("registry")
     if not isinstance(registry, Mapping):
         return "-"
-    provider = registry.get("provider", CONFLUENT_PROVIDER)
+    provider = registry.get("provider")
+    if provider not in {APICURIO_PROVIDER, CONFLUENT_PROVIDER}:
+        return "-"
     property_name = (
         APICURIO_URL_PROPERTY if provider == APICURIO_PROVIDER else CONFLUENT_URL_PROPERTY
     )

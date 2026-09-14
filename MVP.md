@@ -34,7 +34,11 @@ supervising the active execution.
 ## Engineering boundaries
 
 - Extend the existing per-profile document. Do not add speculative application
-  `version` or `defaults` fields; database schema versioning remains internal.
+  `version` or `defaults` fields. The database migration sequence remains
+  internal and independent from product versions and profile documents.
+- Do not add compatibility paths for database formats that were never released.
+  The first published release establishes the supported migration boundary,
+  while any one release may contain several ordered migration files.
 - Keep resolved secrets out of the profile database, argv, logs, tracebacks,
   diagnostics, snapshots, and normal output.
 - Pass secrets to a selected child only through a private generated file or a
@@ -97,17 +101,18 @@ atomic transaction. Do not promise cross-store atomicity.
 - If the database update fails, delete the newly staged entries and leave the old
   profile usable.
 - If old-secret deletion fails after the profile switch, keep the new profile
-  usable, report the orphan safely, and let `doctor` or an idempotent retry
-  remove the exact old reference.
+  usable, report the orphan safely, and let `doctor --repair` or an idempotent
+  retry remove the exact old reference.
 - For profile removal, remove the profile in a SQLite transaction before deleting
   its exact credential keys. Report and reconcile any leftover orphan instead
   of restoring a profile whose secrets may already be partially deleted.
 - Keep pending exact-reference cleanup in a non-secret reconciliation table in
   the profile database. Commit the intent before writing the credential store,
   advance it atomically with the profile switch, retry it on later mutations and
-  in `doctor`, and remove it only after cleanup succeeds. Standard `keyring`
-  APIs cannot enumerate arbitrary orphaned entries, so reconciliation must not
-  depend on backend listing support.
+  through `doctor --repair`, and remove it only after cleanup succeeds. A normal
+  `doctor` run only reports it. Standard `keyring` APIs cannot enumerate
+  arbitrary orphaned entries, so reconciliation must not depend on backend
+  listing support.
 - Use SQLite write transactions for database concurrency and a cross-store
   mutation lock around the journal/credential/database workflow.
 
@@ -472,6 +477,8 @@ renderer and adapter boundaries are proven before token lifecycle is added.
 
 ## Outside the MVP
 
+- Database downgrades, user-authored migrations, and migration identities tied
+  to product release numbers.
 - Detached or managed background sessions.
 - Automatic Kubernetes discovery.
 - Arbitrary secret-provider automation beyond the supported import commands.
