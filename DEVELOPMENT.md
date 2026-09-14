@@ -77,14 +77,13 @@ and tests together.
 
 ## Database migrations
 
-Keep database evolution independent from product releases. The transaction and
-history engine lives in `kantrip/migrations/engine.py`. Migration commands and
-their explicit `MigrationChain` registry live in `kantrip/migrations/versions.py`.
-Each `SqlMigration` subclass has one positive integer `sequence`, an immutable
-descriptive name, and an immutable SQL tuple. The sequence is its only identity
-and order; the product version that applies it is history metadata, not part of
-the migration name. The engine derives a checksum from that complete identity
-and payload.
+Keep database evolution independent from product releases. The transaction
+engine, migration commands, and explicit `MigrationChain` registry live together
+in `kantrip/migrations.py`. Each `SqlMigration` subclass has one positive integer
+`sequence`, an immutable descriptive name, and an immutable SQL tuple. The
+sequence is its only identity and order; the product version that applies it is
+history metadata, not part of the migration name. The engine derives a checksum
+from that complete identity and payload.
 
 Before merging a database change:
 

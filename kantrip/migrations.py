@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from textwrap import dedent, indent
 from typing import ClassVar
 
 
@@ -95,6 +96,51 @@ class MigrationChain:
                 raise MigrationError("bundled database migration metadata is invalid")
 
 
+def _sql(value: str) -> str:
+    """Keep SQL payloads stable regardless of their source indentation."""
+    return f"\n{indent(dedent(value).strip(), '    ')}\n    "
+
+
+class InitialProfileStore(SqlMigration):
+    """Create the initial SQLite profile store."""
+
+    sequence = 1
+    name = "initial profile store"
+    statements = (
+        _sql("""
+            CREATE TABLE profiles (
+                name TEXT PRIMARY KEY NOT NULL,
+                id TEXT UNIQUE NOT NULL,
+                revision INTEGER NOT NULL CHECK (revision > 0),
+                document TEXT NOT NULL
+            )
+            """),
+    )
+
+
+class AddReconciliationJournal(SqlMigration):
+    """Add the exact-reference credential cleanup journal."""
+
+    sequence = 2
+    name = "add reconciliation journal"
+    statements = (
+        _sql("""
+            CREATE TABLE credential_reconciliation (
+                id TEXT PRIMARY KEY NOT NULL,
+                secret_reference TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """),
+    )
+
+
+MIGRATIONS = MigrationChain(
+    InitialProfileStore(),
+    AddReconciliationJournal(),
+)
+LATEST_SEQUENCE = MIGRATIONS.latest_sequence
+
+
 @dataclass(frozen=True)
 class MigrationState:
     """Read-only classification of a profile database migration state."""
@@ -137,9 +183,10 @@ _CREATE_HISTORY = """
 
 def inspect_migrations(
     connection: sqlite3.Connection,
-    chain: MigrationChain,
+    chain: MigrationChain | None = None,
 ) -> MigrationState:
     """Validate migration history without changing the database."""
+    chain = MIGRATIONS if chain is None else chain
     chain.validate()
     version = _database_version(connection)
     tables = _table_names(connection)
@@ -205,11 +252,12 @@ def _validate_history_rows(
 
 def apply_migrations(
     connection: sqlite3.Connection,
-    chain: MigrationChain,
+    chain: MigrationChain | None = None,
     *,
     applied_by: str,
 ) -> MigrationResult:
     """Apply all known migrations in one immediate transaction."""
+    chain = MIGRATIONS if chain is None else chain
     connection.execute("BEGIN IMMEDIATE")
     try:
         state = inspect_migrations(connection, chain)
@@ -347,6 +395,8 @@ def _nonempty_text(value: object) -> bool:
 
 
 __all__ = [
+    "LATEST_SEQUENCE",
+    "MIGRATIONS",
     "MigrationChain",
     "MigrationError",
     "MigrationResult",

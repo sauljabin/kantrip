@@ -38,11 +38,11 @@
   Keep its directory mode `0700`, database and sidecar modes `0600`, WAL enabled,
   and writes bounded by `BEGIN IMMEDIATE` transactions. Reject symlinks, unsafe
   ownership or permissions, corrupt contents, and unsupported schema versions.
-- Evolve the database through one bundled linear chain in `kantrip/migrations/`.
-  Keep the engine in `engine.py` and one immutable `SqlMigration` subclass per
-  change in the explicit `MigrationChain` registry in `versions.py`; do not use
-  filesystem or import discovery. Use a positive integer `sequence` as each
-  migration's only identity and order; store its immutable name, checksum,
+- Evolve the database through one bundled linear chain in
+  `kantrip/migrations.py`. Keep one immutable `SqlMigration` subclass per change
+  in the explicit `MigrationChain` registry; do not use filesystem or import
+  discovery. Use a positive integer `sequence` as each migration's only identity
+  and order; store its immutable name, checksum,
   applied timestamp, and applying Kantrip version in `schema_migrations`. Never
   derive migration identity from product SemVer or profile document fields.
 - Treat released migrations as immutable and forward-only. Mirror the highest
