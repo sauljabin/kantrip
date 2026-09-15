@@ -127,21 +127,37 @@ def stage_secret_replacements(
 def commit_secret_replacements(
     connection: sqlite3.Connection,
     store: SecretStore,
+    profile_id: str,
     staged: Sequence[StagedSecret],
     switch_profile: ProfileSwitch,
+    *,
+    retire_references: Iterable[str] = (),
 ) -> ReconciliationResult:
     """Switch a profile to staged references and retire superseded values."""
-    references = {item.field: item.reference for item in staged}
-    if len(references) != len(staged):
-        raise CredentialMutationError("a credential field was staged more than once")
     try:
+        references = {item.field: item.reference for item in staged}
+        if len(references) != len(staged):
+            raise CredentialMutationError("a credential field was staged more than once")
+        retired = _validated_unique_references(
+            (
+                *(
+                    item.previous_reference
+                    for item in staged
+                    if item.previous_reference is not None
+                ),
+                *retire_references,
+            ),
+            profile_id=profile_id,
+        )
+        if set(retired).intersection(references.values()):
+            raise CredentialMutationError("an active credential reference cannot be retired")
         connection.execute("BEGIN IMMEDIATE")
         _verify_staged_records(connection, staged)
         switch_profile(references)
         for item in staged:
             _remove_cleanup_record(connection, item.cleanup)
-            if item.previous_reference is not None:
-                queue_secret_cleanup(connection, item.previous_reference)
+        for reference in retired:
+            queue_secret_cleanup(connection, reference)
         connection.execute("COMMIT")
     except BaseException:
         _rollback(connection)

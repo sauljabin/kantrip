@@ -102,13 +102,56 @@ class TestProfileSchema(unittest.TestCase):
 
         self.assertFalse(self._validator().is_valid(profile))
 
-    def test_authenticated_profiles_are_not_yet_accepted(self) -> None:
-        profile = _profile_configuration()
-        kafka = profile["kafka"]
-        kafka["transport"] = "tls"
-        kafka["auth"] = {"type": "plain", "username": "synthetic"}
+    def test_password_and_mtls_profiles_are_accepted_only_over_tls(self) -> None:
+        profile_id = _profile_configuration()["id"]
+        credential_id = "018f8f13-7c21-7cee-8000-000000000011"
+        password_reference = f"profile/{profile_id}/{credential_id}/kafka/password"
+        key_reference = f"profile/{profile_id}/{credential_id}/kafka/tls/private-key"
+        for auth in (
+            {"type": "plain", "username": "synthetic", "passwordRef": password_reference},
+            {
+                "type": "scram-sha-256",
+                "username": "synthetic",
+                "passwordRef": password_reference,
+            },
+            {
+                "type": "scram-sha-512",
+                "username": "synthetic",
+                "passwordRef": password_reference,
+            },
+            {
+                "type": "mtls",
+                "clientCertificate": CA_FIXTURE.read_text(encoding="utf-8"),
+                "privateKeyRef": key_reference,
+            },
+        ):
+            with self.subTest(auth=auth["type"]):
+                profile = _profile_configuration()
+                profile["kafka"]["transport"] = "tls"
+                profile["kafka"]["auth"] = auth
+                self.assertTrue(self._validator().is_valid(profile))
+                profile["kafka"]["transport"] = "plaintext"
+                self.assertFalse(self._validator().is_valid(profile))
 
-        self.assertFalse(self._validator().is_valid(profile))
+    def test_authenticated_profiles_require_complete_owned_reference_shapes(self) -> None:
+        profile = _profile_configuration()
+        profile["kafka"]["transport"] = "tls"
+        for auth in (
+            {"type": "plain", "username": "synthetic"},
+            {
+                "type": "plain",
+                "username": "synthetic",
+                "passwordRef": "profile/not-a-uuid/value/kafka/password",
+            },
+            {
+                "type": "mtls",
+                "clientCertificate": "not-pem",
+                "privateKeyRef": "not-a-reference",
+            },
+        ):
+            with self.subTest(auth=auth):
+                profile["kafka"]["auth"] = auth
+                self.assertFalse(self._validator().is_valid(profile))
 
     def test_arbitrary_client_properties_are_rejected(self) -> None:
         profile = _profile_configuration()

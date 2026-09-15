@@ -14,6 +14,60 @@
         }
       }
     },
+    "secretReference": {
+      "type": "string",
+      "pattern": "^profile/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:kafka/password|kafka/oauth/client-secret|kafka/tls/private-key|kafka/tls/private-key-password|registry/password|registry/token|registry/oauth/client-secret)$"
+    },
+    "passwordAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "username", "passwordRef"],
+      "properties": {
+        "type": {
+          "enum": ["plain", "scram-sha-256", "scram-sha-512"]
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\r\\n\\u0000]+$"
+        },
+        "passwordRef": {
+          "allOf": [
+            { "$ref": "#/$defs/secretReference" },
+            { "pattern": "/kafka/password$" }
+          ]
+        }
+      }
+    },
+    "mtlsAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "clientCertificate", "privateKeyRef"],
+      "properties": {
+        "type": {
+          "const": "mtls"
+        },
+        "clientCertificate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^-----BEGIN CERTIFICATE-----"
+        },
+        "privateKeyRef": {
+          "allOf": [
+            { "$ref": "#/$defs/secretReference" },
+            { "pattern": "/kafka/tls/private-key$" }
+          ]
+        },
+        "privateKeyPasswordRef": {
+          "allOf": [
+            { "$ref": "#/$defs/secretReference" },
+            { "pattern": "/kafka/tls/private-key-password$" }
+          ]
+        }
+      }
+    },
     "kafkaTls": {
       "type": "object",
       "additionalProperties": false,
@@ -44,6 +98,26 @@
               "required": ["tls"]
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "auth": {
+                "properties": {
+                  "type": {
+                    "enum": ["plain", "scram-sha-256", "scram-sha-512", "mtls"]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "transport": {
+                "const": "tls"
+              }
+            }
+          }
         }
       ],
       "properties": {
@@ -60,7 +134,11 @@
           "enum": ["plaintext", "tls"]
         },
         "auth": {
-          "$ref": "#/$defs/noneAuth"
+          "oneOf": [
+            { "$ref": "#/$defs/noneAuth" },
+            { "$ref": "#/$defs/passwordAuth" },
+            { "$ref": "#/$defs/mtlsAuth" }
+          ]
         },
         "tls": {
           "$ref": "#/$defs/kafkaTls"

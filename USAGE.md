@@ -18,9 +18,11 @@ Kantrip is not a persistent process manager, a global context selector, or a
 replacement for Kafka clients. Its responsibility ends at storing profiles,
 resolving the connection material supported by the installed release,
 generating the correct temporary configuration, and supervising active
-execution. This pre-release currently supports plaintext and
-server-authenticated TLS profiles with `auth.type: none`; secret-backed profiles
-remain tracked in the MVP roadmap.
+execution. This pre-release CLI currently creates and executes plaintext and
+server-authenticated TLS profiles with `auth.type: none`. The connection core
+already validates and renders PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS,
+while authenticated input commands, adapters, and `ping` remain tracked in the
+MVP roadmap. Authenticated profiles fail before a child or network client starts.
 
 ## Local diagnostics
 
@@ -552,10 +554,11 @@ For native Apicurio:
 ```
 
 The two providers are mutually exclusive, and `provider` is required in stored
-profiles. Kafka authentication and Registry TLS or authentication remain
-schema-invalid. Profile documents accept no arbitrary Java or librdkafka
-property maps; Kantrip renders only its typed connection fields. Registry
-property names follow the official
+profiles. Kafka PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS shapes are valid
+only over TLS and contain references instead of secret values; Registry TLS and
+authentication remain schema-invalid. Profile documents accept no arbitrary
+Java or librdkafka property maps; Kantrip renders only its typed connection
+fields. Registry property names follow the official
 [Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
 and [Apicurio](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-kafka-client-serdes.html)
 serializer and deserializer configuration.

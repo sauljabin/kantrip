@@ -10,6 +10,7 @@ from unittest.mock import patch
 from kantrip.adapters import SCHEMA_REGISTRY_EXECUTABLES, create_subshell_shims
 from kantrip.registry import RegistryConnection
 from kantrip.runtime import create_session_runtime
+from kantrip.secret_store import secret_reference
 from kantrip.session import SessionError, run_profile_session
 
 CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
@@ -985,7 +986,14 @@ class TestProfileSession(unittest.TestCase):
         )
 
     def test_authenticated_profile_is_rejected_before_launch(self) -> None:
-        self.profile["kafka"]["auth"] = {"type": "plain"}
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        self.profile["id"] = profile_id
+        self.profile["kafka"]["transport"] = "tls"
+        self.profile["kafka"]["auth"] = {
+            "type": "plain",
+            "username": "synthetic-user",
+            "passwordRef": secret_reference(profile_id, "kafka/password"),
+        }
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
             patch("kantrip.session._run_child") as run,

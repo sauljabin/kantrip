@@ -23,8 +23,22 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from kantrip import APP_VERSION
-from kantrip.credential_mutations import CredentialMutationError, update_profile_revision
-from kantrip.kafka import KafkaProfileError, kafka_connection, validate_ca_bundle
+from kantrip.credential_mutations import (
+    CredentialMutationError,
+    SecretReplacement,
+    commit_profile_removal,
+    commit_secret_replacements,
+    remove_profile_revision,
+    stage_secret_replacements,
+    update_profile_revision,
+)
+from kantrip.kafka import (
+    KafkaProfileError,
+    kafka_connection,
+    validate_ca_bundle,
+    validate_client_identity,
+    validate_sasl_credential,
+)
 from kantrip.migrations import (
     LATEST_SEQUENCE,
     MigrationError,
@@ -45,7 +59,12 @@ from kantrip.registry import (
     RegistryProfileError,
     plain_registry_connection,
 )
-from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
+from kantrip.secret_store import (
+    SecretStore,
+    SecretStoreError,
+    load_secret_store,
+    parse_secret_reference,
+)
 
 DATABASE_FILENAME = "profiles.db"
 DATABASE_SCHEMA_VERSION = LATEST_SEQUENCE
@@ -66,6 +85,28 @@ _SQLITE_PRIVATE_SUFFIXES = (
 
 class ProfileStoreError(ValueError):
     """Raised when the profile database cannot be used safely."""
+
+
+@dataclass(frozen=True)
+class KafkaAuthInput:
+    """Validated-entry input whose secret values never enter the profile document."""
+
+    auth_type: str
+    username: str | None = None
+    password: str | None = None
+    client_certificate: str | None = None
+    private_key: str | None = None
+    private_key_password: str | None = None
+
+
+@dataclass(frozen=True)
+class _AuthPlan:
+    auth_type: str
+    username: str | None
+    client_certificate: str | None
+    retained_references: Mapping[str, str]
+    replacements: tuple[SecretReplacement, ...]
+    retire_references: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -261,41 +302,64 @@ def add_profile(
     labels: Mapping[str, str] | None = None,
     transport: str = "plaintext",
     ca_certificates: str | None = None,
+    auth: KafkaAuthInput | None = None,
     registry_provider: str | None = None,
     registry_url: str | None = None,
     environment: Mapping[str, str] | None = None,
+    secret_store: SecretStore | None = None,
 ) -> ProfileCollection:
-    """Add one validated plaintext profile in a short write transaction."""
+    """Add one validated profile, staging any secrets before its database row."""
     _validate_profile_name(profile_name)
     database_path = path if path is not None else resolve_database_path(environment)
+    profile_id = str(uuid.uuid4())
+    auth_input = auth or KafkaAuthInput("none")
+    auth_plan = _plan_authentication(profile_id, None, auth_input)
     profile = _new_profile(
+        profile_id,
         bootstrap_servers,
         description=description,
         labels=labels or {},
         transport=transport,
         ca_certificates=ca_certificates,
+        auth={"type": "none"},
         registry_provider=registry_provider,
         registry_url=registry_url,
     )
     _validate_profile(profile)
+    _validate_auth_transport(auth_plan.auth_type, transport)
 
     try:
         with _writable_connection(database_path) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                _load_profile_rows(connection)
-                connection.execute(
-                    "INSERT INTO profiles (name, id, revision, document) VALUES (?, ?, 1, ?)",
-                    (profile_name, profile["id"], _encode_profile(profile)),
-                )
-                connection.execute("COMMIT")
-            except sqlite3.IntegrityError as error:
-                _rollback(connection)
-                raise ProfileStoreError(f"profile '{profile_name}' already exists") from error
-            except BaseException:
-                _rollback(connection)
-                raise
+            if profile_name in _load_profile_rows(connection):
+                raise ProfileStoreError(f"profile '{profile_name}' already exists")
+            if not auth_plan.replacements:
+                profile["kafka"]["auth"] = _auth_document(auth_plan, {})
+                _validate_profile(profile)
+                _insert_profile(connection, profile_name, profile)
+                return _load_profile_collection(database_path, connection)
+            store = secret_store or load_secret_store()
+            staged = stage_secret_replacements(
+                connection,
+                store,
+                profile_id,
+                auth_plan.replacements,
+            )
+
+            def insert(references: Mapping[str, str]) -> None:
+                profile["kafka"]["auth"] = _auth_document(auth_plan, references)
+                _validate_profile(profile)
+                _insert_profile(connection, profile_name, profile, transaction=False)
+
+            commit_secret_replacements(
+                connection,
+                store,
+                profile_id,
+                staged,
+                insert,
+            )
             return _load_profile_collection(database_path, connection)
+    except (CredentialMutationError, SecretStoreError) as error:
+        raise ProfileStoreError(str(error)) from error
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
@@ -307,8 +371,9 @@ def remove_profile(
     path: Path | None = None,
     *,
     environment: Mapping[str, str] | None = None,
+    secret_store: SecretStore | None = None,
 ) -> ProfileCollection:
-    """Remove one profile in a short write transaction."""
+    """Remove one profile before reconciling its exact owned credentials."""
     _validate_profile_name(profile_name)
     database_path = path if path is not None else resolve_database_path(environment)
     if not _path_entry_exists(database_path):
@@ -316,9 +381,35 @@ def remove_profile(
 
     try:
         with _writable_connection(database_path) as connection:
+            revisions: dict[str, int] = {}
+            profiles = _load_profile_rows(connection, revisions=revisions)
+            profile = profiles.get(profile_name)
+            if profile is None:
+                raise ProfileStoreError(f"profile '{profile_name}' was not found")
+            references = _profile_secret_references(profile)
+            if references:
+                store = secret_store or load_secret_store()
+                result = commit_profile_removal(
+                    connection,
+                    store,
+                    profile["id"],
+                    references,
+                    lambda: remove_profile_revision(
+                        connection,
+                        profile_name=profile_name,
+                        profile_id=profile["id"],
+                        expected_revision=revisions[profile_name],
+                    ),
+                )
+                collection = _load_profile_collection(database_path, connection)
+                if result.failed:
+                    raise ProfileStoreError(
+                        f"profile '{profile_name}' was removed but credential cleanup is pending; "
+                        "run 'kantrip doctor --repair'"
+                    )
+                return collection
             connection.execute("BEGIN IMMEDIATE")
             try:
-                _load_profile_rows(connection)
                 cursor = connection.execute("DELETE FROM profiles WHERE name = ?", (profile_name,))
                 if cursor.rowcount != 1:
                     raise ProfileStoreError(f"profile '{profile_name}' was not found")
@@ -327,6 +418,8 @@ def remove_profile(
                 _rollback(connection)
                 raise
             return _load_profile_collection(database_path, connection)
+    except (CredentialMutationError, SecretStoreError) as error:
+        raise ProfileStoreError(str(error)) from error
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
@@ -345,10 +438,13 @@ def edit_profile(
     transport: str | None = None,
     ca_certificates: str | None = None,
     default_trust: bool = False,
+    auth: KafkaAuthInput | None = None,
     registry_provider: str | None = None,
     registry_url: str | None = None,
     remove_registry: bool = False,
     environment: Mapping[str, str] | None = None,
+    expected_revision: int | None = None,
+    secret_store: SecretStore | None = None,
 ) -> ProfileCollection:
     """Update explicit fields of one existing profile transactionally."""
     _validate_profile_name(profile_name)
@@ -361,6 +457,7 @@ def edit_profile(
         transport=transport,
         ca_certificates=ca_certificates,
         default_trust=default_trust,
+        auth=auth,
         registry_provider=registry_provider,
         registry_url=registry_url,
         remove_registry=remove_registry,
@@ -370,54 +467,349 @@ def edit_profile(
         raise ProfileStoreError(f"profile '{profile_name}' was not found")
     try:
         with _writable_connection(database_path) as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                revisions: dict[str, int] = {}
-                profiles = _load_profile_rows(connection, revisions=revisions)
-                current = profiles.get(profile_name)
-                if current is None:
-                    raise ProfileStoreError(f"profile '{profile_name}' was not found")
-                expected_revision = revisions[profile_name]
-                updated = _apply_profile_edits(
-                    current,
-                    bootstrap_servers=bootstrap_servers,
-                    description=description,
-                    clear_description=clear_description,
-                    labels=labels or {},
-                    remove_labels=remove_labels,
-                    transport=transport,
-                    ca_certificates=ca_certificates,
-                    default_trust=default_trust,
-                    registry_provider=registry_provider,
-                    registry_url=registry_url,
-                    remove_registry=remove_registry,
+            revisions: dict[str, int] = {}
+            profiles = _load_profile_rows(connection, revisions=revisions)
+            current = profiles.get(profile_name)
+            if current is None:
+                raise ProfileStoreError(f"profile '{profile_name}' was not found")
+            current_revision = revisions[profile_name]
+            if expected_revision is not None and current_revision != expected_revision:
+                raise ProfileStoreError(
+                    f"profile '{profile_name}' changed while credentials were collected"
                 )
-                _validate_profile(updated)
-                try:
-                    plain_registry_connection(updated)
-                except RegistryProfileError as error:
-                    raise ProfileStoreError(str(error)) from error
-                try:
-                    update_profile_revision(
-                        connection,
-                        profile_name=profile_name,
-                        profile_id=current["id"],
-                        expected_revision=expected_revision,
-                        document=_encode_profile(updated),
-                    )
-                except CredentialMutationError as error:
-                    raise ProfileStoreError(
-                        f"profile '{profile_name}' changed unexpectedly"
-                    ) from error
-                connection.execute("COMMIT")
-            except BaseException:
-                _rollback(connection)
-                raise
+            updated = _apply_profile_edits(
+                current,
+                bootstrap_servers=bootstrap_servers,
+                description=description,
+                clear_description=clear_description,
+                labels=labels or {},
+                remove_labels=remove_labels,
+                transport=transport,
+                ca_certificates=ca_certificates,
+                default_trust=default_trust,
+                registry_provider=registry_provider,
+                registry_url=registry_url,
+                remove_registry=remove_registry,
+            )
+            if auth is not None:
+                plan = _plan_authentication(current["id"], current["kafka"]["auth"], auth)
+                _validate_auth_transport(plan.auth_type, updated["kafka"]["transport"])
+                return _commit_authenticated_edit(
+                    connection,
+                    database_path,
+                    profile_name,
+                    current,
+                    current_revision,
+                    updated,
+                    plan,
+                    secret_store,
+                )
+            _commit_plain_edit(
+                connection,
+                profile_name,
+                current,
+                current_revision,
+                updated,
+            )
             return _load_profile_collection(database_path, connection)
+    except (CredentialMutationError, SecretStoreError) as error:
+        raise ProfileStoreError(str(error)) from error
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
         raise ProfileStoreError("profile database could not be updated safely") from error
+
+
+def _commit_plain_edit(
+    connection: sqlite3.Connection,
+    profile_name: str,
+    current: Mapping[str, Any],
+    current_revision: int,
+    updated: dict[str, Any],
+) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        _validate_profile(updated)
+        _validate_stored_registry(updated)
+        try:
+            update_profile_revision(
+                connection,
+                profile_name=profile_name,
+                profile_id=current["id"],
+                expected_revision=current_revision,
+                document=_encode_profile(updated),
+            )
+        except CredentialMutationError as error:
+            raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly") from error
+        connection.execute("COMMIT")
+    except BaseException:
+        _rollback(connection)
+        raise
+
+
+def _commit_authenticated_edit(
+    connection: sqlite3.Connection,
+    database_path: Path,
+    profile_name: str,
+    current: Mapping[str, Any],
+    current_revision: int,
+    updated: dict[str, Any],
+    plan: _AuthPlan,
+    secret_store: SecretStore | None,
+) -> ProfileCollection:
+    def switch(references: Mapping[str, str]) -> None:
+        updated["kafka"]["auth"] = _auth_document(plan, references)
+        _validate_profile(updated)
+        _validate_stored_registry(updated)
+        update_profile_revision(
+            connection,
+            profile_name=profile_name,
+            profile_id=current["id"],
+            expected_revision=current_revision,
+            document=_encode_profile(updated),
+        )
+
+    if not plan.replacements and not plan.retire_references:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            switch({})
+            connection.execute("COMMIT")
+        except BaseException:
+            _rollback(connection)
+            raise
+        return _load_profile_collection(database_path, connection)
+
+    store = secret_store or load_secret_store()
+    staged = stage_secret_replacements(
+        connection,
+        store,
+        current["id"],
+        plan.replacements,
+    )
+    result = commit_secret_replacements(
+        connection,
+        store,
+        current["id"],
+        staged,
+        switch,
+        retire_references=plan.retire_references,
+    )
+    collection = _load_profile_collection(database_path, connection)
+    if result.failed:
+        raise ProfileStoreError(
+            f"profile '{profile_name}' was updated but credential cleanup is pending; "
+            "run 'kantrip doctor --repair'"
+        )
+    return collection
+
+
+def _plan_authentication(
+    profile_id: str,
+    current: Mapping[str, Any] | None,
+    requested: KafkaAuthInput,
+) -> _AuthPlan:
+    auth_type = requested.auth_type
+    if auth_type not in {"none", "plain", "scram-sha-256", "scram-sha-512", "mtls"}:
+        raise ProfileStoreError("Kafka authentication type is not supported")
+    current_auth = current or {"type": "none"}
+    current_type = current_auth.get("type")
+    current_references = _auth_references(profile_id, current_auth)
+    if auth_type == "none":
+        if any(
+            value is not None
+            for value in (
+                requested.username,
+                requested.password,
+                requested.client_certificate,
+                requested.private_key,
+                requested.private_key_password,
+            )
+        ):
+            raise ProfileStoreError("Kafka auth none cannot include credentials")
+        return _AuthPlan("none", None, None, {}, (), tuple(current_references.values()))
+    if auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
+        return _password_auth_plan(
+            current_auth,
+            current_type,
+            current_references,
+            requested,
+        )
+    return _mtls_auth_plan(
+        current_auth,
+        current_type,
+        current_references,
+        requested,
+    )
+
+
+def _password_auth_plan(
+    current_auth: Mapping[str, Any],
+    current_type: object,
+    current_references: Mapping[str, str],
+    requested: KafkaAuthInput,
+) -> _AuthPlan:
+    if requested.client_certificate is not None or requested.private_key is not None:
+        raise ProfileStoreError("Kafka password authentication cannot include a client identity")
+    username = requested.username
+    if username is None and current_type in {"plain", "scram-sha-256", "scram-sha-512"}:
+        stored_username = current_auth.get("username")
+        username = stored_username if isinstance(stored_username, str) else None
+    if not username:
+        raise ProfileStoreError("Kafka password authentication requires --username")
+    previous = current_references.get("kafka/password")
+    replacements: tuple[SecretReplacement, ...] = ()
+    retained: dict[str, str] = {}
+    if requested.password is not None:
+        try:
+            validate_sasl_credential(requested.password)
+        except KafkaProfileError as error:
+            raise ProfileStoreError(str(error)) from error
+        replacements = (SecretReplacement("kafka/password", requested.password, previous),)
+    elif previous is not None:
+        retained["kafka/password"] = previous
+    else:
+        raise ProfileStoreError("Kafka password authentication requires a password")
+    retired = _retired_references(current_references, retained, replacements)
+    return _AuthPlan(
+        requested.auth_type,
+        username,
+        None,
+        retained,
+        replacements,
+        retired,
+    )
+
+
+def _mtls_auth_plan(
+    current_auth: Mapping[str, Any],
+    current_type: object,
+    current_references: Mapping[str, str],
+    requested: KafkaAuthInput,
+) -> _AuthPlan:
+    if requested.username is not None or requested.password is not None:
+        raise ProfileStoreError("Kafka mTLS authentication cannot include username or password")
+    changing_identity = (
+        requested.client_certificate is not None or requested.private_key is not None
+    )
+    if changing_identity and (
+        requested.client_certificate is None or requested.private_key is None
+    ):
+        raise ProfileStoreError("Kafka mTLS identity replacement requires certificate and key")
+    if requested.private_key_password is not None and not changing_identity:
+        raise ProfileStoreError("Kafka private-key password replacement requires a new key")
+    if changing_identity:
+        assert requested.client_certificate is not None
+        assert requested.private_key is not None
+        certificate, private_key = validate_client_identity(
+            requested.client_certificate,
+            requested.private_key,
+            password=requested.private_key_password,
+        )
+        previous_key = current_references.get("kafka/tls/private-key")
+        replacements = [SecretReplacement("kafka/tls/private-key", private_key, previous_key)]
+        if requested.private_key_password is not None:
+            replacements.append(
+                SecretReplacement(
+                    "kafka/tls/private-key-password",
+                    requested.private_key_password,
+                    current_references.get("kafka/tls/private-key-password"),
+                )
+            )
+        retained: dict[str, str] = {}
+    elif current_type == "mtls":
+        stored_certificate = current_auth.get("clientCertificate")
+        if not isinstance(stored_certificate, str):
+            raise ProfileStoreError("stored Kafka client certificate is invalid")
+        certificate = stored_certificate
+        replacements = []
+        retained = dict(current_references)
+    else:
+        raise ProfileStoreError("Kafka mTLS authentication requires certificate and key")
+    retired = _retired_references(current_references, retained, tuple(replacements))
+    return _AuthPlan(
+        "mtls",
+        None,
+        certificate,
+        retained,
+        tuple(replacements),
+        retired,
+    )
+
+
+def _auth_references(profile_id: str, auth: Mapping[str, Any]) -> dict[str, str]:
+    references: dict[str, str] = {}
+    for property_name, credential_field in (
+        ("passwordRef", "kafka/password"),
+        ("privateKeyRef", "kafka/tls/private-key"),
+        ("privateKeyPasswordRef", "kafka/tls/private-key-password"),
+    ):
+        value = auth.get(property_name)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ProfileStoreError("stored Kafka credential reference is invalid")
+        try:
+            parsed = parse_secret_reference(value)
+        except SecretStoreError as error:
+            raise ProfileStoreError("stored Kafka credential reference is invalid") from error
+        if parsed.profile_id != profile_id or parsed.field != credential_field:
+            raise ProfileStoreError("stored Kafka credential reference does not match its profile")
+        references[credential_field] = value
+    return references
+
+
+def _retired_references(
+    current: Mapping[str, str],
+    retained: Mapping[str, str],
+    replacements: tuple[SecretReplacement, ...],
+) -> tuple[str, ...]:
+    replaced = {
+        replacement.previous_reference
+        for replacement in replacements
+        if replacement.previous_reference is not None
+    }
+    retained_values = set(retained.values())
+    return tuple(
+        reference
+        for reference in current.values()
+        if reference not in retained_values and reference not in replaced
+    )
+
+
+def _auth_document(plan: _AuthPlan, staged: Mapping[str, str]) -> dict[str, Any]:
+    references = dict(plan.retained_references) | dict(staged)
+    if plan.auth_type == "none":
+        return {"type": "none"}
+    if plan.auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
+        return {
+            "type": plan.auth_type,
+            "username": plan.username,
+            "passwordRef": references["kafka/password"],
+        }
+    document: dict[str, Any] = {
+        "type": "mtls",
+        "clientCertificate": plan.client_certificate,
+        "privateKeyRef": references["kafka/tls/private-key"],
+    }
+    password_reference = references.get("kafka/tls/private-key-password")
+    if password_reference is not None:
+        document["privateKeyPasswordRef"] = password_reference
+    return document
+
+
+def _profile_secret_references(profile: Mapping[str, Any]) -> tuple[str, ...]:
+    kafka = profile.get("kafka")
+    if not isinstance(kafka, Mapping):
+        raise ProfileStoreError("stored Kafka profile is invalid")
+    auth = kafka.get("auth")
+    if not isinstance(auth, Mapping):
+        raise ProfileStoreError("stored Kafka authentication is invalid")
+    return tuple(_auth_references(str(profile.get("id")), auth).values())
+
+
+def _validate_auth_transport(auth_type: str, transport: str) -> None:
+    if auth_type != "none" and transport != "tls":
+        raise ProfileStoreError("Kafka authentication requires --transport tls")
 
 
 def _validate_edit_request(
@@ -430,6 +822,7 @@ def _validate_edit_request(
     transport: str | None,
     ca_certificates: str | None,
     default_trust: bool,
+    auth: KafkaAuthInput | None,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -444,6 +837,7 @@ def _validate_edit_request(
             transport is not None,
             ca_certificates is not None,
             default_trust,
+            auth is not None,
             registry_provider is not None,
             registry_url is not None,
             remove_registry,
@@ -572,21 +966,23 @@ def _apply_registry_edits(
 
 
 def _new_profile(
+    profile_id: str,
     bootstrap_servers: tuple[str, ...],
     *,
     description: str | None,
     labels: Mapping[str, str],
     transport: str,
     ca_certificates: str | None,
+    auth: Mapping[str, Any],
     registry_provider: str | None,
     registry_url: str | None,
 ) -> dict[str, Any]:
     profile: dict[str, Any] = {
-        "id": str(uuid.uuid4()),
+        "id": profile_id,
         "kafka": {
             "bootstrapServers": list(bootstrap_servers),
             "transport": transport,
-            "auth": {"type": "none"},
+            "auth": dict(auth),
         },
     }
     if ca_certificates is not None:
@@ -611,6 +1007,28 @@ def _new_profile(
         except RegistryProfileError as error:
             raise ProfileStoreError(str(error)) from error
     return profile
+
+
+def _insert_profile(
+    connection: sqlite3.Connection,
+    profile_name: str,
+    profile: Mapping[str, Any],
+    *,
+    transaction: bool = True,
+) -> None:
+    if transaction:
+        connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(
+            "INSERT INTO profiles (name, id, revision, document) VALUES (?, ?, 1, ?)",
+            (profile_name, profile["id"], _encode_profile(profile)),
+        )
+        if transaction:
+            connection.execute("COMMIT")
+    except BaseException:
+        if transaction:
+            _rollback(connection)
+        raise
 
 
 def _validated_ca_bundle(contents: str) -> str:
@@ -951,6 +1369,7 @@ __all__ = [
     "DATABASE_FILENAME",
     "DATABASE_MAINTENANCE_SUFFIX",
     "DATABASE_SCHEMA_VERSION",
+    "KafkaAuthInput",
     "ProfileCollection",
     "ProfileStoreError",
     "add_profile",

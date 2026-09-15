@@ -70,12 +70,19 @@ replacement, so staging never overwrites the value referenced by the usable
 profile. Kantrip rejects unavailable, plaintext, encrypted-file, null, and
 unknown backends instead of weakening storage.
 
-The implemented connection model supports plaintext transport and
-server-authenticated TLS with default client or profile trust, currently without
-Kafka authentication. The remaining model adds SASL/PLAIN, SCRAM-SHA-256,
-SCRAM-SHA-512, mutual TLS, and OAuth 2.0 client credentials. A Registry remains
-an independent connection; Kafka and Registry credentials are never inherited
-across those boundaries.
+The implemented connection model supports plaintext transport,
+server-authenticated TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mutual
+TLS. Authentication always requires verified TLS. Passwords, private keys, and
+optional private-key passwords resolve from exact profile-owned references;
+public client certificate chains remain in the profile. Java and librdkafka
+render independently from the same resolved model, including internally escaped
+JAAS for Java password mechanisms. OAuth 2.0 client credentials remain planned.
+A Registry remains an independent connection; Kafka and Registry credentials
+are never inherited across those boundaries.
+
+Authenticated execution is a separate capability boundary. Until adapter and
+authenticated-ping integration lands, `exec` and `ping` reject these otherwise
+valid authenticated profiles before creating a session or client.
 
 ## Schema evolution and maintenance
 

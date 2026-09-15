@@ -5,14 +5,21 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from kantrip.migrations import MIGRATIONS, MigrationChain, SqlMigration
 from kantrip.profiles import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
     DATABASE_SCHEMA_VERSION,
+    KafkaAuthInput,
     ProfileStoreError,
     add_profile,
     edit_profile,
@@ -395,6 +402,115 @@ class TestProfiles(unittest.TestCase):
         self.assertEqual("plaintext", plaintext.profile("production")["kafka"]["transport"])
         self.assertNotIn("tls", plaintext.profile("production")["kafka"])
 
+    def test_adds_rotates_and_removes_password_authentication_recoverably(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "production",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "scram-sha-512",
+                    username="application",
+                    password="synthetic-password-one",
+                ),
+                secret_store=store,
+            )
+            first_auth = added.profile("production")["kafka"]["auth"]
+            first_reference = first_auth["passwordRef"]
+
+            edited = edit_profile(
+                "production",
+                path,
+                auth=KafkaAuthInput("plain", password="synthetic-password-two"),
+                expected_revision=added.revision("production"),
+                secret_store=store,
+            )
+            second_auth = edited.profile("production")["kafka"]["auth"]
+            second_reference = second_auth["passwordRef"]
+
+            self.assertEqual("scram-sha-512", first_auth["type"])
+            self.assertEqual("plain", second_auth["type"])
+            self.assertEqual("application", second_auth["username"])
+            self.assertNotEqual(first_reference, second_reference)
+            self.assertNotIn(first_reference, store.values)
+            self.assertEqual("synthetic-password-two", store.values[second_reference])
+            self.assertNotIn(b"synthetic-password-two", path.read_bytes())
+
+            remove_profile("production", path, secret_store=store)
+
+            self.assertNotIn(second_reference, store.values)
+
+    def test_password_authentication_requires_tls_and_expected_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            with self.assertRaisesRegex(ProfileStoreError, "requires --transport tls"):
+                add_profile(
+                    "invalid",
+                    path,
+                    auth=KafkaAuthInput(
+                        "plain",
+                        username="application",
+                        password="synthetic-password",
+                    ),
+                    secret_store=store,
+                )
+            self.assertFalse(path.exists())
+
+            profiles = add_profile(
+                "production",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "plain",
+                    username="application",
+                    password="synthetic-password",
+                ),
+                secret_store=store,
+            )
+            with self.assertRaisesRegex(ProfileStoreError, "changed while credentials"):
+                edit_profile(
+                    "production",
+                    path,
+                    auth=KafkaAuthInput("plain", password="replacement"),
+                    expected_revision=profiles.revision("production") + 1,
+                    secret_store=store,
+                )
+
+    def test_adds_and_removes_encrypted_mtls_identity(self) -> None:
+        certificate, private_key = _client_identity("synthetic-key-password")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            profiles = add_profile(
+                "production",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "mtls",
+                    client_certificate=certificate,
+                    private_key=private_key,
+                    private_key_password="synthetic-key-password",
+                ),
+                secret_store=store,
+            )
+
+            auth = profiles.profile("production")["kafka"]["auth"]
+            self.assertEqual("mtls", auth["type"])
+            self.assertEqual(certificate, auth["clientCertificate"])
+            self.assertEqual(private_key, store.values[auth["privateKeyRef"]])
+            self.assertEqual(
+                "synthetic-key-password",
+                store.values[auth["privateKeyPasswordRef"]],
+            )
+            self.assertNotIn(private_key.encode("utf-8"), path.read_bytes())
+
+            remove_profile("production", path, secret_store=store)
+
+            self.assertEqual({}, store.values)
+
     def test_custom_ca_requires_tls_and_valid_pem(self) -> None:
         ca_certificates = CA_FIXTURE.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as directory:
@@ -656,19 +772,45 @@ class _RecordingSecretStore:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.deleted: list[str] = []
+        self.values: dict[str, str] = {}
 
     def get(self, reference: str) -> str:
-        del reference
-        raise NotImplementedError
+        try:
+            return self.values[reference]
+        except KeyError as error:
+            raise SecretStoreError("synthetic missing value") from error
 
     def set(self, reference: str, value: str) -> None:
-        del reference, value
-        raise NotImplementedError
+        self.values[reference] = value
 
     def delete(self, reference: str) -> None:
         if self.fail:
             raise SecretStoreError("synthetic failure")
         self.deleted.append(reference)
+        self.values.pop(reference, None)
+
+
+def _client_identity(password: str) -> tuple[str, str]:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "synthetic-client")])
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    certificate_pem = certificate.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.BestAvailableEncryption(password.encode("utf-8")),
+    ).decode("utf-8")
+    return certificate_pem, key_pem
 
 
 if __name__ == "__main__":
