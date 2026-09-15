@@ -235,8 +235,8 @@ def _check_profile_database(
     checks = [
         DoctorCheck(
             "success",
-            f"Profile database is valid ({profile_count} {profile_label}, "
-            f"sequence {migration_state.current_sequence})",
+            f"Profile database is healthy ({profile_count} {profile_label}, "
+            f"schema version {migration_state.current_sequence})",
         ),
         path_check,
     ]
