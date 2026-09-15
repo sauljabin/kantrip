@@ -21,6 +21,7 @@ from kantrip.console import (
     create_profile_description,
     create_profile_table,
     create_status_text,
+    create_structured_syntax,
     show_progress,
 )
 from kantrip.doctor import run_doctor
@@ -111,6 +112,19 @@ def error_console_from_context(context: cloup.Context) -> Console:
     if not isinstance(console, Console):
         raise TypeError("Kantrip diagnostic console has not been initialized")
     return console
+
+
+def _print_structured_observation(
+    context: cloup.Context,
+    value: Any,
+    output_format: str,
+) -> None:
+    selected_format = cast(OutputFormat, output_format)
+    contents = dump_observation(value, selected_format)
+    console_from_context(context).print(
+        create_structured_syntax(contents, selected_format),
+        end="",
+    )
 
 
 def _split_bootstrap_servers(
@@ -303,10 +317,7 @@ def list_profiles(context: cloup.Context, labels: dict[str, str], output_format:
         if selected:
             console_from_context(context).print(create_profile_table(selected))
         return
-    click.echo(
-        dump_observation(list_observation(selected), cast(OutputFormat, output_format)),
-        nl=False,
-    )
+    _print_structured_observation(context, list_observation(selected), output_format)
 
 
 @cli.command("describe")
@@ -334,7 +345,7 @@ def describe_profile(context: cloup.Context, profile_name: str, output_format: s
     if output_format == "human":
         console_from_context(context).print(create_profile_description(observation))
         return
-    click.echo(dump_observation(observation, cast(OutputFormat, output_format)), nl=False)
+    _print_structured_observation(context, observation, output_format)
 
 
 @cli.command("current")

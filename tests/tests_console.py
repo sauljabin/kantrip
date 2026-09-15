@@ -11,6 +11,7 @@ from kantrip.console import (
     create_profile_description,
     create_profile_table,
     create_status_text,
+    create_structured_syntax,
     show_progress,
 )
 
@@ -155,6 +156,29 @@ class TestConsole(unittest.TestCase):
 
         self.assertIn("[red]x[/red]", stream.getvalue())
         self.assertIn("x=[b]y[/b]", stream.getvalue())
+
+    def test_structured_output_uses_color_on_a_terminal(self) -> None:
+        for language, contents in (
+            ("json", '{"name": "local"}\n'),
+            ("yaml", "name: local\n"),
+        ):
+            with self.subTest(language=language):
+                stream = TerminalBuffer()
+                console = create_console(stream=stream, environment={})
+
+                console.print(create_structured_syntax(contents, language), end="")
+
+                self.assertIn("\x1b[", stream.getvalue())
+                self.assertIn("local", stream.getvalue())
+
+    def test_structured_output_is_plain_when_color_is_disabled(self) -> None:
+        contents = '{"name": "local"}\n'
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, no_color=True, environment={})
+
+        console.print(create_structured_syntax(contents, "json"), end="")
+
+        self.assertEqual(contents, stream.getvalue())
 
     def test_profile_table_does_not_display_registry_url_credentials_or_query(self) -> None:
         stream = io.StringIO()

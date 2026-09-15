@@ -11,6 +11,7 @@ from typing import IO, Any, Literal
 
 from rich.console import Console, Group
 from rich.padding import Padding
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -197,6 +198,17 @@ def _label_color(key: str) -> str:
     return LABEL_COLORS[int.from_bytes(digest[:2], "big") % len(LABEL_COLORS)]
 
 
+def create_structured_syntax(contents: str, language: Literal["json", "yaml"]) -> Syntax:
+    """Create syntax-highlighted structured output without a forced background."""
+    return Syntax(
+        contents.removesuffix("\n"),
+        language,
+        theme="ansi_dark",
+        background_color="default",
+        word_wrap=False,
+    )
+
+
 def create_status_text(console: Console, status: StatusKind, message: str) -> Text:
     """Create a styled status line with a text marker for plain output."""
     style, emoji, label = STATUS_PRESENTATION[status]
@@ -225,5 +237,6 @@ __all__ = [
     "create_profile_description",
     "create_profile_table",
     "create_status_text",
+    "create_structured_syntax",
     "show_progress",
 ]

@@ -99,8 +99,10 @@ easy to distinguish while preserving the fail-closed credential boundary.
 - Keep `-q` for `ping --quiet`. Do not abbreviate `--force`, `--repair`,
   security options, credential options, or destructive removal options. Do not
   add `-v` for `--verbose`, because it is easily confused with version output.
-- Continue accepting `--no-color` globally and after commands that produce
-  human output. JSON and YAML are always unstyled.
+- Continue accepting `--no-color` globally and after output-producing commands.
+  JSON and YAML are syntax-highlighted only on colored TTYs. `--no-color`,
+  `NO_COLOR`, `TERM=dumb`, and non-TTY output remain unstyled and
+  machine-readable.
 - Use short options only for frequent, unambiguous, non-destructive operations.
   Long security option names are deliberate safety and comprehension aids.
 

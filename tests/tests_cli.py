@@ -273,6 +273,24 @@ class TestCli(unittest.TestCase):
         self.assertEqual(1, observation["revision"])
         self.assertEqual({"environment": "development"}, observation["labels"])
         self.assertIn("revision: 1", as_yaml.output)
+        self.assertNotIn("\x1b[", as_json.output)
+        self.assertNotIn("\x1b[", as_yaml.output)
+
+    def test_describe_structured_output_accepts_local_no_color(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            add_profile("local", database_path)
+
+            result = self.runner.invoke(
+                cli,
+                ["describe", "local", "--output", "json", "--no-color"],
+                env=environment,
+            )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("local", json.loads(result.output)["name"])
+        self.assertNotIn("\x1b[", result.output)
 
     def test_show_is_no_longer_exposed(self) -> None:
         result = self.runner.invoke(cli, ["show", "local"])
