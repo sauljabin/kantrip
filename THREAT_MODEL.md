@@ -188,7 +188,9 @@ Controls:
   Service-compatible backend.
 - Reject null, fail, plaintext, encrypted-file, unavailable, locked, and unknown
   backends rather than degrading silently.
-- Store only opaque immutable references in profile documents.
+- Store only opaque immutable references in profile documents. Each reference
+  includes independent profile and credential UUIDs so replacement never
+  overwrites the value used by the current profile.
 - Stage new references before switching the profile transaction and reconcile
   exact superseded references afterward.
 - Write cleanup intent to a transactional non-secret database journal before a

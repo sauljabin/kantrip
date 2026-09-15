@@ -124,6 +124,19 @@ Tests must inject synthetic in-memory implementations of Kantrip's narrow
 `SecretStore` protocol. They must not read or modify a developer's real
 credential store.
 
+Secret-bearing profile changes use the transaction engine in
+`kantrip/credential_mutations.py`. Each replacement receives a new credential
+UUID. The engine commits an exact cleanup record before writing the store,
+switches the profile and advances its expected revision in SQLite, then retires
+the superseded reference. Profile removal commits the row deletion and cleanup
+records before it contacts the credential backend.
+
+Tests for this boundary must cover partial store writes, a failed or concurrent
+profile switch, failed superseded-secret deletion, idempotent retry, and the
+ordering of profile removal before credential deletion. Assertions may inspect
+references and journal rows, but must never include a real credential value in
+diagnostic output.
+
 ## Sandbox services and smoke workflow
 
 The sandbox is a local Kind laboratory with one Strimzi Kafka cluster,

@@ -356,30 +356,6 @@ of the inspection commands can return them.
   the profile for portability or referenced by a user-owned path; Kantrip never
   deletes a referenced source file.
 
-### Recoverable updates
-
-The SQLite profile database and OS credential store cannot participate in one
-atomic transaction. Do not promise cross-store atomicity.
-
-- For add or secret replacement, write new secrets under new immutable
-  references, atomically switch the validated profile references, then delete
-  superseded entries.
-- If the database update fails, delete the newly staged entries and leave the old
-  profile usable.
-- If old-secret deletion fails after the profile switch, keep the new profile
-  usable, report the orphan safely, and let `doctor --repair` or an idempotent
-  retry remove the exact old reference.
-- For profile removal, remove the profile in a SQLite transaction before deleting
-  its exact credential keys. Report and reconcile any leftover orphan instead
-  of restoring a profile whose secrets may already be partially deleted.
-- Integrate the existing exact-reference reconciliation journal into every
-  secret-bearing mutation. Commit intent before a credential-store write can
-  create an orphan, advance it atomically with the profile switch, and retry it
-  on later mutations. Standard `keyring` APIs cannot enumerate arbitrary
-  orphaned entries, so no workflow may depend on backend listing support.
-- Use SQLite write transactions for database concurrency and the existing
-  maintenance lock around the journal/credential/database workflow.
-
 ### Commands
 
 - Extend `kantrip add PROFILE` with authentication and the explicit
@@ -745,16 +721,14 @@ documented config-path environment variables so secrets never appear in argv.
 
 ## Delivery order
 
-1. Complete recoverable secret-bearing profile updates on top of the credential
-   store, reconciliation journal, and plaintext `edit` lifecycle.
-2. Add PLAIN, SCRAM, and mTLS to the schema and shared renderers.
-3. Add the properties and Strimzi input sources to `add`.
-4. Extend the existing adapters and authenticated `ping` for those mechanisms.
-5. Add secure Registry connections.
-6. Add OAuth client credentials through verified native Java and librdkafka
+1. Add PLAIN, SCRAM, and mTLS to the schema and shared renderers.
+2. Add the properties and Strimzi input sources to `add`.
+3. Extend the existing adapters and authenticated `ping` for those mechanisms.
+4. Add secure Registry connections.
+5. Add OAuth client credentials through verified native Java and librdkafka
    mechanisms.
-7. Add the `kcl` and `kafkactl` adapters.
-8. Run the complete Linux/macOS integration and security matrix and synchronize
+6. Add the `kcl` and `kafkactl` adapters.
+7. Run the complete Linux/macOS integration and security matrix and synchronize
    all current-feature documentation.
 
 Credential storage precedes authenticated profiles so secrets never need a
@@ -763,9 +737,6 @@ renderer and adapter boundaries are proven before token lifecycle is added.
 
 ## Remaining completion criteria
 
-- Concurrent profile updates, partial keyring failures, and orphan cleanup leave
-  either the old usable profile or the new usable profile, never a silently
-  half-updated profile.
 - `edit` can secure an existing Registry connection without displaying or
   unintentionally replacing existing secrets.
 - The properties input source accepts verified Java, librdkafka, and

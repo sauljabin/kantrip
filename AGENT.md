@@ -70,7 +70,15 @@
 - Access credentials only through the narrow `SecretStore` protocol. Approve
   only macOS Keychain on macOS and Secret Service-compatible keyring backends on
   Linux; reject null, plaintext, encrypted-file, chained, and unknown backends.
-  Use service `kantrip` and canonical immutable `profile/<uuid>/<field>` keys.
+  Use service `kantrip` and canonical immutable
+  `profile/<profile-uuid>/<credential-uuid>/<field>` keys. Fully qualify fields
+  by owner, including `kafka/oauth/client-secret` and
+  `registry/oauth/client-secret`.
+- Route every secret-bearing profile change through `credential_mutations`.
+  Journal each new immutable reference before its credential-store write,
+  switch the validated profile with an expected revision, and retire only exact
+  superseded references after the database commit. A failed switch leaves the
+  old profile usable and the staged reference recoverable by reconciliation.
 - Keep exact pending credential deletions in `credential_reconciliation`.
   Validate every record and reference, delete only that exact credential, and
   remove its journal row only after deletion succeeds. Normal doctor reports

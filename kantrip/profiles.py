@@ -23,6 +23,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from kantrip import APP_VERSION
+from kantrip.credential_mutations import CredentialMutationError, update_profile_revision
 from kantrip.kafka import KafkaProfileError, kafka_connection, validate_ca_bundle
 from kantrip.migrations import (
     LATEST_SEQUENCE,
@@ -371,10 +372,12 @@ def edit_profile(
         with _writable_connection(database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                profiles = _load_profile_rows(connection)
+                revisions: dict[str, int] = {}
+                profiles = _load_profile_rows(connection, revisions=revisions)
                 current = profiles.get(profile_name)
                 if current is None:
                     raise ProfileStoreError(f"profile '{profile_name}' was not found")
+                expected_revision = revisions[profile_name]
                 updated = _apply_profile_edits(
                     current,
                     bootstrap_servers=bootstrap_servers,
@@ -394,13 +397,18 @@ def edit_profile(
                     plain_registry_connection(updated)
                 except RegistryProfileError as error:
                     raise ProfileStoreError(str(error)) from error
-                cursor = connection.execute(
-                    "UPDATE profiles SET revision = revision + 1, document = ? "
-                    "WHERE name = ? AND id = ?",
-                    (_encode_profile(updated), profile_name, current["id"]),
-                )
-                if cursor.rowcount != 1:
-                    raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly")
+                try:
+                    update_profile_revision(
+                        connection,
+                        profile_name=profile_name,
+                        profile_id=current["id"],
+                        expected_revision=expected_revision,
+                        document=_encode_profile(updated),
+                    )
+                except CredentialMutationError as error:
+                    raise ProfileStoreError(
+                        f"profile '{profile_name}' changed unexpectedly"
+                    ) from error
                 connection.execute("COMMIT")
             except BaseException:
                 _rollback(connection)

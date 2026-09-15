@@ -70,7 +70,7 @@ class TestMaintenance(unittest.TestCase):
                 "XDG_RUNTIME_DIR": directory,
             }
             profile = add_profile("local", database).profile("local")
-            reference = secret_reference(profile["id"], "oauth/client-secret")
+            reference = secret_reference(profile["id"], "kafka/oauth/client-secret")
             with sqlite3.connect(database) as connection:
                 queue_secret_cleanup(connection, reference)
             store = _RecordingSecretStore()

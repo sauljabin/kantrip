@@ -52,7 +52,7 @@ class TestReconciliation(unittest.TestCase):
         self.assertEqual(reference, pending_secret_cleanup(self.connection)[0].secret_reference)
 
     def test_duplicate_and_invalid_references_are_rejected(self) -> None:
-        reference = secret_reference(PROFILE_ID, "tls/private-key")
+        reference = secret_reference(PROFILE_ID, "kafka/tls/private-key")
         self.connection.execute("BEGIN IMMEDIATE")
         queue_secret_cleanup(self.connection, reference)
         with self.assertRaises(ReconciliationError):
