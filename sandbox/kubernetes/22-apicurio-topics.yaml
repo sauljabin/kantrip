@@ -57,3 +57,42 @@ spec:
     cleanup.policy: delete
     retention.ms: "-1"
     retention.bytes: "-1"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: schema-registry
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: compact
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: schema-registry-secure
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: compact
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: schema-registry-oauth
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: compact

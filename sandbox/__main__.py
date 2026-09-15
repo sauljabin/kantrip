@@ -362,6 +362,9 @@ def _wait_for_apicurio_topics() -> None:
         "apicurio-snapshots",
         "apicurio-secure-journal",
         "apicurio-secure-snapshots",
+        "schema-registry",
+        "schema-registry-secure",
+        "schema-registry-oauth",
     ):
         _run((*base, "wait", f"kafkatopic/{topic}", "--for=condition=Ready", "--timeout=3m"))
 

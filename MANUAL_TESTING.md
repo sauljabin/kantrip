@@ -476,9 +476,13 @@ Start the sandbox, then inspect the topics and their retention policy:
 ```bash
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
   get kafkatopics apicurio-journal apicurio-snapshots \
-  apicurio-secure-journal apicurio-secure-snapshots
+  apicurio-secure-journal apicurio-secure-snapshots \
+  schema-registry schema-registry-secure \
+  schema-registry-oauth
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
   get kafkatopic apicurio-journal -o yaml
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  get kafkatopic schema-registry -o yaml
 ```
 
 ### Exercise
@@ -525,8 +529,10 @@ http GET \
 
 ### Expected result
 
-- All four Kafka topics are ready with `cleanup.policy: delete`,
+- The four Apicurio KafkaSQL topics are ready with `cleanup.policy: delete`,
   `retention.ms: -1`, and `retention.bytes: -1`.
+- The three Schema Registry topics are ready with `cleanup.policy: compact`:
+  `schema-registry`, `schema-registry-secure`, and `schema-registry-oauth`.
 - The artifact identity and its version 1 content are returned after each restart.
 - The baseline and secure Apicurio instances never share a journal or snapshot
   topic.

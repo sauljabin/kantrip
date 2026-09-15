@@ -25,7 +25,7 @@ spec:
             - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
               value: PLAINTEXT://kantrip-kafka-bootstrap:9097
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
-              value: _schemas
+              value: schema-registry
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID
@@ -114,7 +114,7 @@ spec:
             - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
               value: PLAINTEXT://kantrip-kafka-bootstrap:9097
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
-              value: _schemas_secure
+              value: schema-registry-secure
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID
@@ -251,7 +251,7 @@ spec:
             - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
               value: PLAINTEXT://kantrip-kafka-bootstrap:9097
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
-              value: _schemas_oauth
+              value: schema-registry-oauth
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID

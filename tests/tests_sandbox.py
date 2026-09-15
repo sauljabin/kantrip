@@ -69,6 +69,7 @@ class TestSandbox(unittest.TestCase):
         self.assertTrue(by_name["oauth"]["authentication"]["sasl"])
         self.assertEqual("internal", by_name["registry"]["type"])
         self.assertFalse(by_name["registry"]["tls"])
+        self.assertFalse(kafka["spec"]["kafka"]["config"]["auto.create.topics.enable"])
         for listener in listeners:
             if listener["name"] == "registry":
                 continue
@@ -148,23 +149,31 @@ class TestSandbox(unittest.TestCase):
         self.assertIn("SCHEMA_REGISTRY_OAUTHBEARER_JWKS_ENDPOINT_URL", oauth_schema_env)
         self.assertNotIn("SCHEMA_REGISTRY_AUTHENTICATION_METHOD", oauth_schema_env)
 
-    def test_apicurio_topics_have_lossless_retention(self) -> None:
+    def test_managed_topics_have_explicit_storage_policies(self) -> None:
         topics = documents("22-apicurio-topics.yaml")
 
+        by_resource = {topic["metadata"]["name"]: topic for topic in topics}
         self.assertEqual(
             {
                 "apicurio-journal",
                 "apicurio-snapshots",
                 "apicurio-secure-journal",
                 "apicurio-secure-snapshots",
+                "schema-registry",
+                "schema-registry-secure",
+                "schema-registry-oauth",
             },
-            {topic["metadata"]["name"] for topic in topics},
+            set(by_resource),
         )
         for topic in topics:
             config = topic["spec"]["config"]
-            self.assertEqual("delete", config["cleanup.policy"])
-            self.assertEqual("-1", config["retention.ms"])
-            self.assertEqual("-1", config["retention.bytes"])
+            if topic["metadata"]["name"].startswith("schema-registry"):
+                self.assertEqual("compact", config["cleanup.policy"])
+                self.assertNotIn("topicName", topic["spec"])
+            else:
+                self.assertEqual("delete", config["cleanup.policy"])
+                self.assertEqual("-1", config["retention.ms"])
+                self.assertEqual("-1", config["retention.bytes"])
 
     def test_runtime_credentials_are_random_private_and_reused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

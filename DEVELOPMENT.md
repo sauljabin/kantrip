@@ -174,6 +174,10 @@ but is removed with the Kind cluster. Both Apicurio instances use KafkaSQL with
 separate journal and snapshot topics configured for delete cleanup and infinite
 retention. Their registry data therefore survives an Apicurio pod restart without
 leaking data between the baseline and authenticated variants.
+Schema Registry topics are declared as Strimzi `KafkaTopic` resources with
+`cleanup.policy=compact` and the same kebab-case names used by the Kafka
+clients: `schema-registry`, `schema-registry-secure`, and
+`schema-registry-oauth`.
 
 Run the adapter smoke workflow against the active services:
 
