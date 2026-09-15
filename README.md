@@ -25,7 +25,7 @@ checks Kafka and registry connectivity.
 - Schema-validated profiles in a private transactional SQLite database
 - Ordered automatic schema migrations with private recovery backups
 - Multiple bootstrap servers, descriptions, labels, and optional Registry endpoints
-- Plaintext or verified TLS transport with system trust or a copied PEM CA bundle
+- Plaintext or verified TLS transport with default client trust or a copied PEM CA bundle
 - `add`, `edit`, `remove`, label-filtered `list`, and safe `describe` commands
 - Human, JSON, and YAML profile observations
 

@@ -175,12 +175,12 @@ class TestCli(unittest.TestCase):
                 env=environment,
             )
             secure = load_profiles(database_path).profile("production")
-            system_ca = self.runner.invoke(
+            default_trust = self.runner.invoke(
                 cli,
-                ["edit", "production", "--system-ca"],
+                ["edit", "production", "--default-trust"],
                 env=environment,
             )
-            system_trust = load_profiles(database_path).profile("production")
+            default_profile = load_profiles(database_path).profile("production")
             edited = self.runner.invoke(
                 cli,
                 ["edit", "production", "--transport", "plaintext"],
@@ -191,9 +191,9 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, added.exit_code, added.output)
         self.assertEqual("tls", secure["kafka"]["transport"])
         self.assertIn("BEGIN CERTIFICATE", secure["kafka"]["tls"]["caCertificates"])
-        self.assertEqual(0, system_ca.exit_code, system_ca.output)
-        self.assertEqual("tls", system_trust["kafka"]["transport"])
-        self.assertNotIn("tls", system_trust["kafka"])
+        self.assertEqual(0, default_trust.exit_code, default_trust.output)
+        self.assertEqual("tls", default_profile["kafka"]["transport"])
+        self.assertNotIn("tls", default_profile["kafka"])
         self.assertEqual(0, edited.exit_code, edited.output)
         self.assertEqual("plaintext", plaintext["kafka"]["transport"])
         self.assertNotIn("tls", plaintext["kafka"])

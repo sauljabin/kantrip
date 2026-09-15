@@ -284,9 +284,9 @@ def add_configured_profile(
     help="Replace the PEM CA bundle used for Kafka TLS verification.",
 )
 @cloup.option(
-    "--system-ca",
+    "--default-trust",
     is_flag=True,
-    help="Use the system CA store for Kafka TLS verification.",
+    help="Use the client's default trust store for Kafka TLS.",
 )
 @cloup.option(
     "--registry-provider",
@@ -304,7 +304,7 @@ def edit_configured_profile(
     remove_labels: tuple[str, ...],
     transport: str | None,
     ca_file: str | None,
-    system_ca: bool,
+    default_trust: bool,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -320,7 +320,7 @@ def edit_configured_profile(
             remove_labels=remove_labels,
             transport=transport,
             ca_certificates=ca_file,
-            system_ca=system_ca,
+            default_trust=default_trust,
             registry_provider=registry_provider,
             registry_url=registry_url,
             remove_registry=remove_registry,

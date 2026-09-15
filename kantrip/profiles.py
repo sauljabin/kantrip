@@ -343,7 +343,7 @@ def edit_profile(
     remove_labels: tuple[str, ...] = (),
     transport: str | None = None,
     ca_certificates: str | None = None,
-    system_ca: bool = False,
+    default_trust: bool = False,
     registry_provider: str | None = None,
     registry_url: str | None = None,
     remove_registry: bool = False,
@@ -359,7 +359,7 @@ def edit_profile(
         remove_labels=remove_labels,
         transport=transport,
         ca_certificates=ca_certificates,
-        system_ca=system_ca,
+        default_trust=default_trust,
         registry_provider=registry_provider,
         registry_url=registry_url,
         remove_registry=remove_registry,
@@ -384,7 +384,7 @@ def edit_profile(
                     remove_labels=remove_labels,
                     transport=transport,
                     ca_certificates=ca_certificates,
-                    system_ca=system_ca,
+                    default_trust=default_trust,
                     registry_provider=registry_provider,
                     registry_url=registry_url,
                     remove_registry=remove_registry,
@@ -421,7 +421,7 @@ def _validate_edit_request(
     remove_labels: tuple[str, ...],
     transport: str | None,
     ca_certificates: str | None,
-    system_ca: bool,
+    default_trust: bool,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -435,7 +435,7 @@ def _validate_edit_request(
             bool(remove_labels),
             transport is not None,
             ca_certificates is not None,
-            system_ca,
+            default_trust,
             registry_provider is not None,
             registry_url is not None,
             remove_registry,
@@ -451,10 +451,10 @@ def _validate_edit_request(
         raise ProfileStoreError("a label cannot be set and removed in the same edit")
     if ca_certificates is not None and transport == "plaintext":
         raise ProfileStoreError("--ca-file cannot be combined with --transport plaintext")
-    if ca_certificates is not None and system_ca:
-        raise ProfileStoreError("--ca-file cannot be combined with --system-ca")
-    if system_ca and transport == "plaintext":
-        raise ProfileStoreError("--system-ca cannot be combined with --transport plaintext")
+    if ca_certificates is not None and default_trust:
+        raise ProfileStoreError("--ca-file cannot be combined with --default-trust")
+    if default_trust and transport == "plaintext":
+        raise ProfileStoreError("--default-trust cannot be combined with --transport plaintext")
 
 
 def _apply_profile_edits(
@@ -467,7 +467,7 @@ def _apply_profile_edits(
     remove_labels: tuple[str, ...],
     transport: str | None,
     ca_certificates: str | None,
-    system_ca: bool,
+    default_trust: bool,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -480,7 +480,7 @@ def _apply_profile_edits(
     elif description is not None:
         updated["description"] = description
     _apply_label_edits(updated, labels, remove_labels)
-    _apply_kafka_transport_edits(updated, transport, ca_certificates, system_ca)
+    _apply_kafka_transport_edits(updated, transport, ca_certificates, default_trust)
     _apply_registry_edits(updated, registry_provider, registry_url, remove_registry)
     return updated
 
@@ -489,7 +489,7 @@ def _apply_kafka_transport_edits(
     profile: dict[str, Any],
     transport: str | None,
     ca_certificates: str | None,
-    system_ca: bool,
+    default_trust: bool,
 ) -> None:
     kafka = profile["kafka"]
     if transport is not None:
@@ -499,10 +499,10 @@ def _apply_kafka_transport_edits(
         elif "tls" not in kafka:
             kafka["tls"] = {}
     if ca_certificates is None:
-        if not system_ca:
+        if not default_trust:
             return
         if kafka["transport"] != "tls":
-            raise ProfileStoreError("--system-ca requires Kafka TLS transport")
+            raise ProfileStoreError("--default-trust requires Kafka TLS transport")
         kafka.pop("tls", None)
         return
     if kafka["transport"] != "tls":

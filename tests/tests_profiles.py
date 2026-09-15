@@ -384,14 +384,14 @@ class TestProfiles(unittest.TestCase):
                 transport="tls",
                 ca_certificates=ca_certificates,
             )
-            system_trust = edit_profile("production", path, system_ca=True)
+            default_profile = edit_profile("production", path, default_trust=True)
             plaintext = edit_profile("production", path, transport="plaintext")
 
         kafka = added.profile("production")["kafka"]
         self.assertEqual("tls", kafka["transport"])
         self.assertEqual(ca_certificates, kafka["tls"]["caCertificates"])
-        self.assertEqual("tls", system_trust.profile("production")["kafka"]["transport"])
-        self.assertNotIn("tls", system_trust.profile("production")["kafka"])
+        self.assertEqual("tls", default_profile.profile("production")["kafka"]["transport"])
+        self.assertNotIn("tls", default_profile.profile("production")["kafka"])
         self.assertEqual("plaintext", plaintext.profile("production")["kafka"]["transport"])
         self.assertNotIn("tls", plaintext.profile("production")["kafka"])
 
@@ -415,14 +415,14 @@ class TestProfiles(unittest.TestCase):
 
             add_profile("plaintext", path)
             with self.assertRaisesRegex(ProfileStoreError, "requires Kafka TLS transport"):
-                edit_profile("plaintext", path, system_ca=True)
+                edit_profile("plaintext", path, default_trust=True)
             with self.assertRaisesRegex(ProfileStoreError, "cannot be combined"):
                 edit_profile(
                     "plaintext",
                     path,
                     transport="tls",
                     ca_certificates=ca_certificates,
-                    system_ca=True,
+                    default_trust=True,
                 )
 
     def test_tampered_stored_ca_fails_closed(self) -> None:

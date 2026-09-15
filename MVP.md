@@ -171,7 +171,7 @@ Kafka security:
       --auth TYPE                  Replace the authentication method.
       --username TEXT              Replace the Kafka username.
       --ca-file PATH               Replace Kafka CA configuration.
-      --system-ca                  Use the system CA store for Kafka TLS.
+      --default-trust              Use the client's default trust store.
       --client-certificate-file PATH
                                    Replace the client certificate.
       --client-key-file PATH       Replace the private client key.
@@ -570,7 +570,7 @@ expose these names as an arbitrary property map.
 | SASL mechanism | `sasl.mechanism` | `sasl.mechanism` |
 | PLAIN or SCRAM credentials | Kantrip-generated `sasl.jaas.config` | `sasl.username` and `sasl.password` |
 | OAuth client credentials | `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.credentials.client.id`, `sasl.oauthbearer.client.credentials.client.secret`, and optional `sasl.oauthbearer.scope` on verified current clients | `sasl.oauthbearer.method=oidc`, `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.id`, `sasl.oauthbearer.client.secret`, and optional `sasl.oauthbearer.scope` |
-| OAuth token-endpoint CA | The standard callback's documented SSL options when supported by the verified client version; otherwise system trust or a capability error | `https.ca.pem` or `https.ca.location` |
+| OAuth token-endpoint CA | The standard callback's documented SSL options when supported by the verified client version; otherwise default client trust or a capability error | `https.ca.pem` or `https.ca.location` |
 
 For Java clients that predate the direct
 `sasl.oauthbearer.client.credentials.*` properties, Kantrip may generate the
