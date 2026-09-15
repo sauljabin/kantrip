@@ -162,7 +162,7 @@ def _java_client_supports_pem(version: tuple[int, int]) -> bool:
 
 def _java_pem_unknown_version_message(executable: str) -> str:
     return (
-        f"could not verify whether {executable} supports PEM trust stores; use system trust "
+        f"could not verify whether {executable} supports PEM trust stores; use default trust "
         "or install Apache Kafka 2.7+ or Confluent Platform 6.1+"
     )
 

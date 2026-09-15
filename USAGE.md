@@ -82,8 +82,8 @@ Add a plaintext profile using the default local broker:
 kantrip add local
 ```
 
-Use TLS with normal operating-system trust for a broker whose certificate is
-issued by a public CA:
+Use TLS with each client's default trust store for a broker whose certificate
+is issued by a trusted public CA:
 
 ```bash
 kantrip add production \
@@ -108,7 +108,7 @@ the PEM bundle directly. Java Kafka commands require Apache Kafka 2.7+ or
 Confluent Platform 6.1+ for native PEM trust-store support. Kantrip checks the
 installed Java client version before the Kafka operation and reports an
 actionable error when it cannot prove support. Kafka 2.6 and Confluent Platform
-6.0 can still use TLS with system trust.
+6.0 can still use TLS with their default trust stores.
 
 Choose one or more broker addresses when needed:
 
@@ -145,12 +145,13 @@ kantrip edit development \
   --registry-url http://registry.example.com:8081
 ```
 
-`edit --transport tls` enables system-trusted TLS. `edit --ca-file PATH`
+`edit --transport tls` enables TLS with the client's default trust store.
+`edit --ca-file PATH`
 replaces the custom CA for an existing TLS profile; combine it with
-`--transport tls` when upgrading a plaintext profile. Switching back to
-system trust is an explicit `edit --system-ca` operation and does not disable
-TLS. Switching to `--transport plaintext` removes the stored TLS configuration.
-`--system-ca` and `--ca-file` are mutually exclusive.
+`--transport tls` when upgrading a plaintext profile. Switching back to default
+trust is an explicit `edit --default-trust` operation and does not disable TLS.
+Switching to `--transport plaintext` removes the stored TLS configuration.
+`--default-trust` and `--ca-file` are mutually exclusive.
 
 `edit` adds or updates labels and can add a Registry to a profile that has none.
 When only `--registry-url` is supplied, the new Registry defaults to Confluent.
@@ -520,8 +521,9 @@ The database directory is private to the current user (`0700`), the database is
 the first mutation; read-only commands do not create it.
 
 Profiles support plaintext or server-authenticated TLS Kafka connections and
-one optional registry connection. TLS uses system trust by default; a custom
-PEM CA supplied through `--ca-file` is validated and copied into the profile.
+one optional registry connection. TLS uses each client's default trust store
+unless a custom PEM CA supplied through `--ca-file` is validated and copied
+into the profile.
 Java adapters version-gate custom PEM trust stores at Kafka 2.7 or Confluent
 Platform 6.1; librdkafka adapters consume the same profile without that Java
 version constraint.

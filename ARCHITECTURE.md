@@ -69,8 +69,8 @@ plaintext, encrypted-file, null, and unknown backends instead of weakening
 storage.
 
 The implemented connection model supports plaintext transport and
-server-authenticated TLS with system or profile trust, currently without Kafka
-authentication. The remaining model adds SASL/PLAIN, SCRAM-SHA-256,
+server-authenticated TLS with default client or profile trust, currently without
+Kafka authentication. The remaining model adds SASL/PLAIN, SCRAM-SHA-256,
 SCRAM-SHA-512, mutual TLS, and OAuth 2.0 client credentials. A Registry remains
 an independent connection; Kafka and Registry credentials are never inherited
 across those boundaries.

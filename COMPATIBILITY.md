@@ -50,14 +50,15 @@ Apicurio `/apis/registry/v3` profiles work only with Kaskade registry
 deserializers and use Apicurio's default `contentId` framing.
 
 Every listed Kafka adapter supports plaintext or verified TLS transport with
-`auth.type: none`. TLS uses system trust by default. A validated custom PEM CA
-is copied from the profile into each private session. The librdkafka adapters
-(`kcat`, `kafkacat`, and Kaskade) support that PEM directly. Java adapters
+`auth.type: none`. TLS uses each client's default trust store unless a validated
+custom PEM CA is copied from the profile into each private session. The
+librdkafka adapters (`kcat`, `kafkacat`, and Kaskade) support that PEM directly.
+Java adapters
 require [Apache Kafka 2.7+](https://kafka.apache.org/27/security/encryption-and-authentication-using-ssl/)
 or Confluent Platform 6.1+, where native PEM trust stores became available;
 Kantrip checks the installed client version and fails before the Kafka operation
 when support cannot be verified. Kafka 2.6 and Confluent Platform 6.0 remain
-supported with system trust. Kafka authentication remains unsupported.
+supported with default client trust. Kafka authentication remains unsupported.
 
 Every registry connection uses an `http://` URL. Kantrip rejects missing,
 encrypted, authenticated, provider-incompatible, and caller-supplied Registry

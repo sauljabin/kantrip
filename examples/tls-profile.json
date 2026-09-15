@@ -1,6 +1,6 @@
 {
   "id": "018f8f13-7c21-7cee-8000-000000000002",
-  "description": "Production with system-trusted TLS",
+  "description": "Production TLS with default client trust",
   "labels": {
     "environment": "production"
   },

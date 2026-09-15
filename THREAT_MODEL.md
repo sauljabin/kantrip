@@ -104,8 +104,9 @@ child can read, copy, print, transmit, or retain the supplied values.
 ### Network boundary
 
 Kafka, Registry, and OAuth endpoints are external. Server identity depends on
-TLS certificate and hostname verification using system trust or the selected
-profile CA. Application authorization is evaluated by those remote services.
+TLS certificate and hostname verification using the client's default trust
+store or the selected profile CA. Application authorization is evaluated by
+those remote services.
 
 ### Recovery boundary
 
