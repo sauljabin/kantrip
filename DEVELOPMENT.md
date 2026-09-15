@@ -73,7 +73,13 @@ Keep the profile schema in `schemas/`, synthetic examples in `examples/`, and
 private-data-free fixtures with their tests.
 
 When an application variable changes, update `USAGE.md`, architecture guidance,
-and tests together.
+and tests together. Before the first release, obsolete contracts may be replaced
+without backward compatibility with development commits. Reject incompatible
+state explicitly; do not add aliases or silently reset user data.
+
+Implement the sequential PRs in [MVP.md](MVP.md), including their acceptance
+criteria and affected documentation. Its manual first-release QA is a separate
+human release gate; the offline suite and sandbox smoke remain required.
 
 ## Database migrations
 

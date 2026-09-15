@@ -3,6 +3,10 @@
 These checks complement the offline test suite and the automated sandbox smoke
 workflow. Each scenario describes how to create a meaningful initial state, the
 action to take, and the observable result. Run commands from the repository root.
+These scenarios describe current behavior. The pending
+[first-release manual QA checklist](MVP.md#manual-qa--first-release-checklist)
+is kept with the roadmap until its commands are implemented; move those checks
+here as each owning PR lands. Human QA supplements both offline and smoke tests.
 
 ## Isolated test state
 

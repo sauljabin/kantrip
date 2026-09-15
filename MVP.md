@@ -1,795 +1,989 @@
-# Kantrip MVP roadmap
+# First-release MVP roadmap
 
-This file tracks only work that has not been implemented. Current behavior
-belongs in `README.md`, `USAGE.md`, `COMPATIBILITY.md`, `ARCHITECTURE.md`,
-`THREAT_MODEL.md`, and the bundled schema.
+This is the implementation handoff for the remaining first-release work, audited
+against commit `70f2d42`. Read PRs 1–5 in order. Each numbered PR is one delivery
+unit; its subsections are tasks within that PR, not additional PRs. All commands
+and contracts below are **targets**, unless explicitly identified as current.
 
-An item must leave this file when its implementation, tests, schema,
-compatibility notes, and user documentation land together. Existing behavior
-must not be restated here as future work.
+Current behavior belongs in the other guides. Remove a roadmap item only when
+its implementation, automated tests, applicable integration evidence, schema,
+and affected documentation land together. Move its runnable manual checks to
+`MANUAL_TESTING.md`; do not discard release QA when removing completed work.
 
-## Remaining MVP outcome
+## Scope and implementation rules
 
-Complete Kantrip's local profile model with:
+- This is a new, unreleased product. Replace obsolete CLI, environment, document,
+  and runtime contracts directly: no deprecated aliases, dual readers, legacy
+  migrations, or compatibility with previous development commits. Reject
+  incompatible old state with reset guidance; never silently delete a user's
+  database, runtime, or credentials. Published releases will establish the
+  future migration boundary. Preserve the existing migration integrity engine.
+- Reuse the implemented SQLite profile ID/revision, approved OS `SecretStore`,
+  credential journal, CAS mutation helpers, PLAIN/SCRAM/mTLS schema and
+  renderers, TLS validation, labels, `describe`, structured output, maintenance,
+  process supervision, and shell shims. These are dependencies, not new work.
+- Keep exactly `add`, `edit`, `remove`, `list`, `describe`, `doctor`, `ping`,
+  `exec`, and `current`. No import/export/secret/clone command groups, ambient
+  profile selection, daemon, secret-reading interface, or arbitrary property map.
+- Every network command selects `PROFILE`. Store only connection settings:
+  endpoints, trust, identity, credential acquisition, and required auth routing.
+  Topic, serialization, schema selection, retry, cache, and application behavior
+  belong to the selected client.
+- Secrets enter through no-echo prompts, bounded private-key files, or the two
+  explicit `add` input sources. Never add literal password, token, secret,
+  private-key, or JAAS value flags. Do not put secrets in argv, persistent
+  profile JSON, output, diagnostics, fixtures, or logs.
+- Authenticated Kafka, Registry, and token endpoints require verified TLS,
+  including localhost. No insecure test bypass. Plaintext remains supported
+  only with no authentication. Keep Kafka, Registry, and token-endpoint trust
+  and credentials independent.
+- Capability checks must name the unsupported client/mechanism and fail before
+  the requested operation. Never assume that supporting librdkafka or a Java
+  library means a CLI exposes every library setting.
+- Write implementation and documentation in English. Use the existing module
+  boundaries below; introduce a module only with a concrete responsibility.
 
-- OS-backed storage for Kafka and Registry secrets.
-- SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and generic OAuth client
-  credentials over the implemented verified TLS transport.
-- Authenticated Confluent-compatible and native Apicurio Registry connections.
-- Profile creation from Java/librdkafka properties, Confluent-generated client
-  properties, and Strimzi KafkaUser-generated Kubernetes Secrets.
-- New adapters for `kcl` and `kafkactl`.
-- Authenticated connectivity diagnostics.
+## Delivery sequence
 
-Every command that connects to Kafka continues to require an explicit profile.
-Kantrip must not keep an ambient or persistent profile selection.
+| PR | Outcome | Includes | Depends on |
+| --- | --- | --- | --- |
+| 1 | Usable authenticated Kafka profiles | Lifecycle CLI, credential observations, existing adapters, Kafka ping, profile doctor and session attribution | Current foundation |
+| 2 | Independent secure Registry and OAuth connections | Registry TLS/basic/token/mTLS, Kafka and Registry OAuth, provider probes, capability enforcement | PR 1 |
+| 3 | Complete profile creation from external files | Java/librdkafka/Confluent properties, Strimzi Secrets, all supported auth types, matching sandbox exports | PRs 1–2 |
+| 4 | Additional native clients | `kcl` and `kafkactl`, direct commands and three shells | PRs 1–3 |
+| 5 | Verified first-release candidate | Remaining integration fixtures/matrix, full documentation reconciliation, manual release QA | PRs 1–4 |
 
-Kantrip is not a persistent process manager, a global context selector, or a
-replacement for Kafka clients. Its responsibility ends at storing the profile,
-resolving its secrets, generating the correct temporary configuration, and
-supervising the active execution.
+Keep schema, lifecycle, rendering, diagnostics, and adapter changes together for
+one mechanism. Do not split a PR merely by file type, authentication mechanism,
+or documentation. PR 5 closes cross-cutting gaps; earlier PRs must already pass
+their own acceptance tests and update current-feature documentation.
 
-## Engineering boundaries
+Implementation navigation (extend these tests; do not duplicate whole suites):
 
-- Extend the existing per-profile document. Do not add speculative application
-  `version` or `defaults` fields. The database migration sequence remains
-  internal and independent from product versions and profile documents.
-- Do not add compatibility paths for database formats that were never released.
-  The first published release establishes the supported migration boundary,
-  while any one release may contain several ordered migration commands.
-- Keep resolved secrets out of the profile database, argv, logs, tracebacks,
-  diagnostics, snapshots, and normal output.
-- Pass secrets to a selected child only through a private generated file or a
-  child-only environment variable supported by that client.
-- Define connection configuration narrowly as endpoint discovery, transport
-  security, server verification, client identity, credential acquisition, and
-  product-required authentication routing. Topic, record, serializer,
-  deserializer, schema-selection, retry, cache, telemetry, and application
-  behavior are not profile concerns.
-- Normalize input connection properties into typed profile fields and render a
-  new canonical client configuration. Never replay an input properties
-  document or retain unrecognized keys as passthrough configuration.
-- Ignore known non-connection and unknown non-security properties during input
-  processing and report only their property names in the summary. Reject unknown
-  properties whose names suggest credentials or security, conflicting aliases,
-  and settings that disable certificate or hostname verification.
-- Do not add a plaintext or locally encrypted secret-store fallback.
-- Do not download client plugins or modify a user's Kafka installation.
-- Fail before launch when a profile/client combination has no verified safe
-  mapping.
-- Preserve the existing explicit `kantrip exec PROFILE` boundary and reject
-  nested sessions.
-- Detached and background processes remain unsupported. Do not claim that
-  Kantrip can supervise a child that deliberately escapes its POSIX session.
+| PR | Main existing code and test seams |
+| --- | --- |
+| 1 | `cli.py`, `profiles.py`, `profile_output.py`, `kafka.py`, `session.py`, `runtime.py`, `doctor.py`, `ping.py`, `adapters.py`; `tests/tests_cli.py`, `tests/tests_profiles.py`, `tests/tests_profile_output.py`, `tests/tests_kafka.py`, `tests/tests_session.py`, `tests/tests_runtime.py`, `tests/tests_doctor.py`, `tests/tests_ping.py`, `tests/tests_shells.py` |
+| 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/tests_registry.py`, `tests/tests_schemas.py`, `tests/tests_credential_mutations.py`, `tests/tests_redaction.py`, client integration fixtures |
+| 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/tests_sandbox.py` |
+| 4 | Adapter/rendering/capability seams from PRs 1–2, `shells.py`, `doctor.py`; session, shell, smoke, and PTY contract tests |
+| 5 | Platform integration evidence, `scripts/verify_release.py`, `scripts/smoke.py`, docs, examples, packaging/workflow checks |
 
-## Command-line contract
+## PR 1 — Complete Kafka execution, lifecycle, and local diagnostics
 
-The completed MVP keeps one compact command surface. Each verb acts at one
-resource level and keeps the same meaning across interactive and scripted use:
+### 1.1 Authentication and credential lifecycle through the CLI
 
-- `add` creates one complete profile and fails when the name already exists.
-- `edit` changes explicit fields on one existing profile and creates no profile.
-- `remove` removes one complete profile, not one component within it.
-- `list` finds and summarizes profiles.
-- `describe` replaces `show` and presents one profile without exposing secrets.
-- `doctor` diagnoses global or profile-scoped local state and owns explicit
-  deterministic repair.
-- `ping`, `exec`, and `current` retain their focused connectivity, execution,
-  and active-session meanings.
+**Gap:** `profiles.py` accepts `KafkaAuthInput`, but `cli.py` exposes no auth
+options. `edit` without options fails, `remove` has no confirmation, and
+`profile_output.py` does not inspect credential availability.
 
-Do not add separate `import`, `secret`, `export`, `clone`, or `configure`
-commands. External documents are input sources for `add`; secret replacement
-is part of `edit`; machine-readable profile inspection is part of `describe`. There is no
-command that reveals a stored secret and no round-trip Kantrip profile export.
-This keeps creation, mutation, removal, inspection, diagnosis, and execution
-easy to distinguish while preserving the fail-closed credential boundary.
+**Architecture:** collect a typed mutation request in `cli.py`, validate it
+through `kafka.py` and `profiles.py`, and reuse `credential_mutations.py` and
+`reconciliation.py`. Read the profile ID/revision before prompting; collect
+input outside the maintenance lock; commit with that expected generation.
+Cancellation, keyring failure, or a concurrent edit must preserve the old usable
+profile. Reuse the existing immutable-reference staging; do not build another
+secret store or transaction mechanism.
 
-### Common naming and option rules
+**CLI delta:**
 
-- Use `PROFILE` as the profile-name metavariable on every profile-scoped
-  command.
-- Keep `-b` for `--bootstrap-servers` and `-d` for `--description` on both
-  `add` and `edit`.
-- Add `-l` for repeatable `--label KEY=VALUE` on `add`, `edit`, and `list`.
-  On `add` and `edit` it assigns a label; on `list` it requires an exact match.
-  Multiple list labels are combined with logical AND.
-- Add `-o` for `--output human|json|yaml` on `list` and `describe`. `human` is
-  the default and is rendered with Rich. Keep `rich` as an implementation
-  detail rather than a public output-format name.
-- Keep `-q` for `ping --quiet`. Do not abbreviate `--force`, `--repair`,
-  security options, credential options, or destructive removal options. Do not
-  add `-v` for `--verbose`, because it is easily confused with version output.
-- Continue accepting `--no-color` globally and after output-producing commands.
-  JSON and YAML are syntax-highlighted only on colored TTYs. `--no-color`,
-  `NO_COLOR`, `TERM=dumb`, and non-TTY output remain unstyled and
-  machine-readable.
-- Use short options only for frequent, unambiguous, non-destructive operations.
-  Long security option names are deliberate safety and comprehension aids.
+| Command | New options / behavior |
+| --- | --- |
+| `add PROFILE`, `edit PROFILE` | `--auth none\|plain\|scram-sha-256\|scram-sha-512\|mtls`, `--username TEXT`, `--client-certificate-file PATH`, `--client-key-file PATH` |
+| `edit PROFILE` | No options opens a field-based interactive editor; omitted options in scripted edits keep existing fields |
+| `edit PROFILE` | Repeatable `--replace-secret FIELD`; prompt without echo for text secrets, prompt for a file path for private-key replacement, and prompt without echo for an encrypted key's password |
+| `remove PROFILE` | Confirm removal of every profile; new `--force` skips confirmation only; noninteractive removal without it fails |
+| `describe PROFILE [-o human\|json\|yaml]` | Add safe per-field credential states `stored`, `missing`, `unavailable`; keep ID/revision and omit references and values |
 
-### `add`
+Required passwords and key passwords are prompted only when creating or
+replacing them. The editor offers keep/replace/remove without showing or
+prefilling values. Removing a required secret must accompany an auth change
+that makes it unnecessary. No standalone `--remove-secret` flag. Reject unknown,
+duplicate, or inapplicable replacement fields. Missing credentials are repaired
+through the same replacement path. The initial field vocabulary is
+`kafka/password`, `kafka/tls/private-key`, and
+`kafka/tls/private-key-password`; PR 2 extends it explicitly.
 
-```text
-Usage: kantrip add [OPTIONS] PROFILE
+Changing an auth variant discards incompatible old fields in the validated
+candidate and retires only its superseded references after commit. Switching
+to plaintext requires explicit `--auth none` if currently authenticated, and
+removes obsolete TLS material. TLS requires `--transport tls`; do not silently
+upgrade/downgrade an explicitly selected transport. Do not read or prompt for
+unaffected credentials during metadata-only edits.
 
-Create a complete profile. Fail if PROFILE already exists.
+Noninteractive input must never hang: if a required secret has no source and
+there is no controlling terminal, fail with guidance. When stdin carries an
+import in PR 3, any additional prompt uses the controlling terminal, not stdin.
+Credential observations may read exact references through the approved store
+and immediately discard values; backend selection alone cannot prove `stored`.
+They must never create, unlock by changing policy, repair, or enumerate entries.
 
-General:
-  -b, --bootstrap-servers HOST:PORT[,HOST:PORT]
-                                  Kafka broker addresses.
-  -d, --description TEXT          Profile description.
-  -l, --label KEY=VALUE           Add a label; repeatable.
+**Acceptance:** exercise add/edit/remove, no-options editing, canceled prompts,
+missing/locked store, missing secret recovery, concurrent prompted edits,
+mechanism changes, encrypted and mismatched PEM keys, and redaction in all
+output modes. Public CA/certificate values stay in the profile; private keys
+and passwords stay in the OS store. Verify realistic PEM sizes on both OSes.
 
-Input source:
-      --from-properties FILE|-     Create from Java or librdkafka properties.
-      --from-strimzi FILE|-        Create from a Kubernetes Secret generated
-                                   for a Strimzi KafkaUser.
+### 1.2 Enable existing adapters and authenticated execution
 
-Kafka security:
-      --transport TYPE             plaintext or tls.
-      --auth TYPE                  none, plain, scram-sha-256,
-                                   scram-sha-512, mtls, or oauth.
-      --username TEXT              Kafka authentication username.
-      --ca-file PATH               Configure the Kafka CA from a PEM file.
-      --client-certificate-file PATH
-                                   Configure a PEM client certificate.
-      --client-key-file PATH       Read a PEM client private key.
-      --oauth-token-url URL        OAuth token endpoint.
-      --oauth-client-id TEXT       OAuth client ID.
-      --oauth-scope TEXT           OAuth scope; repeatable.
+**Gap:** `session.py` rejects every `requires_secrets` connection before using
+the already implemented resolution/rendering helpers.
 
-Registry:
-      --registry-provider TYPE     confluent or apicurio.
-      --registry-url URL           Registry endpoint.
-      --registry-auth TYPE         none, basic, oauth, token, or mtls.
-      --registry-username TEXT     Registry authentication username.
-      --registry-ca-file PATH      Configure the Registry CA from a PEM file.
-```
+**Architecture:** load the profile document and revision from one collection,
+resolve one immutable connection snapshot, and pass it to rendering and runtime
+creation. Enable PLAIN, both SCRAM variants, and mTLS for verified mappings in
+Apache/Confluent Kafka, Confluent console, kcat/kafkacat, and Kaskade adapters.
+Resolve once per session; do not let shims query SQLite or the keyring again.
+Materialize PEM files only in the private runtime and retain existing cleanup.
+Java PEM support gates must cover client keys/certificates even when the CA uses
+default trust. Keep Java and librdkafka serialization separate.
 
-The two input-source options are mutually exclusive. Manual options may fill
-required non-secret data missing from an input source, but conflicting
-connection or security values fail instead of silently overriding the source.
-Required passwords, tokens, client secrets, and key passwords are collected
-without echo. No option accepts one of those literal values.
+Build one capability table keyed by adapter, installed client version/library
+build, Kafka mechanism, Registry provider/auth, and trust requirements. Direct
+commands and shell shims consume the same decisions. A subshell may start for a
+valid profile; each invoked adapter rejects unsupported combinations before its
+operation. Generate only supported client artifacts rather than blocking an
+entire shell on an unused installed client. Unknown custom commands continue to
+receive the documented generic session files/environment, without a claim of
+automatic adaptation. Preserve connection-override rejection, including
+single-token assignments, short forms, and property injection flags.
 
-### `edit`
+**CLI delta:** no new `exec` syntax. The existing `exec PROFILE [-- COMMAND...]`
+now executes supported authenticated profiles. `KAFKA_*` remains client
+configuration; `KANTRIP_*` remains session metadata. Any new file variable must
+be explicitly added to `USAGE.md`; do not expose literal secrets by default.
 
-```text
-Usage: kantrip edit [OPTIONS] PROFILE
+**Acceptance:** real produce/consume/admin operations for every advertised
+mechanism, direct commands and Bash/Zsh/Fish, missing client/version refusal,
+wrong credentials, no secret in argv, and cleanup after preparation failures,
+normal exit, signals, and forced termination. Add a disposable integration
+fixture for PLAIN and SCRAM-SHA-256: the current Strimzi sandbox supplies only
+SCRAM-SHA-512, mTLS, OAuth, TLS, and plaintext. Do not mark the missing mechanisms
+verified using mock tests alone.
 
-Edit an existing profile. With no options, open the interactive editor.
+### 1.3 Make Kafka ping independent of resource ACLs
 
-General:
-  -b, --bootstrap-servers HOST:PORT[,HOST:PORT]
-                                  Replace Kafka broker addresses.
-  -d, --description TEXT          Replace the description.
-      --clear-description         Remove the description.
-  -l, --label KEY=VALUE           Add or replace a label; repeatable.
-      --remove-label KEY          Remove a label; repeatable.
+**Gap:** `ping.py` rejects authenticated profiles and bases success on
+`AdminClient.list_topics()`. Its broker count is a metadata observation, not a
+pure authentication result.
 
-Kafka security:
-      --transport TYPE             Replace the transport.
-      --auth TYPE                  Replace the authentication method.
-      --username TEXT              Replace the Kafka username.
-      --ca-file PATH               Replace Kafka CA configuration.
-      --default-trust              Use the client's default trust store.
-      --client-certificate-file PATH
-                                   Replace the client certificate.
-      --client-key-file PATH       Replace the private client key.
-      --oauth-token-url URL        Replace the OAuth token endpoint.
-      --oauth-client-id TEXT       Replace the OAuth client ID.
-      --oauth-scope TEXT           Replace OAuth scopes; repeatable.
+**Decision:** retain the Python/librdkafka stack and shared resolver, but use a
+bounded connection-state probe. Poll an `AdminClient` with `stats_cb` and
+`error_cb`, a short statistics interval within the deadline, and connection
+initiation verified against the pinned library (use its documented
+`enable.sparse.connections=false` probe setting if needed to initiate a real
+connection without an application request). A real configured/learned broker
+reaching `UP` after its required TLS/SASL exchange is success. Exclude internal,
+logical, and address-less pseudo-brokers; do not require a nonnegative broker ID
+because a bootstrap connection can legitimately use `-1`. The pinned library's
+[statistics contract](https://github.com/confluentinc/librdkafka/blob/v2.15.0/STATISTICS.md)
+and [connection state implementation](https://github.com/confluentinc/librdkafka/blob/v2.15.0/src/rdkafka_broker.c)
+support this design; prove callback delivery and authentication sequencing with
+real integration tests before enabling it. Do not parse debug logs or access
+private C handles.
 
-Registry:
-      --registry-provider TYPE     Add or replace the provider.
-      --registry-url URL           Add or replace the endpoint.
-      --registry-auth TYPE         Replace Registry authentication.
-      --registry-username TEXT     Replace the Registry username.
-      --registry-ca-file PATH      Replace Registry CA configuration.
-      --remove-registry            Remove the complete Registry connection.
+Do not call topic/group/schema listing or `describe_cluster` to decide success.
+Library background discovery can still occur; do not claim zero metadata
+traffic. Its authorization errors must not override independently observed
+successful authentication. If the pinned binding cannot establish the required
+state evidence, treat that as a PR blocker requiring a revised documented
+public-library approach; do not silently fall back to ACL-dependent success.
 
-Credentials:
-      --replace-secret FIELD       Prompt for and replace an applicable secret;
-                                   repeatable.
-```
+A TCP connection or `ApiVersions` response alone cannot prove SASL success:
+Kafka accepts API-version negotiation before authentication. See the
+[Kafka authentication sequence](https://kafka.apache.org/26/design/protocol/).
+TLS without client authentication proves server identity only; plaintext proves
+reachability only. Neither should claim an authenticated user identity. mTLS
+proves the configured client exchange, not that a permissive server required
+that certificate.
 
-Every non-interactive option changes only the named field and preserves omitted
-fields. The interactive editor offers `keep`, `replace`, or `remove` for each
-existing secret without showing or prefilling its value. A removal is accepted
-only when the same validated edit removes or changes the configuration that
-requires that secret. Do not add `--remove-secret` or any literal secret-value
-option. `--replace-secret` is also the recovery path when a referenced
-credential-store entry is missing.
+**CLI delta:** add `-q` as the alias for existing `--quiet`; keep
+`--timeout SECONDS` (default 5, minimum 0.1). Replace broker/resource counts with
+per-service transport and authentication observations. Apply one monotonic
+network deadline across Kafka, configured Registry, and any token acquisition,
+passing remaining time to each phase. No per-retry fresh timeout. Success means
+at least one real broker connection, not health of all brokers.
 
-`FIELD` belongs to a closed, schema-derived vocabulary and is fully qualified
-by its owner. Examples include `kafka/password`,
-`kafka/oauth/client-secret`, `kafka/tls/private-key`, `registry/password`,
-`registry/token`, and `registry/oauth/client-secret`. Reject unknown fields and
-fields that do not apply to the profile's selected authentication method. Do
-not keep ambiguous names such as `oauth/client-secret` or `tls/private-key`
-once both Kafka and Registry can own that credential type.
+Return `0` when all configured services meet their required connectivity/auth
+proof, `1` for failure or inconclusive authentication. Quiet mode produces no
+stdout/stderr on either outcome (including library logs and profile errors).
+Report DNS/TCP, TLS, authentication, capability, timeout, and inconclusive
+outcomes distinctly. Authentication failure cannot become success because a
+public endpoint or TLS socket worked. Add Registry behavior in PR 2.
 
-### `remove`
+**Acceptance:** a principal with no topic/group/cluster ACLs can ping; an
+invalid password cannot. Test zero-topic clusters, internal pseudo-broker
+statistics, unavailable bootstrap plus reachable bootstrap, invalid CA/hostname,
+missing certificate, deadline exhaustion, and quiet output. Provision an
+authorizer-enabled test broker: the current sandbox Kafka manifest has no
+explicit authorizer and cannot prove the no-ACL requirement by itself.
 
-```text
-Usage: kantrip remove [OPTIONS] PROFILE
+### 1.4 Implement `doctor PROFILE --sessions` and credential diagnostics
 
-Remove a complete profile and its owned credentials.
+**Gap:** `doctor` currently has no positional profile or `--sessions`;
+`runtime.py` markers contain no profile identity/revision. Global doctor checks
+backend availability and journal counts, not each referenced credential or
+certificate expiry. Its unconditional “profiles are executable” claim also
+needs replacement with evidence-based checks.
 
-Options:
-      --force  Skip the confirmation prompt.
-```
+**Architecture:** extend runtime markers with required `profileId` (UUID) and
+`profileRevision` (positive integer) from the same snapshot used by the child.
+Carry those fields through creation and `mark_running`. Extend the existing
+safe scanner to return validated observations plus aggregate counts. Never
+open generated client files to determine ownership. Keep `flock` as liveness
+proof, the five-minute stale threshold, descriptor-relative inspection, and
+bounded scans. Report truncation explicitly. Old development markers are
+invalid and never guessed or automatically deleted.
 
-`remove` never removes only a Registry, label, certificate, or secret. Those
-profile changes belong to `edit`. `--force` skips only the prompt and never
-skips validation, locking, journaling, or safe credential cleanup.
+Add profile scope to `run_doctor`; inspect the database read-only, then exact
+credential references, certificate/key match, not-before/not-after dates, and
+compatible installed clients. Expired/not-yet-valid certificates are errors;
+expiry within 30 days is a warning. Display only safe status. Global doctor
+checks all profiles; scoped doctor excludes unrelated profile failures while
+still reporting shared database/backend/runtime safety failures.
 
-### `list`
-
-```text
-Usage: kantrip list [OPTIONS]
-
-List profiles.
-
-Options:
-  -l, --label KEY=VALUE            Require an exact label; repeatable and
-                                   combined using logical AND.
-  -o, --output human|json|yaml     Output representation. Default: human.
-```
-
-Human output adds a Labels column to the existing profile summary. Render each
-label as `KEY=VALUE`. Assign presentation colors deterministically from the
-label key using a bounded accessible palette; do not persist random label
-colors or make color carry meaning. Labels remain embedded in their profiles,
-so a label unused by every profile naturally disappears without a global label
-registry or garbage-collection workflow. JSON and YAML represent labels as
-key/value maps. An empty match is successful and produces an empty result in
-the selected format.
-
-### `describe`
+**CLI delta:**
 
 ```text
-Usage: kantrip describe [OPTIONS] PROFILE
-
-Describe a profile without exposing secret values or credential references.
-
-Options:
-  -o, --output human|json|yaml     Output representation. Default: human.
+kantrip doctor [--verbose] [PROFILE]
+kantrip doctor PROFILE --sessions [--verbose]
+kantrip doctor --repair [--verbose]
 ```
 
-`describe` replaces `show`. Human output uses Rich sections consistent with
-`doctor` for profile identity, Kafka, Registry, labels, and credential status.
-JSON and YAML are stable machine-readable observations, not accepted input or
-export documents. All formats omit secret values and internal credential references;
-credential fields expose only safe states such as `stored`, `missing`, or
-`unavailable`. Include the current profile revision in `describe` output.
+`--sessions` requires `PROFILE`. Reject `PROFILE --repair` and
+`--sessions --repair` as usage errors. Repair remains global and unchanged.
+Default scoped output summarizes session counts; `--sessions` shows active,
+recent, and stale entries with captured revision, age, and state. Session IDs,
+PIDs, and resolved runtime paths are verbose-only; generated config paths,
+contents, and credential references are never displayed. Recreated profiles
+with the same name must not inherit old UUID-owned sessions. Edits do not
+rewrite live sessions; report an older captured revision without treating that
+alone as corruption. Deleted-profile sessions remain visible globally.
 
-### `doctor`
+**Acceptance:** two profiles, two simultaneous revisions, remove/recreate same
+name, active/recent/stale/invalid/truncated entries, missing/locked credentials,
+expired/mismatched certificates, empty and missing database. Ordinary doctor
+must create no database, lock file, runtime directory, or credential and must
+perform no network request. Test read-only behavior before pending migrations.
+
+## PR 2 — Secure Registry connections and native OAuth
+
+### 2.1 Registry model, lifecycle, and renderers
+
+**Gap:** `registry.py` only accepts provider plus an HTTP URL. Registry security,
+OAuth, and Registry mTLS reference fields are absent from the usable schema.
+
+**Architecture:** retain the explicit provider and its existing endpoint key
+(`schema.registry.url` or `apicurio.registry.url`). Add typed `tls` and `auth`
+objects parallel to Kafka: public CA/certificate PEM, owned private-key/password
+references, and a discriminated auth variant. Basic uses username/passwordRef;
+token uses tokenRef; mTLS uses certificate/private-key references; OAuth uses
+its fields below. HTTPS may use `auth: none`; HTTP requires `auth: none` and no
+TLS material. Each connection selects one auth variant; combining mTLS with
+basic/OAuth is outside this MVP. No credentials, query, or fragment in URLs.
+
+Extend the existing mutation planner to stage Kafka and Registry replacements
+in one recoverable operation. Keep omitted Registry fields during edits;
+`--remove-registry` retires all and only Registry references. Changing provider
+requires a complete compatible candidate; do not translate native Apicurio into
+a Confluent endpoint automatically.
+
+**CLI delta, on both `add` and `edit`:**
 
 ```text
-Usage:
-  kantrip doctor [OPTIONS] [PROFILE]
-  kantrip doctor --repair [--verbose]
-
-Inspect Kantrip globally or inspect one profile.
-
-Options:
-      --sessions  Include detailed sessions for PROFILE.
-      --verbose   Include safe diagnostic details.
-      --repair    Apply global deterministic repairs.
+--registry-auth none|basic|token|mtls|oauth
+--registry-username TEXT
+--registry-ca-file PATH
+--registry-client-certificate-file PATH
+--registry-client-key-file PATH
 ```
 
-`kantrip doctor` remains the global diagnostic. `kantrip doctor PROFILE`
-focuses profile, credential, certificate, and runtime checks on one profile.
-`kantrip doctor PROFILE --sessions` lists that profile's validated active,
-recent, and stale sessions without revealing private configuration paths or
-contents. Use the plural `--sessions`; reserve singular `--session` for a future
-operation that would select one exact session. Initially reject `PROFILE` with
-`--repair`, because database migrations and the current unified repair contract
-are global.
+On `edit`, also add `--registry-default-trust` (conflicts with CA file).
+`--remove-registry` conflicts with every Registry setter/replacement.
+Credentials remain prompted. Extend `--replace-secret` and schema/reference
+validation with `registry/password`, `registry/token`,
+`registry/tls/private-key`, and `registry/tls/private-key-password`.
 
-Associate each runtime marker with `profileId` and `profileRevision`; never
-infer profile ownership by inspecting generated client configuration. A session
-remains pinned to the validated profile revision captured when it started, and
-an edit affects only later sessions. Show session IDs, supervisor PIDs, or
-resolved runtime paths only when the existing safe verbose-output policy allows
-them.
+Create provider-specific resolved Registry models and adapter renderers. A
+property valid in the Java Registry client is not automatically a kcat,
+Kaskade, or Python Registry property. Confluent console credentials must reach
+a private producer/consumer config file using the client-required Registry
+prefixes; never pass secret-bearing `--property` arguments. kcat Avro support
+must be checked against its actual linked Registry library. If a client only
+supports credentials inside its Registry URL/argv, reject that mode. Kaskade
+uses its private INI `[registry]` mapping, with independently tested provider
+fields. Keep the plaintext URL-only path working. Reject native Apicurio
+Registry decoding for Confluent consoles and kcat.
 
-### Remaining commands
+Use the native connection properties in the normalization appendix below.
+Fixed bearer tokens apply only to Confluent-compatible Registry. Require basic
+and OAuth paths for both providers through ping and at least one verified
+client; support Registry mTLS only where the client exposes a proven safe PEM
+mapping. Document unsupported cells explicitly, without insecure fallbacks.
+
+### 2.2 OAuth lifecycle for Kafka and Registry
+
+**Architecture:** add a shared typed OAuth configuration containing HTTPS token
+URL, client ID, ordered unique scopes, clientSecretRef, and optional public
+CA material for the token endpoint. Keep each owner's OAuth configuration
+independent. Token secrets use `kafka/oauth/client-secret` and
+`registry/oauth/client-secret`. Scope replacement is atomic; omission on edit
+keeps scopes. Client credentials is the only grant. Do not persist access or
+refresh tokens. No custom audience, executable callback, discovery provider,
+client assertion, or Strimzi client-side OAuth module.
+
+**CLI delta, on both `add` and `edit`:**
 
 ```text
-Usage: kantrip ping [OPTIONS] PROFILE
-
-Check Kafka and configured Registry connectivity.
-
-Options:
-      --timeout SECONDS  Maximum operation time. Default: 5.
-  -q, --quiet            Emit no output; communicate through exit status.
+--auth oauth
+--oauth-token-url URL
+--oauth-client-id TEXT
+--oauth-scope TEXT                       (repeatable)
+--oauth-ca-file PATH
+--registry-oauth-token-url URL
+--registry-oauth-client-id TEXT
+--registry-oauth-scope TEXT              (repeatable)
+--registry-oauth-ca-file PATH
+--registry-oauth-logical-cluster TEXT
+--registry-oauth-identity-pool-id TEXT
 ```
 
-```text
-Usage: kantrip exec PROFILE [-- COMMAND...]
+The last two are Confluent routing metadata, accepted only for Registry OAuth.
+On `edit` also add `--clear-oauth-scopes`, `--oauth-default-trust`,
+`--clear-registry-oauth-scopes`, `--registry-oauth-default-trust`,
+`--clear-registry-oauth-logical-cluster`, and
+`--clear-registry-oauth-identity-pool-id`. Clear/default flags conflict with their
+setters. Reject any option inapplicable to the selected final auth/provider.
+Include both OAuth secret fields in prompted replacement and the editor.
 
-Run a command or interactive subshell using PROFILE.
-```
+For Kafka, delegate acquisition/refresh to librdkafka native OIDC or the
+verified Apache Java callback. Version-gate direct Java client-credentials
+properties versus the documented legacy JAAS callback form; one profile model
+serves both. Version checks must cover the token-endpoint trust mapping. Never
+download plugins, add a token-refresh daemon, or inject a static Kafka token.
 
-```text
-Usage: kantrip current
+Registry clients use their own verified native refresh support. An adapter
+without that capability rejects OAuth; do not emulate a long-lived client's
+refresh via Kantrip. The bounded Registry HTTP ping is different: it needs a
+single in-memory token request through a narrow client-credentials helper,
+verified HTTPS and explicit token-endpoint trust. Bound response size, validate
+token type/expiry, redact OAuth errors, and discard the token after the check.
+Test basic and form-based client authentication only as supported by the chosen
+native clients/provider; do not silently retry different credential methods.
 
-Print the profile active in the current Kantrip session.
-```
+**Acceptance for 2.1–2.2:** independent Kafka/Registry identities and CAs,
+credential rotation/recovery/removal, wrong endpoint trust, invalid secret,
+expired fixed token, and no leakage from wrapped HTTP errors. Keep a real Java
+and librdkafka session alive across token expiry and demonstrate successful
+refresh and later revocation failure. Repeat native Registry refresh for each
+advertised client. A successful short ping is not refresh evidence.
 
-The final top-level command list is therefore `add`, `edit`, `remove`, `list`,
-`describe`, `doctor`, `ping`, `exec`, and `current`. It has the same number of
-top-level commands as the current CLI while absorbing future input-source and
-secret work into the lifecycle verbs users already understand.
+### 2.3 Registry ping without resource-list permission dependencies
 
-### Representative lifecycle
+**Finding:** current `/subjects` can require Confluent `GLOBAL_READ`, and native
+Apicurio resource searches depend on configured roles. Replacing them with a
+public health endpoint would prove availability, not authentication. Sources:
+[Confluent operation authorization](https://docs.confluent.io/platform/current/confluent-security-plugins/schema-registry/authorization/index.html)
+and [Apicurio security](https://www.apicur.io/registry/docs/apicurio-registry/3.0.x/getting-started/assembly-configuring-registry-security.html).
 
-```bash
-kantrip add production \
-  --bootstrap-servers kafka.example.com:9093 \
-  --transport tls \
-  --auth scram-sha-512 \
-  --username app-production \
-  --label environment=production \
-  --label owner=platform
+**Decision:** introduce explicit provider probe strategies in `ping.py` using
+`ssl.SSLContext`, safe Authorization headers, and the common deadline. First
+validate a non-resource endpoint: Confluent-compatible `/schemas/types`
+([API](https://docs.confluent.io/platform/current/schema-registry/develop/api.html))
+and native Apicurio `/users/me`
+([API](https://javadoc.io/static/io.apicurio/apicurio-registry-common/3.0.10/io/apicurio/registry/rest/v3/UsersResource.html)).
+These are endpoint candidates with version/deployment verification gates, not
+a claim that all servers protect them identically. Apicurio ccompat remains a
+separate compatibility case; do not rewrite its base URL into native mode.
 
-kantrip edit production --replace-secret kafka/password
-kantrip edit production --registry-url https://registry.example.com
-kantrip list --label environment=production --label owner=platform
-kantrip describe production --output yaml
-kantrip doctor production --sessions
-```
+For each pinned server/security deployment, prove a valid identity without
+resource roles succeeds and invalid credentials fail at the selected endpoint.
+Validate response shape/content type, and for `/users/me` require non-anonymous
+identity when auth is configured. Do not accept an HTML login page as success.
+A credentialed 200 from a public endpoint or a token issued by an IdP alone is
+insufficient evidence that the Registry accepted the credentials.
 
-This sequence uses the same resource lifecycle throughout: `add` creates,
-`edit` changes, `list` selects, `describe` inspects, and `doctor` diagnoses.
-Secrets enter only through no-echo prompts or approved input sources, and none
-of the inspection commands can return them.
+Keep a reviewed provider/version probe contract recording whether the endpoint
+authenticates, needs a role, or is public. Do not infer this from a product name
+or optional version header alone. For a credentialed 200 without an identity
+response, make a bounded anonymous control request to the same endpoint within
+the same deadline: anonymous 401 followed by credentialed 200 establishes an
+authentication gate. An anonymous 200 does not. Do not submit deliberately wrong
+passwords during normal ping, or add a user-controlled arbitrary probe URL.
+For mTLS use verified handshake evidence from the actual configured connection;
+never claim that optional client certificates were required by the server.
+If authentication cannot be established for a deployment, report `transport verified; authentication unverified` and return
+`1`. For `auth: none`, a validated provider response suffices for connectivity
+but says nothing about resource access. Never downgrade an authenticated
+profile to this result.
 
-## 1. Credential store and profile lifecycle
+An HTTP 401 is authentication failure. An HTTP 403 proves reachability; label
+it authenticated-but-denied only with a verified server contract guaranteeing
+that ordering. Such independent authentication evidence can satisfy ping even
+when resource authorization is denied. Otherwise it is inconclusive, not a
+bad-password claim or a success. Do not grant roles just to make ping green,
+and do not fall back to `/subjects`, `/search/artifacts`, `/config`, or `/mode`.
+Document that arbitrary proxies/authorization filters can make a universally
+role-independent authentication check impossible.
 
-### Implemented foundation
+Disable redirects for authenticated and token requests; never forward
+Authorization to another origin or downgrade HTTPS. Ignore inherited HTTP
+proxy configuration unless an explicitly supported policy is added later.
+Bound reads and retries as well as connection time. Preserve partial service
+results: Kafka success plus Registry failure is an overall failure with both
+outcomes visible in normal mode. Quiet mode remains fully silent.
 
-- Password and mTLS profile mutations stage immutable references through the
-  reconciliation journal before switching SQLite state.
-- Textual PEM private keys and optional key passwords are credential values;
-  public client certificate chains are validated non-secret profile material.
-- PLAIN, both SCRAM mechanisms, and mTLS share one typed resolved connection and
-  separate canonical Java and librdkafka renderers.
+**Acceptance:** real no-role identities, wrong credentials, public endpoint,
+401, verified and ambiguous 403, unsupported endpoint, invalid response,
+redirects, revoked/expired tokens, custom CA, and server-required mTLS. Current
+sandbox Registry role filters are not evidence of a role-free probe. Add
+separate test configurations and record any remaining deployment limitation.
 
-Production verification of realistic PEM sizes against both supported OS store
-families remains part of the final Linux/macOS security matrix.
+## PR 3 — Properties and Strimzi input sources
 
-### Commands
+### 3.1 One normalization pipeline
 
-- Extend `kantrip add PROFILE` with authentication and the explicit
-  `--from-properties` and `--from-strimzi` input sources.
-- Extend `kantrip edit PROFILE` with every mutable profile field, including
-  authentication, Registry TLS and authentication, and prompted secret
-  replacement. With no options, open an interactive editor.
-- For each existing secret, offer explicit keep, replace, or remove decisions.
-  Never display or prefill the current value.
-- Support direct prompted rotation or recovery through repeatable
-  `kantrip edit PROFILE --replace-secret FIELD`; do not add a `secret` command
-  group or a secret-reading interface.
-- Add confirmation to secret-bearing profile removal and `--force` to skip
-  only the prompt, not validation.
-- Extend `doctor` with optional profile scope, detailed `--sessions`,
-  locked-store, missing-reference, certificate-match, and certificate-expiry
-  checks.
+**CLI delta:** `add PROFILE --from-properties FILE|-` and
+`add PROFILE --from-strimzi FILE|-`, mutually exclusive and unavailable on
+`edit`. No extra top-level command. Defaults apply only after source/manual
+merging: the existing `localhost:9092`, plaintext, and default provider must
+not masquerade as explicit values conflicting with an imported connection.
 
-There must be no literal password, client-secret, token, JAAS, or private-key
-value option. Generic secret-provider automation beyond the supported input
-sources accepted by `add` is not part of this MVP.
+**Architecture:** use format-specific parsers feeding a typed candidate plus
+separate ephemeral secret values and source provenance. Merge explicitly
+provided non-secret flags only to fill absent fields or confirm equal normalized
+values. Reject conflicting values, even if supplied later on the command line.
+Validate everything before staging credentials through the existing add path.
+A duplicate profile never overwrites. No raw document, raw JAAS, decoded Secret,
+or arbitrary property map reaches SQLite or a temporary session file.
 
-### Profile revision and concurrency contract
+Bound source bytes and decoded content (1 MiB per document/PEM initially),
+property count, YAML nesting, and token lengths. Reject duplicate YAML/JSON
+keys, multiple documents, invalid encoding, invalid base64, and non-regular file
+inputs; `-` is the explicit streaming alternative. Use safe parsers and never
+include source values/lines in parser errors. Preserve user-owned source files.
+Print only a bounded list/count of ignored property names, never values.
 
-Keep the existing stable profile ID, unique profile name, and monotonically
-increasing `revision`. The revision is a generation and concurrency token, not
-a retained version history: the MVP adds no history listing, rollback, or old
-secret recovery.
+### 3.2 Java, librdkafka, and Confluent-generated properties
 
-Normal non-interactive edits remain serialized by the maintenance lock and a
-SQLite `BEGIN IMMEDIATE` transaction. An edit that prompts for secret material
-must not hold the lock while the user types. It instead reads the profile ID and
-revision, collects and validates input, acquires the lock, reloads the profile,
-and commits only with the expected generation:
+Implement Java escaping, Unicode escapes, comments, separators, and continuation
+semantics explicitly; generic INI parsing is insufficient. Use a tokenizer for
+supported JAAS modules/options and quoted escapes, not regex credential
+extraction. Reject duplicate/conflicting security aliases and mixed dialects.
+Shared unambiguous fields may normalize without choosing a dialect; reject a
+combination requiring ambiguous interpretation instead of guessing.
 
-```sql
-UPDATE profiles
-SET revision = revision + 1, document = ?
-WHERE id = ? AND revision = ?
-```
+Normalize the allowlist below, including all PR 2 auth variants. Resolve PEM
+file references relative to the source file; stdin requires absolute paths.
+Read file contents into the model/store, never retain an external private-key
+path as a live dependency. Reject JKS/PKCS12 and custom login/callback classes.
+Support only the documented official OAuth callback shapes. Ignore application
+properties such as `acks`, `group.id`, serializers, timeouts, retries, caches,
+subject strategies, and schema IDs; reject unknown security-like keys,
+disabled verification, proxy configuration, and unsupported security modes.
 
-Exactly one row must change. A mismatch leaves the old profile usable, safely
-discards or journals staged credential references, and asks the user to retry.
-Every session records and remains bound to the revision from which its private
-configuration was generated. The revision appears in `describe` and detailed
-session diagnostics, but not in the default profile list.
+Registry namespace handling must be explicit: a combined Kafka document's bare
+`ssl.*` always refers to Kafka. Accept Registry-prefixed client properties only
+with a verified producer dialect and strip the prefix into Registry fields.
+Do not guess that one CA or key applies to both services. Standalone
+Registry-only properties can fill a Registry connection while explicit flags
+provide Kafka endpoints; ambiguous unprefixed TLS material is rejected.
 
-## 2. Profile input sources
+Confluent-generated properties are public generator output, not a private CLI
+credential cache. Version and preserve synthetic fixtures produced by
+the [public Java generator](https://docs.confluent.io/confluent-cli/current/command-reference/kafka/client-config/create/confluent_kafka_client-config_create_java.html)
+(`confluent kafka client-config create java`); never invoke the vendor CLI on
+the user's behalf or store its output. An unsupported generated property must fail
+with the property name and a capability explanation.
 
-External documents are explicit input sources for `kantrip add`, not a separate
-`import` command family. Every source creates a new Kantrip profile through the
-same schema validation, credential staging, SQLite commit, and reconciliation
-workflow as manual creation. A source never overwrites an existing profile.
+### 3.3 Strimzi KafkaUser-generated Secrets
 
-### Client properties source
+Accept exactly one Kubernetes `kind: Secret`, `apiVersion: v1`, JSON/YAML,
+with standard base64 `data` from a TLS or SCRAM KafkaUser. Reject `KafkaUser`,
+`List`, arbitrary secret shapes, ambiguous mixed TLS/SCRAM fields, and
+unsupported `stringData` in this generated-Secret contract.
 
-Add these creation forms:
+- SCRAM requires `data.password`, selects SCRAM-SHA-512 over TLS, and uses
+  `metadata.name` as username only for a recognized generated KafkaUser Secret.
+  Explicit `--username` may fill missing metadata, never conflict with it.
+  Validate Strimzi labels/shape without calling Kubernetes.
+- mTLS requires `data.user.crt` and `data.user.key`; verify correspondence.
+  Standard ancillary `user.p12`, `user.password`, and `sasl.jaas.config` entries
+  may be ignored by name when the required PEM/password fields suffice. They
+  must not turn an otherwise standard Strimzi Secret into a rejected document,
+  nor become a fallback to PKCS12 or raw JAAS parsing.
+- Require `--bootstrap-servers`; use `--ca-file` for cluster server trust when
+  necessary. A user's certificate issuer CA does not automatically establish
+  listener trust; do not infer it from unrelated Secret data. Infer TLS from
+  the recognized secure source; explicit conflicting `--transport plaintext`
+  fails. Do not discover listeners, namespaces, or other Secrets.
 
-```text
-kantrip add PROFILE --from-properties FILE
-kantrip add PROFILE --from-properties -
-```
+### 3.4 Sandbox exports and acceptance
 
-The input handler accepts supported Java properties, librdkafka properties, and
-the client properties emitted by Confluent's public client-config generator.
+Update `sandbox/__main__.py` exports alongside import support. Its current mTLS
+properties use PKCS12 and cannot serve as a positive PEM import test. Export a
+separate Java PEM mTLS fixture, librdkafka variants, complete bootstrap metadata,
+and independent OAuth endpoint trust. Retain PKCS12 only as a clearly negative
+import fixture if still useful for external-client tests. All generated values
+stay under ignored mode-0700 `sandbox/.state`, files mode 0600.
 
-- Parse only an allowlist of Kafka connection, TLS, authentication, and
-  Confluent-compatible Registry properties.
-- Parse Java property escaping and line continuation explicitly; do not treat a
-  Java properties document as generic INI or YAML.
-- Detect the Java or librdkafka dialect from recognized keys and reject mixed or
-  ambiguous security configuration instead of guessing.
-- Parse supported JAAS login-module syntax with a tokenizer that handles quoted
-  values and escapes. Do not extract credentials with regular expressions.
-- Accept only the PLAIN, SCRAM, mTLS, and OAuth client-credentials shapes
-  represented by Kantrip's schema. Reject custom callback classes, arbitrary
-  login modules, and unknown secret-bearing properties.
-- Move passwords, API secrets, client secrets, inline private keys, and Registry
-  credentials into the approved credential store before committing the profile.
-- For a supported private-key path, resolve relative paths against the source
-  properties file and read the key contents. Stdin input requires an absolute
-  path because it has no stable source directory. Reject JKS and PKCS12 inputs
-  rather than attempting an implicit conversion.
-- Ignore recognized properties outside the connection allowlist, even when they
-  are non-secret. Report ignored property names, never their values.
-- Fail closed on unknown `ssl.*`, `sasl.*`, `*.auth.*`, token, password,
-  secret, credential, certificate, or private-key properties. This prevents a
-  misspelled or newer security property from being silently discarded.
-- Normalize into the existing typed connection fields. Never reintroduce the
-  removed generic `properties.common`, `properties.java`, or
-  `properties.librdkafka` passthroughs.
-- Treat an input file as user-owned and never modify or delete it. Recommend
-  stdin for generated files that contain secrets so users do not need to leave
-  another plaintext copy on disk.
-- Do not read private implementation files belonging to another CLI and do not
-  invoke a vendor CLI with secrets in argv.
+**Acceptance:** file and stdin forms, every supported auth source, escaped
+credentials/continuations, source-relative paths, missing terminal for a prompt,
+manual/source conflicts, duplicate name/keys, malformed/oversized input,
+unknown security keys, and source-file preservation. Verify credentials land
+only in the OS store and canonical regenerated client files. Add round-trip
+*normalization tests*, not a public profile export feature. Exercise Confluent
+and both Strimzi forms against the live services.
 
-A supported Confluent workflow is:
+## PR 4 — `kcl` and `kafkactl` adapters
 
-```bash
-confluent kafka client-config create java |
-  kantrip add production --from-properties -
-```
+**Architecture:** extend `adapters.py`, session rendering, shim dispatch,
+capabilities, doctor discovery, and environment sanitization together.
 
-### Strimzi credential source
-
-Add these creation forms:
-
-```text
-kantrip add PROFILE --from-strimzi FILE [options]
-kantrip add PROFILE --from-strimzi - [options]
-```
-
-- Accept exactly one Kubernetes `Secret` JSON or YAML document generated for a
-  Strimzi `KafkaUser`, containing the standard `data.password`,
-  `data.user.crt`, or `data.user.key` fields. The `KafkaUser` custom resource
-  describes authentication and authorization but does not contain the
-  generated credential values; reject `kind: KafkaUser` with guidance to read
-  the same-named generated Secret instead.
-- Decode and validate the base64 data, then normalize it into Kantrip's existing
-  SCRAM or mTLS profile model. Do not create a separate Strimzi profile type.
-- Require bootstrap servers and any cluster CA information not present in the
-  KafkaUser Secret as explicit non-secret options or user-owned file paths.
-- Store decoded secret values directly in the credential store and never write
-  the source Secret document to a temporary file.
-- Treat a source file as user-owned and never modify or delete it.
-- Reject unsupported Secret shapes, conflicting TLS/SCRAM fields, missing
-  connection metadata, and Kubernetes resources other than a single Secret.
-- Do not call `kubectl` or discover listeners, namespaces, clusters, or CA
-  Secrets automatically.
-
-A supported file workflow is:
-
-```bash
-kantrip add production \
-  --from-strimzi kafka-user-secret.yaml \
-  --bootstrap-servers kafka.example.com:9093 \
-  --ca-file cluster-ca.crt
-```
-
-A supported direct Kubernetes workflow keeps the credential document out of a
-persistent plaintext file:
-
-```bash
-kubectl get secret kafka-user \
-  --namespace kafka \
-  --output yaml |
-  kantrip add production \
-    --from-strimzi - \
-    --bootstrap-servers kafka.example.com:9093 \
-    --ca-file cluster-ca.crt
-```
-
-Do not document `kubectl get kafkauser kafka-user --output yaml` as an input
-source. Strimzi normally creates a credential-bearing Kubernetes Secret with
-the same name as the `KafkaUser`; the generated Secret is the input Kantrip
-needs. The explicit `--from-strimzi` name identifies this supported producer
-and schema without implying that Kantrip accepts arbitrary Kubernetes Secrets
-or invokes Kubernetes APIs itself.
-
-## 3. Kafka TLS and authentication
-
-Extend the current verified-TLS schema and canonical client-property
-construction in this order:
-
-1. SASL/PLAIN over TLS.
-2. SCRAM-SHA-256 and SCRAM-SHA-512 over TLS.
-3. Mutual TLS.
-4. OAuth/OAUTHBEARER client credentials over TLS.
-
-SASL without TLS is rejected except for explicitly documented loopback test
-infrastructure.
-
-### Standard Kafka client properties
-
-Kantrip stores one provider-neutral connection model. Input normalization and
-rendering use the following product-native property allowlist; profile documents do not
-expose these names as an arbitrary property map.
-
-| Connection concern | Java client properties | librdkafka properties |
+| Client | Configuration contract to verify against the pinned client | Required first-release security |
 | --- | --- | --- |
-| Broker endpoints | `bootstrap.servers` | `bootstrap.servers` |
-| Transport | `security.protocol` | `security.protocol` |
-| Server CA | `ssl.truststore.type=PEM` plus `ssl.truststore.certificates`, or a verified PEM `ssl.truststore.location` | `ssl.ca.pem` or `ssl.ca.location` |
-| Client certificate | `ssl.keystore.type=PEM` and `ssl.keystore.certificate.chain` | `ssl.certificate.pem` or `ssl.certificate.location` |
-| Client private key | `ssl.keystore.key` and, when required, `ssl.key.password` | `ssl.key.pem` or `ssl.key.location` and, when required, `ssl.key.password` |
-| TLS verification | `ssl.endpoint.identification.algorithm=HTTPS` | `enable.ssl.certificate.verification=true` and `ssl.endpoint.identification.algorithm=https` |
-| SASL mechanism | `sasl.mechanism` | `sasl.mechanism` |
-| PLAIN or SCRAM credentials | Kantrip-generated `sasl.jaas.config` | `sasl.username` and `sasl.password` |
-| OAuth client credentials | `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.credentials.client.id`, `sasl.oauthbearer.client.credentials.client.secret`, and optional `sasl.oauthbearer.scope` on verified current clients | `sasl.oauthbearer.method=oidc`, `sasl.oauthbearer.token.endpoint.url`, `sasl.oauthbearer.client.id`, `sasl.oauthbearer.client.secret`, and optional `sasl.oauthbearer.scope` |
-| OAuth token-endpoint CA | The standard callback's documented SSL options when supported by the verified client version; otherwise default client trust or a capability error | `https.ca.pem` or `https.ca.location` |
+| `kcl` | Private TOML selected with `KCL_CONFIG_PATH`; reject profile/config-path/bootstrap/TLS/auth overrides | Plaintext, TLS, PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 |
+| `kafkactl` | Private YAML selected with `KAFKA_CTL_CONFIG`; `KAFKA_CTL_WRITABLE_CONFIG` points inside the session; disable its keyring integration | Plaintext, TLS, PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 |
 
-For Java clients that predate the direct
-`sasl.oauthbearer.client.credentials.*` properties, Kantrip may generate the
-standard `OAuthBearerLoginModule` JAAS options (`clientId`, `clientSecret`, and
-optional `scope`) and the official `sasl.login.callback.handler.class`. That is
-a version-gated renderer, not a second profile shape. Input processing may
-accept either documented Java form and normalize both to the same profile fields.
+Pin and record actual client versions, official config-key references, and
+minimum tested versions in the same PR. The upstream [kcl configuration contract](https://github.com/twmb/kcl#configuration)
+and [kafkactl configuration contract](https://github.com/deviceinsight/kafkactl#configuration)
+document these environment variables. Recheck against the exact pinned versions.
+Use `keyring.enabled=false` in kafkactl; reject `--clear-keyring` and any
+credential-provider/plugin path that bypasses the selected profile. kcl's
+`-B`/`--bootstrap-servers`, `-C`/`--profile`, `--config-path`, and security-bearing
+`-X` overrides must not supersede the profile. Remove conflicting inherited
+`KCL_*` and `KAFKA_CTL_*` connection settings before injecting owned variables.
+Do not invent flags or assume Registry support. mTLS and OAuth are optional
+capability cells requiring native mappings and live tests; otherwise reject
+them explicitly. Add no new Kantrip commands or options. Document each injected
+file variable and the exact rejected external-client flags in compatibility.
 
-`ssl.endpoint.identification.algorithm` cannot be empty, and librdkafka's
-certificate verification cannot be false. Custom SSL engines, security
-providers, SASL login modules, callbacks other than the verified Apache Kafka
-callback, Kerberos, client assertions, unmanaged access tokens, and OAuth
-metadata-provider modes are rejected.
+Keep original user config/keyring untouched; create no persistent client
+context. Both clients work through `exec PROFILE -- CLIENT ...` and temporary
+Bash/Zsh/Fish shims. Recognize split, equals, and short override forms. Scope
+config-write behavior to the runtime and verify cleanup after errors/signals.
 
-Kafka producer, consumer, topic, group, serialization, timeout, retry,
-buffering, compression, and observability properties are ignored. Examples
-include `acks`, `group.id`, `auto.offset.reset`, `client.id`, serializers,
-deserializers, and `request.timeout.ms`.
+**Acceptance:** version-pinned direct and interactive operations for each
+required mechanism; unsupported combination refuses before operation; original
+config files remain unchanged; no secrets in process arguments; no external
+keyring writes. Include client-native metadata/produce/consume commands proven
+by the pinned `--help` in manual QA before marking the PR complete.
 
-### Rendering
+## PR 5 — Release verification and documentation closure
 
-- Build one resolved in-memory session model, then render Java and librdkafka
-  properties independently.
-- Construct and escape Java JAAS internally. Raw JAAS input is not part of the
-  profile schema.
-- Materialize client certificates and private-key PEM only inside the private
-  session directory when their source is the credential store.
-- Prefer Java PEM properties on verified Kafka client versions. Older clients
-  that require JKS or PKCS12 fail with an actionable capability error; Kantrip
-  does not run conversion tools with secrets in argv.
-- Use librdkafka's native TLS, SASL, and OIDC property names.
+### 5.1 Integration evidence and release gates
 
-### OAuth scope
+Run and record supported Linux/macOS and Python 3.10–3.14 checks; use actual
+macOS Keychain and Linux Secret Service for store integration. Offline tests
+remain offline. Keep the existing smoke workflow and PTY shell contract; add
+secure integrations separately rather than making ordinary tests require
+Docker or keyring access. Pin test clients and retain sanitized evidence for
+minimum and representative current versions.
 
-- Support the OAuth 2.0 client-credentials grant only.
-- Keep the token endpoint, client ID, scopes, product-defined authentication
-  routing identifiers, and token-endpoint CA separate from broker TLS
-  configuration. Do not add a generic audience field unless a supported client
-  has a documented native connection property for it.
-- Store the client secret in the credential store.
-- For librdkafka-based clients, use the built-in OIDC configuration so the
-  client owns token refresh.
-- For supported Java Kafka versions, render the built-in OAuth login callback
-  configuration. If that callback is unavailable, fail before launch.
+Fill any remaining infrastructure gaps: PLAIN/SCRAM-SHA-256, authorizer-enabled
+Kafka with no-ACL principals, no-role and wrong-credential Registry identities,
+Registry TLS-only/mTLS, token expiry/revocation, and encrypted/realistic PEM
+keys. These fixtures must be ready before their corresponding manual checks.
+Do not accept “not installed” as a pass for a required compatibility cell.
+Record optional unsupported cells explicitly.
 
-Refresh-token and fixed-access-token profile modes are deliberately deferred.
-They add lifecycle and expiry behavior without being required for the initial
-client-credentials use case.
+Required existing gates for every PR:
 
-## 4. Registry TLS and authentication
+```bash
+uv run --locked python -m scripts.analyze
+uv run --locked python -m scripts.tests
+uv build --clear
+uv run --locked python -m scripts.verify_release dist
+```
 
-Extend the existing independent `registry` object for:
+Release integration also runs:
 
-- HTTPS server verification with a system or profile CA.
-- Basic authentication for Confluent-compatible and native Apicurio clients.
-- OAuth client credentials for Confluent-compatible and native Apicurio clients.
-- Fixed bearer-token authentication for Confluent-compatible clients only.
-- Optional client certificate authentication when the selected provider and
-  client version expose a verified native mapping.
+```bash
+uv run --locked python -m scripts.verify_shell_contract
+uv run --locked python -m scripts.smoke
+```
 
-Keep Confluent-compatible and native Apicurio property names separate.
+Complete the manual QA below against the built wheel, record candidate commit,
+OS, client/server/library versions, expected/actual result, and sanitized
+failure evidence. Automated gates and smoke do not replace human QA, and human
+QA does not replace them. Do not publish or tag as part of roadmap implementation.
 
-### Confluent Schema Registry client properties
+### 5.2 Synchronize all documentation with the implemented result
 
-Use only the unprefixed standard Schema Registry client properties below.
-Framework-specific prefixes are applied only by an adapter when that
-framework's documented configuration format requires them.
+Update affected docs in every PR, then audit the whole repository in this final
+PR. Replace obsolete claims rather than accumulating “old/new” sections.
 
-| Connection concern | Standard properties and constraints |
+| Artifact | Required final review |
 | --- | --- |
-| Registry endpoint | `schema.registry.url`; the MVP accepts exactly one URL to match the profile model |
-| Server CA and mTLS | `ssl.truststore.type=PEM`, `ssl.truststore.certificates`, `ssl.keystore.type=PEM`, `ssl.keystore.certificate.chain`, `ssl.keystore.key`, and optional `ssl.key.password`; verified PEM file-location variants may be used when required by the client |
-| TLS verification | `ssl.endpoint.identification.algorithm=HTTPS` |
-| Basic authentication | `basic.auth.credentials.source=USER_INFO` and `basic.auth.user.info` |
-| Fixed bearer token | `bearer.auth.credentials.source=STATIC_TOKEN` and `bearer.auth.token` |
-| OAuth client credentials | `bearer.auth.credentials.source=OAUTHBEARER`, `bearer.auth.issuer.endpoint.url`, `bearer.auth.client.id`, `bearer.auth.client.secret`, and optional `bearer.auth.scope` |
-| Required authorization routing | Optional `bearer.auth.logical.cluster` and `bearer.auth.identity.pool.id`, only when required by the target service |
+| `README.md` | Actual first-release capabilities, onboarding, current examples and concise limitations |
+| `USAGE.md` | Complete help/option contract, no-echo interactions, imports, independent trust, scoped doctor/sessions, ping proof/exit status, exact child environment |
+| `COMPATIBILITY.md` | Separate CLI/version, Kafka protocol/auth, Registry provider/auth, input-format, and generated-format matrices; supported/unsupported/conditional cells with evidence and minimum tested version |
+| `ARCHITECTURE.md`, `images/*.svg` | Actual resolvers, mutation flow, capability checks, native refresh, session revision attribution, probe state and input pipeline |
+| `THREAT_MODEL.md`, `SECURITY.md` | Implemented controls versus residual risk; token request/redirect handling, imported documents, keyring limits, no-ACL/no-role proof limits |
+| `AGENT.md`, `DEVELOPMENT.md` | Durable final contracts, first-release boundary, fixture/integration workflows, supported platforms and dependencies |
+| `MANUAL_TESTING.md` | Move completed runnable QA scenarios here, remove superseded expectations, keep setup/actions/results and release checklist entry point |
+| `RELEASE_CHECKLIST.md` | Link manual first-release gate and compatibility evidence; distinguish first release from upgrades of published versions |
+| `schemas/`, `examples/` | Implemented schema only, synthetic examples covering secure profiles and supported input formats; no secrets or live references |
+| `scripts/`, `sandbox/`, `.github/`, `pyproject.toml` | Help, fixtures, smoke, release packaging inclusion, workflow/template references and version pins match the final contract |
+| `MVP.md` | Delete completed PRs, retain only genuinely unfinished work; preserve manual QA by moving it before removal |
 
-Do not put credentials in `schema.registry.url`. Reject the `URL`,
-`SASL_INHERIT`, `SASL_OAUTHBEARER_INHERIT`, and custom credential-provider
-sources because they hide Registry identity inside a URL, Kafka configuration,
-or executable code. Kantrip renders explicit Registry credentials from the
-Registry portion of the profile.
+Compatibility must distinguish schema acceptance from CLI creation, session
+execution, ping, and import. Document Java PEM gates, actual linked librdkafka
+and Registry libraries, kcat's Avro-only Registry decoding, Kaskade's native
+Apicurio support, unsupported provider/mechanism combinations, and file formats
+that are output-only. Do not label JSON/YAML `describe` as an import/export
+format. Include plaintext, verified TLS, PLAIN, both SCRAM mechanisms, mTLS,
+OAuth/OAUTHBEARER, Registry basic/fixed bearer, Java/librdkafka properties,
+Confluent-generated properties, and Strimzi Secret JSON/YAML explicitly.
 
-### Native Apicurio Registry client properties
+## Connection-property normalization reference
 
-Use the standard Apicurio Registry client namespace without translating it to
-Confluent property names.
+This is a closed mapping specification, not generic passthrough. Verify exact
+keys and minimum client versions when implementing PRs 2–4. Native libraries
+with incompatible prefixes, unsupported PEM, or missing refresh get a distinct
+adapter mapping or a capability error.
 
-| Connection concern | Standard properties and constraints |
-| --- | --- |
-| Registry endpoint | `apicurio.registry.url` |
-| Server CA | `apicurio.registry.tls.truststore.type=PEM` with `apicurio.registry.tls.truststore.location`, or `apicurio.registry.tls.certificates` |
-| TLS verification | `apicurio.registry.tls.verify-host=true`; `apicurio.registry.tls.trust-all` is never enabled |
-| Basic authentication | `apicurio.registry.auth.username` and `apicurio.registry.auth.password` |
-| OAuth client credentials | `apicurio.registry.auth.service.token.endpoint`, `apicurio.registry.auth.client.id`, and `apicurio.registry.auth.client.secret` |
-| Client certificate | `apicurio.registry.tls.client-certificate` and `apicurio.registry.tls.client-key`, only for an Apicurio client version whose integration test proves support |
+| Concern | Java Kafka | librdkafka |
+| --- | --- | --- |
+| Bootstrap / transport | `bootstrap.servers`, `security.protocol` | Same |
+| CA | `ssl.truststore.type=PEM` + `ssl.truststore.certificates` or PEM `ssl.truststore.location` | `ssl.ca.pem` or `ssl.ca.location` |
+| Client certificate | `ssl.keystore.type=PEM`, `ssl.keystore.certificate.chain` | `ssl.certificate.pem` or `.location` |
+| Private key | `ssl.keystore.key`, optional `ssl.key.password` | `ssl.key.pem` or `.location`, optional `ssl.key.password` |
+| Verification | `ssl.endpoint.identification.algorithm=HTTPS` | `enable.ssl.certificate.verification=true`, `ssl.endpoint.identification.algorithm=https` |
+| SASL | `sasl.mechanism`, internally constructed `sasl.jaas.config` | `sasl.mechanism`/recognized `sasl.mechanisms` alias, `sasl.username`, `sasl.password` |
+| OAuth | Verified callback plus `sasl.oauthbearer.token.endpoint.url`, direct `sasl.oauthbearer.client.credentials.client.id`/`.client.secret` and scope, or version-gated official JAAS form | `sasl.oauthbearer.method=oidc`, `.token.endpoint.url`, `.client.id`, `.client.secret`, `.scope` |
+| Token CA | Standard callback's versioned SSL options; separate from broker CA | `https.ca.pem` or `https.ca.location` |
 
-Kantrip does not invent an Apicurio property for a fixed bearer token or OAuth
-scope. If a selected native client does not expose a documented standard
-property required by the profile, the adapter fails before launch.
+| Concern | Confluent Registry client namespace | Native Apicurio namespace |
+| --- | --- | --- |
+| URL | `schema.registry.url` | `apicurio.registry.url` |
+| Basic | `basic.auth.credentials.source=USER_INFO`, `basic.auth.user.info` | `apicurio.registry.auth.username`, `.password` |
+| Fixed bearer | `bearer.auth.credentials.source=STATIC_TOKEN`, `bearer.auth.token` | Unsupported |
+| OAuth | `bearer.auth.credentials.source=OAUTHBEARER`, `.issuer.endpoint.url`, `.client.id`, `.client.secret`, `.scope` | `apicurio.registry.auth.service.token.endpoint`, `.client.id`, `.client.secret` |
+| Routing | `bearer.auth.logical.cluster`, `bearer.auth.identity.pool.id` | No invented equivalents |
+| TLS/mTLS | Standard client `ssl.*` PEM trust/key fields, correctly prefixed when combined with Kafka | Version-verified `apicurio.registry.tls.*` PEM trust, certificates, verify-host and client identity properties |
 
-Properties that choose or mutate schema behavior are ignored and never stored
-or injected. This includes `apicurio.registry.artifact.version`, artifact/group
-IDs, resolver strategies, auto-registration, lookup strategy, ID/header
-encoding, fallback behavior, cache, retry, and telemetry settings. The same rule
-excludes Confluent serializer behavior such as subject-name strategies,
-`auto.register.schemas`, `use.latest.version`, normalization, compatibility,
-cache, and retry settings.
+Never accept Registry `URL`, `SASL_INHERIT`,
+`SASL_OAUTHBEARER_INHERIT`, custom credential providers, credentials in URLs,
+`trust-all`, empty hostname-verification settings, or Kafka/Registry identity
+inheritance. Do not invent a native Apicurio scope or client-key property if its
+selected client does not expose it. Reject that profile/client combination.
 
-HTTP proxy properties are connection-related but remain outside this MVP. They
-must be added later as explicit typed profile fields rather than admitted
-through a generic property map.
+## Manual QA — First-release checklist
 
-- Extend Registry ping with `ssl.SSLContext` and explicit Authorization
-  headers. Redact URLs and wrapped HTTP errors before presentation.
-- Render Registry credentials only into a private provider-specific file or a
-  child-only variable required by a verified client.
-- Never merge Registry credentials into the Kafka properties file unless the
-  target client requires a single combined format.
-- Treat HTTP 401 as authentication failure and HTTP 403 as an authenticated but
-  unauthorized response when the provider follows those semantics. Do not
-  describe a resource-list request as permission-independent.
+Run this section **after the owning PRs land**, using the candidate wheel. These
+are human checks, not claims that future flags work in the audited commit.
+Keep boxes unchecked here; record results externally per candidate. Use only
+disposable laboratory identities and data. Run shell blocks in Bash/Zsh unless
+the step explicitly enters Fish. Any capitalized placeholder must be replaced
+with a non-secret value from the pinned fixture's setup instructions.
 
-## 5. Connectivity diagnostics
+### QA 1 — Install and isolate the release candidate
 
-Extend the existing `confluent-kafka` AdminClient probe; do not implement a
-second Kafka protocol stack inside Kantrip.
+- [ ] Build/verify artifacts using PR 5 commands. Install the exact wheel in a
+  fresh virtual environment; use that `kantrip` for all following commands.
+  Supply the actual wheel filename, not a literal placeholder:
 
-- Resolve the secure profile, build the same librdkafka configuration used by a
-  session, and perform a bounded metadata request.
-- Classify DNS, TCP/timeout, TLS, broker authentication, and authorization
-  errors using stable librdkafka error categories.
-- A successful client construction alone is not a successful ping; at least one
-  broker operation must complete.
-- If authentication succeeds but metadata authorization is denied, report the
-  connection/authentication stage as successful and authorization as untested
-  or denied. Do not claim that `ping` is independent of broker ACLs.
-- Continue accepting `kantrip ping PROFILE --timeout SECONDS`. Additional
-  endpoint-policy or JSON interfaces require a separate demonstrated use case.
+  ```bash
+  uv venv /tmp/kantrip-release-qa
+  uv pip install --python /tmp/kantrip-release-qa/bin/python dist/ACTUAL_WHEEL.whl
+  export PATH="/tmp/kantrip-release-qa/bin:$PATH"
+  kantrip --version
+  kantrip --help
+  export KANTRIP_QA_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/kantrip-release.XXXXXX")"
+  chmod 700 "$KANTRIP_QA_ROOT"
+  mkdir -m 700 "$KANTRIP_QA_ROOT/runtime"
+  export KANTRIP_DATABASE="$KANTRIP_QA_ROOT/data/profiles.db"
+  export XDG_RUNTIME_DIR="$KANTRIP_QA_ROOT/runtime"
+  kantrip list -o json
+  kantrip doctor
+  test ! -e "$KANTRIP_DATABASE"
+  ```
 
-## 6. Client adapters
+  Expect the candidate version, exactly the nine lifecycle commands, an empty
+  JSON list, and no database creation by inspection. Doctor may report missing
+  optional clients; record each. Configure an approved OS store and do not use
+  a plaintext keyring fallback. Copy these three isolation variables to any
+  second terminal. Confirm the virtual environment path was unused beforehand.
 
-### Existing adapters
+### QA 2 — Sandbox, plaintext, TLS, and profile observations
 
-Extend the existing Apache Kafka, Confluent Platform, Confluent Registry console,
-kcat, and Kaskade adapters only for the authentication combinations their
-underlying clients actually support. Each matrix entry needs a minimum tested
-client version and a fail-closed capability error.
+- [ ] Bring up the existing sandbox from the repository root and inspect it:
 
-Do not duplicate OAuth acquisition in an adapter when the underlying Java or
-librdkafka client already implements client-credentials refresh.
+  ```bash
+  uv run --locked python -m sandbox up
+  uv run --locked python -m sandbox status
+  kantrip add qa-plain -b localhost:9092 -l release=qa
+  kantrip add qa-tls -b localhost:9093 --transport tls \
+    --ca-file sandbox/.state/ca.crt -l release=qa
+  kantrip ping qa-plain
+  kantrip ping qa-tls
+  kantrip exec qa-plain -- kafka-topics.sh --create \
+    --topic qa-release --partitions 1 --replication-factor 1
+  kantrip list -l release=qa -o json
+  kantrip describe qa-tls -o yaml
+  NO_COLOR=1 kantrip describe qa-tls
+  kantrip describe qa-tls --no-color -o json
+  ```
 
-### New adapters
+  Expect correct transport/auth observations, custom CA trust, no ANSI in
+  unstyled outputs, no credentials/references, and valid JSON/YAML. Test duplicate
+  `add qa-tls` fails without mutation. A profile with a wrong CA or hostname
+  must fail ping as TLS failure, not authentication failure.
 
-Add only:
+### QA 3 — Password and mTLS lifecycle
 
-- `kcl`, using a private temporary TOML profile selected through
-  `KCL_CONFIG_PATH`. Reject explicit bootstrap, profile, config-path, TLS, and
-  authentication overrides.
-- `kafkactl`, using a private temporary YAML configuration selected through
-  `KAFKA_CTL_CONFIG`. Point `KAFKA_CTL_WRITABLE_CONFIG` inside the Kantrip
-  session and disable kafkactl's own keyring integration so it cannot persist a
-  second copy of Kantrip-managed secrets.
+- [ ] Create SCRAM and mTLS profiles using sandbox material. Obtain the SCRAM
+  password through a private local credential viewer, enter it only at the
+  no-echo prompt, and do not paste it into argv or transcripts:
 
-TLS, PLAIN, and SCRAM are required for both new adapters. mTLS and OAuth are
-enabled only after version-pinned integration tests prove a safe native mapping.
-Unsupported combinations fail before the child starts.
+  ```bash
+  kantrip add qa-scram -b localhost:9094 --transport tls \
+    --ca-file sandbox/.state/ca.crt --auth scram-sha-512 \
+    --username kantrip-scram -l release=qa
+  kantrip add qa-mtls -b localhost:9095 --transport tls \
+    --ca-file sandbox/.state/ca.crt --auth mtls \
+    --client-certificate-file sandbox/.state/user.crt \
+    --client-key-file sandbox/.state/user.key -l release=qa
+  kantrip ping qa-scram
+  kantrip ping qa-mtls
+  kantrip describe qa-scram
+  kantrip edit qa-scram --replace-secret kafka/password
+  kantrip ping qa-scram
+  kantrip edit qa-scram
+  ```
 
-Add both explicit-command adaptation and temporary subshell shims. Use
-documented config-path environment variables so secrets never appear in argv.
+  Enter a deliberately wrong password during replacement, expect authentication
+  failure, then replace it with the correct value and expect success. In the
+  editor verify keep/replace/remove and cancellation without displaying existing
+  values. Repeat creation/ping for `--auth plain` and `--auth scram-sha-256`
+  against PR 1's documented fixture endpoints; do not reuse port 9094 for these.
+  Repeat mTLS with an encrypted key, incorrect key password, and mismatched
+  certificate; invalid identity must fail before launching a client.
 
-## Delivery order
+### QA 4 — Session attribution and concurrent edits
 
-1. **Complete:** add PLAIN, SCRAM, and mTLS to the schema and shared renderers.
-2. Add the properties and Strimzi input sources to `add`.
-3. Extend the existing adapters and authenticated `ping` for those mechanisms.
-4. Add secure Registry connections.
-5. Add OAuth client credentials through verified native Java and librdkafka
-   mechanisms.
-6. Add the `kcl` and `kafkactl` adapters.
-7. Run the complete Linux/macOS integration and security matrix and synchronize
-   all current-feature documentation.
+- [ ] Terminal A runs a long enough command to inspect in Terminal B:
 
-Credential storage precedes authenticated profiles so secrets never need a
-temporary insecure representation. Basic TLS and SASL precede OAuth so the
-renderer and adapter boundaries are proven before token lifecycle is added.
+  ```bash
+  kantrip exec qa-scram -- sleep 180
+  ```
 
-## Remaining completion criteria
+  Terminal B, with the same isolated state, runs:
 
-- `edit` can secure an existing Registry connection without displaying or
-  unintentionally replacing existing secrets.
-- The properties input source accepts verified Java, librdkafka, and
-  Confluent-generated fixtures, extracts their secrets, and rejects ambiguous or
-  unsupported security configuration.
-- Input normalization and rendering cover only the documented Kafka, Confluent
-  Schema Registry, and native Apicurio connection-property allowlists. Non-connection
-  properties are reported by name and never persisted or injected; unknown
-  security-like properties fail closed.
-- The Strimzi input source accepts standard TLS and SCRAM Kubernetes Secret
-  fixtures generated for a `KafkaUser`, from a file or stdin, without persisting
-  the decoded source document.
-- Profile-scoped doctor output can associate detailed sessions with the exact
-  profile ID and revision on which each session started.
-- PLAIN, both SCRAM mechanisms, and mTLS pass unit, renderer, adapter, and
-  disposable-cluster integration tests.
-- OAuth client credentials refresh through verified Java and librdkafka native
-  mechanisms without exposing the client secret.
-- Secure Confluent-compatible connections pass TLS, basic, fixed-bearer, OAuth,
-  and applicable client-certificate tests. Native Apicurio connections pass
-  TLS, basic, OAuth, and applicable client-certificate tests.
-- Authenticated `ping` distinguishes configuration, transport, TLS,
-  authentication, and authorization outcomes without claiming more than the
-  underlying operation proves.
-- Existing adapters preserve their current plaintext behavior and gain only
-  tested authentication combinations.
-- `kcl` and `kafkactl` work in explicit and interactive sessions for every
-  combination marked supported.
-- README, usage, compatibility, architecture, threat model, schema, examples,
-  and release artifacts describe exactly the implemented matrix.
+  ```bash
+  kantrip describe qa-scram
+  kantrip doctor qa-scram --sessions
+  kantrip edit qa-scram -d 'Changed during active session'
+  kantrip doctor qa-scram --sessions --verbose
+  kantrip doctor qa-mtls --sessions
+  kantrip doctor qa-scram --repair
+  kantrip doctor --sessions
+  ```
+
+  Expect old revision on the active session, new revision in `describe`, no
+  cross-profile sessions, and errors for both invalid doctor combinations.
+  Default output omits PID/session ID/private paths. After A exits, its runtime
+  is gone. Separately open `edit qa-scram` in A, change its description in B,
+  then finish A: A must reject the stale revision without losing B's change.
+
+### QA 5 — ACL-independent Kafka ping and silent status
+
+- [ ] Follow PR 1's authorizer-enabled fixture instructions to create
+  `qa-noacl` with valid credentials and no topic, group, or cluster permissions:
+
+  ```bash
+  kantrip ping qa-noacl --timeout 5
+  kantrip ping qa-noacl -q >"$KANTRIP_QA_ROOT/out" 2>"$KANTRIP_QA_ROOT/err"
+  echo $?
+  wc -c "$KANTRIP_QA_ROOT/out" "$KANTRIP_QA_ROOT/err"
+  kantrip exec qa-noacl -- kafka-topics.sh --create \
+    --topic qa-permission-denied --partitions 1 --replication-factor 1
+  kantrip edit qa-noacl --replace-secret kafka/password
+  kantrip ping qa-noacl -q >"$KANTRIP_QA_ROOT/out" 2>"$KANTRIP_QA_ROOT/err"
+  echo $?
+  wc -c "$KANTRIP_QA_ROOT/out" "$KANTRIP_QA_ROOT/err"
+  ```
+
+  Expect first ping/status `0`, empty files, and an explicit authorization
+  failure from topic creation. Enter a wrong password at replacement; second
+  ping returns `1` with both files still empty. Restore the password. Repeat
+  with unavailable service and invalid CA; time the operation to check one
+  deadline. Confirm no debug logs or broker counts presented as auth proof.
+
+### QA 6 — Registry security, providers, and no-role diagnostics
+
+- [ ] Add basic-auth Registry to `qa-scram`, keeping Kafka credentials unchanged:
+
+  ```bash
+  kantrip edit qa-scram --registry-provider confluent \
+    --registry-url https://localhost:8082 --registry-auth basic \
+    --registry-username REGISTRY_BASIC_USER \
+    --registry-ca-file sandbox/.state/ca.crt
+  kantrip ping qa-scram
+  kantrip describe qa-scram -o json
+  kantrip edit qa-scram --replace-secret registry/password
+  kantrip ping qa-scram
+  kantrip edit qa-scram --remove-registry
+  kantrip ping qa-scram
+  ```
+
+  Use the generated sandbox username and prompted password. First ping succeeds;
+  replacing only the Registry password with a wrong value reports Registry auth
+  failure while retaining Kafka success; removal restores Kafka-only success.
+  Repeat basic for native Apicurio `https://localhost:8084/apis/registry/v3`.
+  Repeat HTTPS/no-auth, fixed token for Confluent, and server-required mTLS with
+  PR 2's fixtures and the corresponding `--registry-auth`/certificate flags.
+
+- [ ] With PR 2's no-role fixtures run `kantrip ping PROFILE --timeout 5`, then
+  use the fixture's resource-list request to demonstrate denied authorization.
+  Verify ping succeeds only where authentication is independently proven.
+  Repeat invalid credentials, anonymous/public endpoint, ambiguous 403, and
+  wrong-origin redirect. Expect `1`/unverified for insufficient proof and no
+  credential forwarding. Test Apicurio ccompat separately from native mode.
+  Record any deployment limitation in compatibility instead of adding a role.
+
+### QA 7 — OAuth and refresh
+
+- [ ] Create an OAuth profile with the generated public client ID and prompted
+  secret; token endpoint trust is explicit:
+
+  ```bash
+  kantrip add qa-oauth -b localhost:9096 --transport tls \
+    --ca-file sandbox/.state/ca.crt --auth oauth \
+    --oauth-token-url https://localhost:8443/realms/kantrip/protocol/openid-connect/token \
+    --oauth-client-id KAFKA_OAUTH_CLIENT_ID \
+    --oauth-ca-file sandbox/.state/ca.crt -l release=qa
+  kantrip ping qa-oauth
+  kantrip exec qa-oauth -- kcat -C -t qa-release -o end
+  ```
+
+  Use PR 2's short-token-lifetime fixture and publish records before and after
+  expiry from another terminal. Consumption must continue after refresh. Repeat
+  with a verified Java consumer. Revoke the client at the IdP and confirm the
+  next refresh fails without secret output, then restore the fixture. Ctrl-C
+  exits cleanly. Repeat Registry OAuth for each advertised client with
+  `--registry-oauth-*`; native Apicurio and Confluent need separate cases.
+  Invalid token CA must fail even when broker CA is correct. A ping alone does
+  not complete this checkbox.
+
+### QA 8 — Properties and Strimzi file/stdin input
+
+- [ ] Import the final sandbox exports (PR 3 must generate the named PEM file):
+
+  ```bash
+  kantrip add qa-props --from-properties sandbox/.state/kafka-scram.properties
+  cat sandbox/.state/kafka-scram.properties | kantrip add qa-props-stdin --from-properties -
+  kantrip add qa-pem --from-properties sandbox/.state/kafka-mtls-pem.properties
+  kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+    get secret kantrip-scram -o yaml | kantrip add qa-strimzi \
+    --from-strimzi - -b localhost:9094 --ca-file sandbox/.state/ca.crt
+  kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+    get secret kantrip-mtls -o json | kantrip add qa-strimzi-mtls \
+    --from-strimzi - -b localhost:9095 --ca-file sandbox/.state/ca.crt
+  kantrip ping qa-props
+  kantrip ping qa-props-stdin
+  kantrip ping qa-pem
+  kantrip ping qa-strimzi
+  kantrip ping qa-strimzi-mtls
+  ```
+
+  Repeat Java/librdkafka/OAuth/Registry and Confluent generator fixtures from
+  PR 3. For Strimzi file mode, redirect a disposable generated Secret to a
+  mode-0600 file under the QA root and pass that path; verify it is unchanged.
+  Compare safe observations, never print credentials. Confirm no source document
+  or secret value was persisted in SQLite, backups, diagnostics, or history.
+
+- [ ] Try negative inputs: `kubectl ... get kafkauser kantrip-scram -o yaml`,
+  PKCS12 properties, malformed base64, duplicate keys, unknown `ssl.*`, disabled
+  hostname verification, conflicting manual bootstrap, both source flags, and
+  an existing profile name. Each `add` must fail without a partial profile or
+  unjournaled credential. Exercise non-secret ignored settings and verify the
+  summary contains property names only. Test relative PEM paths from a file
+  and rejection of relative paths from stdin.
+
+### QA 9 — All supported client families and shell modes
+
+- [ ] With an authorized `qa-scram` profile and the required clients installed,
+  run a small disposable record round trip:
+
+  ```bash
+  kantrip exec qa-scram -- kafka-topics.sh --describe --topic qa-release
+  printf 'release-check\n' | kantrip exec qa-scram -- kcat -P -t qa-release
+  kantrip exec qa-scram -- kcat -C -t qa-release -o beginning -c 1
+  kantrip exec qa-scram -- kafka-console-consumer.sh \
+    --topic qa-release --from-beginning --max-messages 1
+  kantrip exec qa-scram -- kaskade admin
+  ```
+
+  Expect the same record, successful Kaskade connection, and cleanup after
+  exit. Repeat with Confluent's unsuffixed tools and every remaining shared
+  command in `COMPATIBILITY.md`, using disposable topics/groups for mutations.
+  Use `MANUAL_TESTING.md` schema-record scenarios for all six Confluent
+  Avro/JSON Schema/Protobuf console commands, kcat Avro, and both Kaskade Registry
+  providers, repeating supported secure cells. An unsupported cell must fail
+  before its operation with a capability explanation.
+
+- [ ] Inspect the installed versions/help, then run their metadata operations:
+
+  ```bash
+  kcl --help
+  kafkactl --help
+  kantrip exec qa-scram -- kcl topic list
+  kantrip exec qa-scram -- kafkactl get topics
+  ```
+
+  Run the version-pinned produce/consume commands added in PR 4 through
+  `kantrip exec qa-scram -- ...`. Verify original user configs and external
+  keyring entries are unchanged.
+  Check both documented private config variables inside the supervised child,
+  without printing file contents or secret values.
+
+- [ ] For each installed absolute shell path, run
+  `SHELL=/ABSOLUTE/SHELL kantrip exec qa-scram`, then `kantrip current`, the
+  adapter commands above, and `exit`. Cover Bash, Zsh, and Fish with startup
+  aliases/functions (and Fish abbreviations) shadowing clients. Verify shims
+  restore the selected connection and history/startup behavior. Try
+  `kantrip exec qa-scram` inside the session: it must reject nesting. Try
+  bootstrap/config/auth overrides, including `kcat -F /tmp/other.conf` and
+  Java `--bootstrap-server other.example.com:9092`; they must be rejected.
+
+### QA 10 — Store failures, repair, cleanup, and release sign-off
+
+- [ ] Lock the disposable OS credential store through its native UI; run
+  `kantrip describe qa-scram`, `kantrip doctor qa-scram`, and
+  `kantrip exec qa-scram -- kcat -L`. Expect unavailable states and no client
+  launch. Unlock it. Delete only the test profile's password entry via the OS
+  UI, confirm `missing`, then restore via
+  `kantrip edit qa-scram --replace-secret kafka/password`. Repeat on both OSes.
+  Use existing manual reconciliation scenarios for an interrupted mutation;
+  `kantrip doctor --repair` must clean only exact journaled entries and a second
+  repair must be idempotent.
+
+- [ ] Run the existing signal/crash/symlink scenarios in `MANUAL_TESTING.md`,
+  now with a secret-bearing profile. Use `doctor PROFILE --sessions --verbose`
+  to identify only the disposable supervisor before a forced kill. Verify
+  active sessions survive repair, unlocked sessions become stale after five
+  minutes, safe stale directories are removed, invalid/symlink entries remain,
+  and terminal settings recover after ordinary signals. Inspect modes and
+  process arguments without printing private config contents.
+
+- [ ] Remove every QA profile through `kantrip remove PROFILE`: cancel once and
+  confirm no change, then use `--force` for the rest. Verify profile-owned
+  secrets are gone or exact failures remain journaled; run doctor/repair again.
+  Do not delete the database before credential cleanup. Then remove only the
+  recorded temporary QA root/virtual environment and tear down disposable
+  fixtures. `python -m sandbox down` retains `.state`; remove that private
+  generated directory separately only when finished with its credentials.
+  Record manual results and remaining issues beside automated/smoke evidence.
+  Complete `RELEASE_CHECKLIST.md`; any required unchecked or failed case blocks
+  a first-release readiness claim.
 
 ## Outside the MVP
 
-- Database downgrades, user-authored migrations, and migration identities tied
-  to product release numbers.
-- Detached or managed background sessions.
-- Automatic Kubernetes discovery.
-- Arbitrary secret-provider automation beyond the supported `add` input sources.
-- Secret retrieval, round-trip profile export, profile cloning, retained profile
-  history, and rollback to old secret values.
-- Refresh-token and fixed-access-token Kafka OAuth profiles.
-- The Strimzi OAuth module and its custom Java login callback. Strimzi
-  credential input remains in scope because it only normalizes KafkaUser TLS
-  and SCRAM credentials.
-- Amazon MSK IAM authentication.
-- Windows support.
-- Automatic certificate-store conversion.
-- HTTP proxy profiles.
-- Additional adapters without a versioned compatibility contract and
-  integration tests.
-- A hosted service, daemon, Docker distribution, programmatic profile API, or
-  interactive TUI.
+Database downgrade or development-state compatibility; profile history/rollback;
+secret retrieval or round-trip export; detached/background sessions; Kubernetes
+discovery; arbitrary secret providers; Kafka fixed-token/refresh-token OAuth;
+client-side Strimzi OAuth callbacks; MSK IAM; Windows; automatic JKS/PKCS12
+conversion; HTTP proxy profiles; additional adapters without a versioned safe
+contract; hosted service, daemon, programmatic profile API, or interactive TUI.

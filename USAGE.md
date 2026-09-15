@@ -70,6 +70,11 @@ external CLI and defaults to a five-second timeout, configurable with
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
 
+These current probes can depend on resource permissions. A failure can be an
+authorization rejection even when the service is reachable. Success does not
+prove topic, group, schema, or administrative access. The future connection/auth
+probe is specified separately in [MVP.md](MVP.md); it is not implemented yet.
+
 For scripts that need only the exit status, suppress all output with:
 
 ```bash

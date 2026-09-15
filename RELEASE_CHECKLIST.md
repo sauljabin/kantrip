@@ -12,6 +12,22 @@ publishing and do not report readiness while required checks remain unverified.
 This checklist does not authorize tagging or publication. Use existing explicit
 release authorization, requesting it only if absent.
 
+## First Release — Additional Gate
+
+- [ ] Complete the [first-release manual QA](MVP.md#manual-qa--first-release-checklist),
+  or its implemented scenarios moved to [Manual Testing](MANUAL_TESTING.md),
+  against the candidate wheel on Linux and macOS. Record actual results;
+  automated tests and smoke do not replace the human checklist.
+- [ ] Confirm every required CLI/protocol/authentication/input-format cell in
+  [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
+  conditional and unsupported cells explicitly, including ping proof limits.
+- [ ] Complete the documentation audit in the final MVP PR. No guide may present
+  schema-only or planned capabilities as executable features.
+- [ ] Establish the first published compatibility boundary. Earlier development
+  commits need no compatibility layer or upgrade path; test clean installation
+  and safe rejection of incompatible state. Shared prior-release comparison
+  checks are not applicable when no earlier release exists; record that reason.
+
 ## Shared Preparation — Every Release
 
 - [ ] Record the proposed version, candidate commit, previous release tag, and

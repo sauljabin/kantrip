@@ -1,4 +1,11 @@
-# Command compatibility
+# Compatibility
+
+This guide describes the implemented code, not the target first-release matrix.
+Schema acceptance, CLI creation, execution, diagnostics, and input formats are
+separate capabilities. Pending implementation and verification belong to
+[MVP.md](MVP.md).
+
+## Client commands
 
 Kantrip recognizes commands by executable basename. [Apache Kafka's Unix binary
 archives](https://kafka.apache.org/quickstart/) name their command scripts with a
@@ -68,6 +75,60 @@ Every registry connection uses an `http://` URL. Kantrip rejects missing,
 encrypted, authenticated, provider-incompatible, and caller-supplied Registry
 settings before starting the affected client mode. Bash, Zsh, and Fish sessions
 apply the same checks through temporary adapters.
+
+## Kafka transport and authentication
+
+These statuses apply to the current checkout. A renderer-only capability is not
+an executable CLI feature.
+
+| Mode | Stored schema / shared renderer | `add` / `edit` CLI | Sessions / adapters | `ping` |
+| --- | --- | --- | --- | --- |
+| Plaintext, no authentication | Supported | Supported | Supported | Kafka metadata request |
+| Verified TLS, no authentication | Supported | Supported | Supported; Java custom CA needs Kafka 2.7 / Confluent 6.1 or newer | Supported with system/custom CA |
+| SASL/PLAIN over TLS | Supported | Not exposed | Rejected before launch | Rejected before client creation |
+| SCRAM-SHA-256 over TLS | Supported | Not exposed | Rejected before launch | Rejected before client creation |
+| SCRAM-SHA-512 over TLS | Supported | Not exposed | Rejected before launch | Rejected before client creation |
+| mTLS | Supported, including key/certificate validation | Not exposed | Rejected before launch | Rejected before client creation |
+| OAuth / OAUTHBEARER | Not implemented | Not exposed | Unsupported | Unsupported |
+| SASL without TLS / disabled TLS verification | Rejected | Unsupported | Unsupported | Unsupported |
+
+## Registry protocols and providers
+
+| Provider / mode | Current support |
+| --- | --- |
+| Confluent-compatible HTTP, no auth | Confluent consoles, kcat Avro, Kaskade, and ping |
+| Native Apicurio HTTP, no auth | Kaskade Registry deserializers and ping |
+| HTTPS, basic, fixed bearer, OAuth, or Registry mTLS | Unsupported; no authenticated Registry profile execution |
+| Kafka credential inheritance / URL credentials | Rejected |
+
+Current Registry ping requests `/subjects` or `/search/artifacts`; these may
+require resource permissions. Kafka ping requests metadata. None is a general
+resource-authorization test or a guaranteed permission-independent probe.
+`doctor` is currently global, with `--verbose` and `--repair`; profile scope and
+session attribution are not implemented. `kcl` and `kafkactl` have no automatic
+adapter, even though an arbitrary executable can run as a supervised child.
+
+## File formats
+
+| Format | Current accepted input | Current generated output / role |
+| --- | --- | --- |
+| Bundled profile JSON schema | Validated internal SQLite profile document; not an `add` file-input option | `schemas/profile.schema.json` and synthetic examples |
+| JSON / YAML observations | No profile import or round-trip export | `list` / `describe` safe observations |
+| Public PEM CA | `--ca-file`, Kafka TLS only | Validated public profile material; session-owned CA file |
+| Client PEM certificate / private key | Shared internal auth model only, not CLI input | Shared renderer support; authenticated sessions still blocked |
+| Java Kafka `.properties` | No `--from-properties` input yet | Private Java client session configuration |
+| librdkafka / kcat properties | No file import yet | Private librdkafka configuration selected through `KCAT_CONFIG` and documented file variables |
+| Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |
+| Strimzi generated Secret JSON / YAML | No `--from-strimzi` input yet | No Kubernetes resource output |
+| Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |
+| Registry properties | No file import | Private HTTP endpoint configuration only |
+| kcl TOML / kafkactl YAML | Unsupported | No generated adapter config yet |
+| JKS / PKCS12 | Unsupported for Kantrip input | No automatic conversion |
+
+The existing sandbox exports PKCS12 mTLS properties for external clients; this
+is not evidence that Kantrip imports that format. Sandbox listeners and secure
+Registry deployments also do not imply that Kantrip currently supports their
+authentication mechanisms end to end.
 
 ## Installing supported commands
 
