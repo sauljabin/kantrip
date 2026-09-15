@@ -15,8 +15,14 @@
   independent from Rich.
 - Support Linux and macOS on Python 3.10 through 3.14. Keep paths, permissions,
   signals, terminals, and shell documentation portable.
-- Keep unimplemented product work in `MVP.md`, not in current feature docs,
-  schemas, examples, commands, or implementation comments.
+- Keep unimplemented product work and exact future CLI contracts in `MVP.md`,
+  not in current feature docs, schemas, examples, commands, or implementation
+  comments.
+- Preserve a resource-oriented CLI. Extend the lifecycle, inspection,
+  diagnostic, and execution verbs defined in `MVP.md` instead of adding
+  one-off command families for input formats or credential operations. Never
+  expose secret retrieval or a round-trip profile export. Update current user
+  documentation only when the corresponding behavior lands.
 
 ## Profiles and Sessions
 

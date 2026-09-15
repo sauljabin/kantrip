@@ -16,8 +16,8 @@ Complete Kantrip's local profile model with:
 - TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and generic OAuth client
   credentials.
 - Authenticated Confluent-compatible and native Apicurio Registry connections.
-- Profile import from Java/librdkafka properties, Confluent-generated client
-  properties, and Strimzi KafkaUser Secrets.
+- Profile creation from Java/librdkafka properties, Confluent-generated client
+  properties, and Strimzi KafkaUser-generated Kubernetes Secrets.
 - New adapters for `kcl` and `kafkactl`.
 - Authenticated connectivity diagnostics.
 
@@ -46,11 +46,11 @@ supervising the active execution.
   product-required authentication routing. Topic, record, serializer,
   deserializer, schema-selection, retry, cache, telemetry, and application
   behavior are not profile concerns.
-- Normalize imported connection properties into typed profile fields and render
-  a new canonical client configuration. Never replay an imported properties
+- Normalize input connection properties into typed profile fields and render a
+  new canonical client configuration. Never replay an input properties
   document or retain unrecognized keys as passthrough configuration.
-- Ignore known non-connection and unknown non-security properties during import
-  and report only their property names in the import summary. Reject unknown
+- Ignore known non-connection and unknown non-security properties during input
+  processing and report only their property names in the summary. Reject unknown
   properties whose names suggest credentials or security, conflicting aliases,
   and settings that disable certificate or hostname verification.
 - Do not add a plaintext or locally encrypted secret-store fallback.
@@ -62,6 +62,287 @@ supervising the active execution.
 - Detached and background processes remain unsupported. Do not claim that
   Kantrip can supervise a child that deliberately escapes its POSIX session.
 
+## Command-line contract
+
+The completed MVP keeps one compact command surface. Each verb acts at one
+resource level and keeps the same meaning across interactive and scripted use:
+
+- `add` creates one complete profile and fails when the name already exists.
+- `edit` changes explicit fields on one existing profile and creates no profile.
+- `remove` removes one complete profile, not one component within it.
+- `list` finds and summarizes profiles.
+- `describe` replaces `show` and presents one profile without exposing secrets.
+- `doctor` diagnoses global or profile-scoped local state and owns explicit
+  deterministic repair.
+- `ping`, `exec`, and `current` retain their focused connectivity, execution,
+  and active-session meanings.
+
+Do not add separate `import`, `secret`, `export`, `clone`, or `configure`
+commands. External documents are input sources for `add`; secret replacement
+is part of `edit`; machine-readable profile inspection is part of `describe`. There is no
+command that reveals a stored secret and no round-trip Kantrip profile export.
+This keeps creation, mutation, removal, inspection, diagnosis, and execution
+easy to distinguish while preserving the fail-closed credential boundary.
+
+### Common naming and option rules
+
+- Use `PROFILE` as the profile-name metavariable on every profile-scoped
+  command.
+- Keep `-b` for `--bootstrap-servers` and `-d` for `--description` on both
+  `add` and `edit`.
+- Add `-l` for repeatable `--label KEY=VALUE` on `add`, `edit`, and `list`.
+  On `add` and `edit` it assigns a label; on `list` it requires an exact match.
+  Multiple list labels are combined with logical AND.
+- Add `-o` for `--output human|json|yaml` on `list` and `describe`. `human` is
+  the default and is rendered with Rich. Keep `rich` as an implementation
+  detail rather than a public output-format name.
+- Keep `-q` for `ping --quiet`. Do not abbreviate `--force`, `--repair`,
+  security options, credential options, or destructive removal options. Do not
+  add `-v` for `--verbose`, because it is easily confused with version output.
+- Continue accepting `--no-color` globally and after commands that produce
+  human output. JSON and YAML are always unstyled.
+- Use short options only for frequent, unambiguous, non-destructive operations.
+  Long security option names are deliberate safety and comprehension aids.
+
+### `add`
+
+```text
+Usage: kantrip add [OPTIONS] PROFILE
+
+Create a complete profile. Fail if PROFILE already exists.
+
+General:
+  -b, --bootstrap-servers HOST:PORT[,HOST:PORT]
+                                  Kafka broker addresses.
+  -d, --description TEXT          Profile description.
+  -l, --label KEY=VALUE           Add a label; repeatable.
+
+Input source:
+      --from-properties FILE|-     Create from Java or librdkafka properties.
+      --from-strimzi FILE|-        Create from a Kubernetes Secret generated
+                                   for a Strimzi KafkaUser.
+
+Kafka security:
+      --transport TYPE             plaintext or tls.
+      --auth TYPE                  none, plain, scram-sha-256,
+                                   scram-sha-512, mtls, or oauth.
+      --username TEXT              Kafka authentication username.
+      --ca-file PATH               Configure the Kafka CA from a PEM file.
+      --client-certificate-file PATH
+                                   Configure a PEM client certificate.
+      --client-key-file PATH       Read a PEM client private key.
+      --oauth-token-url URL        OAuth token endpoint.
+      --oauth-client-id TEXT       OAuth client ID.
+      --oauth-scope TEXT           OAuth scope; repeatable.
+
+Registry:
+      --registry-provider TYPE     confluent or apicurio.
+      --registry-url URL           Registry endpoint.
+      --registry-auth TYPE         none, basic, oauth, token, or mtls.
+      --registry-username TEXT     Registry authentication username.
+      --registry-ca-file PATH      Configure the Registry CA from a PEM file.
+```
+
+The two input-source options are mutually exclusive. Manual options may fill
+required non-secret data missing from an input source, but conflicting
+connection or security values fail instead of silently overriding the source.
+Required passwords, tokens, client secrets, and key passwords are collected
+without echo. No option accepts one of those literal values.
+
+### `edit`
+
+```text
+Usage: kantrip edit [OPTIONS] PROFILE
+
+Edit an existing profile. With no options, open the interactive editor.
+
+General:
+  -b, --bootstrap-servers HOST:PORT[,HOST:PORT]
+                                  Replace Kafka broker addresses.
+  -d, --description TEXT          Replace the description.
+      --clear-description         Remove the description.
+  -l, --label KEY=VALUE           Add or replace a label; repeatable.
+      --remove-label KEY          Remove a label; repeatable.
+
+Kafka security:
+      --transport TYPE             Replace the transport.
+      --auth TYPE                  Replace the authentication method.
+      --username TEXT              Replace the Kafka username.
+      --ca-file PATH               Replace Kafka CA configuration.
+      --client-certificate-file PATH
+                                   Replace the client certificate.
+      --client-key-file PATH       Replace the private client key.
+      --oauth-token-url URL        Replace the OAuth token endpoint.
+      --oauth-client-id TEXT       Replace the OAuth client ID.
+      --oauth-scope TEXT           Replace OAuth scopes; repeatable.
+
+Registry:
+      --registry-provider TYPE     Add or replace the provider.
+      --registry-url URL           Add or replace the endpoint.
+      --registry-auth TYPE         Replace Registry authentication.
+      --registry-username TEXT     Replace the Registry username.
+      --registry-ca-file PATH      Replace Registry CA configuration.
+      --remove-registry            Remove the complete Registry connection.
+
+Credentials:
+      --replace-secret FIELD       Prompt for and replace an applicable secret;
+                                   repeatable.
+```
+
+Every non-interactive option changes only the named field and preserves omitted
+fields. The interactive editor offers `keep`, `replace`, or `remove` for each
+existing secret without showing or prefilling its value. A removal is accepted
+only when the same validated edit removes or changes the configuration that
+requires that secret. Do not add `--remove-secret` or any literal secret-value
+option. `--replace-secret` is also the recovery path when a referenced
+credential-store entry is missing.
+
+`FIELD` belongs to a closed, schema-derived vocabulary and is fully qualified
+by its owner. Examples include `kafka/password`,
+`kafka/oauth/client-secret`, `kafka/tls/private-key`, `registry/password`,
+`registry/token`, and `registry/oauth/client-secret`. Reject unknown fields and
+fields that do not apply to the profile's selected authentication method. Do
+not keep ambiguous names such as `oauth/client-secret` or `tls/private-key`
+once both Kafka and Registry can own that credential type.
+
+### `remove`
+
+```text
+Usage: kantrip remove [OPTIONS] PROFILE
+
+Remove a complete profile and its owned credentials.
+
+Options:
+      --force  Skip the confirmation prompt.
+```
+
+`remove` never removes only a Registry, label, certificate, or secret. Those
+profile changes belong to `edit`. `--force` skips only the prompt and never
+skips validation, locking, journaling, or safe credential cleanup.
+
+### `list`
+
+```text
+Usage: kantrip list [OPTIONS]
+
+List profiles.
+
+Options:
+  -l, --label KEY=VALUE            Require an exact label; repeatable and
+                                   combined using logical AND.
+  -o, --output human|json|yaml     Output representation. Default: human.
+```
+
+Human output adds a Labels column to the existing profile summary. Render each
+label as `KEY=VALUE`. Assign presentation colors deterministically from the
+label key using a bounded accessible palette; do not persist random label
+colors or make color carry meaning. Labels remain embedded in their profiles,
+so a label unused by every profile naturally disappears without a global label
+registry or garbage-collection workflow. JSON and YAML represent labels as
+key/value maps. An empty match is successful and produces an empty result in
+the selected format.
+
+### `describe`
+
+```text
+Usage: kantrip describe [OPTIONS] PROFILE
+
+Describe a profile without exposing secret values or credential references.
+
+Options:
+  -o, --output human|json|yaml     Output representation. Default: human.
+```
+
+`describe` replaces `show`. Human output uses Rich sections consistent with
+`doctor` for profile identity, Kafka, Registry, labels, and credential status.
+JSON and YAML are stable machine-readable observations, not accepted input or
+export documents. All formats omit secret values and internal credential references;
+credential fields expose only safe states such as `stored`, `missing`, or
+`unavailable`. Include the current profile revision in `describe` output.
+
+### `doctor`
+
+```text
+Usage:
+  kantrip doctor [OPTIONS] [PROFILE]
+  kantrip doctor --repair [--verbose]
+
+Inspect Kantrip globally or inspect one profile.
+
+Options:
+      --sessions  Include detailed sessions for PROFILE.
+      --verbose   Include safe diagnostic details.
+      --repair    Apply global deterministic repairs.
+```
+
+`kantrip doctor` remains the global diagnostic. `kantrip doctor PROFILE`
+focuses profile, credential, certificate, and runtime checks on one profile.
+`kantrip doctor PROFILE --sessions` lists that profile's validated active,
+recent, and stale sessions without revealing private configuration paths or
+contents. Use the plural `--sessions`; reserve singular `--session` for a future
+operation that would select one exact session. Initially reject `PROFILE` with
+`--repair`, because database migrations and the current unified repair contract
+are global.
+
+Associate each runtime marker with `profileId` and `profileRevision`; never
+infer profile ownership by inspecting generated client configuration. A session
+remains pinned to the validated profile revision captured when it started, and
+an edit affects only later sessions. Show session IDs, supervisor PIDs, or
+resolved runtime paths only when the existing safe verbose-output policy allows
+them.
+
+### Remaining commands
+
+```text
+Usage: kantrip ping [OPTIONS] PROFILE
+
+Check Kafka and configured Registry connectivity.
+
+Options:
+      --timeout SECONDS  Maximum operation time. Default: 5.
+  -q, --quiet            Emit no output; communicate through exit status.
+```
+
+```text
+Usage: kantrip exec PROFILE [-- COMMAND...]
+
+Run a command or interactive subshell using PROFILE.
+```
+
+```text
+Usage: kantrip current
+
+Print the profile active in the current Kantrip session.
+```
+
+The final top-level command list is therefore `add`, `edit`, `remove`, `list`,
+`describe`, `doctor`, `ping`, `exec`, and `current`. It has the same number of
+top-level commands as the current CLI while absorbing future input-source and
+secret work into the lifecycle verbs users already understand.
+
+### Representative lifecycle
+
+```bash
+kantrip add production \
+  --bootstrap-servers kafka.example.com:9093 \
+  --transport tls \
+  --auth scram-sha-512 \
+  --username app-production \
+  --label environment=production \
+  --label owner=platform
+
+kantrip edit production --replace-secret kafka/password
+kantrip edit production --registry-url https://registry.example.com
+kantrip list --label environment=production --label owner=platform
+kantrip describe production --output yaml
+kantrip doctor production --sessions
+```
+
+This sequence uses the same resource lifecycle throughout: `add` creates,
+`edit` changes, `list` selects, `describe` inspects, and `doctor` diagnoses.
+Secrets enter only through no-echo prompts or approved input sources, and none
+of the inspection commands can return them.
+
 ## 1. Credential store and profile lifecycle
 
 ### Remaining store work
@@ -69,7 +350,7 @@ supervising the active execution.
 - Store textual PEM private keys as credential values. Validate realistic PEM
   sizes against both supported store families before declaring mTLS complete.
 - Treat CA bundles and public certificate chains as non-secret. They may be
-  imported into the same store for portability or referenced by a user-owned
+  copied into the same store for portability or referenced by a user-owned
   path; Kantrip never deletes a referenced source file.
 
 ### Recoverable updates
@@ -98,38 +379,72 @@ atomic transaction. Do not promise cross-store atomicity.
 
 ### Commands
 
-- Extend `kantrip add NAME` with transport and authentication choices.
-- Extend `kantrip edit NAME` with transport, authentication, and Registry TLS or
-  authentication. With no options, open an interactive editor.
+- Extend `kantrip add PROFILE` with labels, transport, authentication, Registry,
+  and the explicit `--from-properties` and `--from-strimzi` input sources.
+- Extend `kantrip edit PROFILE` with every mutable profile field, including
+  labels, transport, authentication, Registry TLS and authentication, and
+  prompted secret replacement. With no options, open an interactive editor.
 - For each existing secret, offer explicit keep, replace, or remove decisions.
   Never display or prefill the current value.
-- Add `kantrip secret set PROFILE FIELD` with no-echo input.
+- Support direct prompted rotation or recovery through repeatable
+  `kantrip edit PROFILE --replace-secret FIELD`; do not add a `secret` command
+  group or a secret-reading interface.
 - Add confirmation to secret-bearing profile removal and `--force` to skip
   only the prompt, not validation.
-- Extend `doctor` with locked-store, missing-reference, certificate-match, and
-  certificate-expiry checks.
+- Replace `show` with `describe`, add the approved human, JSON, and YAML output
+  contract, and extend `list` with labels, exact label filtering, and the same
+  output choices.
+- Extend `doctor` with optional profile scope, detailed `--sessions`,
+  locked-store, missing-reference, certificate-match, and certificate-expiry
+  checks.
 
 There must be no literal password, client-secret, token, JAAS, or private-key
-value option. Generic secret-provider automation beyond the explicit import
-commands is not part of this MVP.
+value option. Generic secret-provider automation beyond the supported input
+sources accepted by `add` is not part of this MVP.
 
-## 2. Profile import
+### Profile revision and concurrency contract
 
-Importers create a new Kantrip profile through the same schema validation,
-credential staging, SQLite commit, and reconciliation workflow as `kantrip add`.
-They never overwrite an existing profile.
+Keep the existing stable profile ID, unique profile name, and monotonically
+increasing `revision`. The revision is a generation and concurrency token, not
+a retained version history: the MVP adds no history listing, rollback, or old
+secret recovery.
 
-### Importing client properties
+Normal non-interactive edits remain serialized by the maintenance lock and a
+SQLite `BEGIN IMMEDIATE` transaction. An edit that prompts for secret material
+must not hold the lock while the user types. It instead reads the profile ID and
+revision, collects and validates input, acquires the lock, reloads the profile,
+and commits only with the expected generation:
 
-Add:
-
-```text
-kantrip import properties NAME FILE
-kantrip import properties NAME -
+```sql
+UPDATE profiles
+SET revision = revision + 1, document = ?
+WHERE id = ? AND revision = ?
 ```
 
-The importer accepts supported Java properties, librdkafka properties, and the
-client properties emitted by Confluent's public client-config generator.
+Exactly one row must change. A mismatch leaves the old profile usable, safely
+discards or journals staged credential references, and asks the user to retry.
+Every session records and remains bound to the revision from which its private
+configuration was generated. The revision appears in `describe` and detailed
+session diagnostics, but not in the default profile list.
+
+## 2. Profile input sources
+
+External documents are explicit input sources for `kantrip add`, not a separate
+`import` command family. Every source creates a new Kantrip profile through the
+same schema validation, credential staging, SQLite commit, and reconciliation
+workflow as manual creation. A source never overwrites an existing profile.
+
+### Client properties source
+
+Add these creation forms:
+
+```text
+kantrip add PROFILE --from-properties FILE
+kantrip add PROFILE --from-properties -
+```
+
+The input handler accepts supported Java properties, librdkafka properties, and
+the client properties emitted by Confluent's public client-config generator.
 
 - Parse only an allowlist of Kafka connection, TLS, authentication, and
   Confluent-compatible Registry properties.
@@ -145,7 +460,7 @@ client properties emitted by Confluent's public client-config generator.
 - Move passwords, API secrets, client secrets, inline private keys, and Registry
   credentials into the approved credential store before committing the profile.
 - For a supported private-key path, resolve relative paths against the source
-  properties file and import the key contents. Stdin input requires an absolute
+  properties file and read the key contents. Stdin input requires an absolute
   path because it has no stable source directory. Reject JKS and PKCS12 inputs
   rather than attempting an implicit conversion.
 - Ignore recognized properties outside the connection allowlist, even when they
@@ -167,20 +482,24 @@ A supported Confluent workflow is:
 
 ```bash
 confluent kafka client-config create java |
-  kantrip import properties production -
+  kantrip add production --from-properties -
 ```
 
-### Importing Strimzi credentials
+### Strimzi credential source
 
-Add:
+Add these creation forms:
 
 ```text
-kantrip import strimzi NAME --user-secret FILE [options]
-kantrip import strimzi NAME --user-secret - [options]
+kantrip add PROFILE --from-strimzi FILE [options]
+kantrip add PROFILE --from-strimzi - [options]
 ```
 
-- Accept Kubernetes Secret JSON or YAML containing the standard KafkaUser
-  `data.password`, `data.user.crt`, or `data.user.key` fields.
+- Accept exactly one Kubernetes `Secret` JSON or YAML document generated for a
+  Strimzi `KafkaUser`, containing the standard `data.password`,
+  `data.user.crt`, or `data.user.key` fields. The `KafkaUser` custom resource
+  describes authentication and authorization but does not contain the
+  generated credential values; reject `kind: KafkaUser` with guidance to read
+  the same-named generated Secret instead.
 - Decode and validate the base64 data, then normalize it into Kantrip's existing
   SCRAM or mTLS profile model. Do not create a separate Strimzi profile type.
 - Require bootstrap servers and any cluster CA information not present in the
@@ -192,6 +511,35 @@ kantrip import strimzi NAME --user-secret - [options]
   connection metadata, and Kubernetes resources other than a single Secret.
 - Do not call `kubectl` or discover listeners, namespaces, clusters, or CA
   Secrets automatically.
+
+A supported file workflow is:
+
+```bash
+kantrip add production \
+  --from-strimzi kafka-user-secret.yaml \
+  --bootstrap-servers kafka.example.com:9093 \
+  --ca-file cluster-ca.crt
+```
+
+A supported direct Kubernetes workflow keeps the credential document out of a
+persistent plaintext file:
+
+```bash
+kubectl get secret kafka-user \
+  --namespace kafka \
+  --output yaml |
+  kantrip add production \
+    --from-strimzi - \
+    --bootstrap-servers kafka.example.com:9093 \
+    --ca-file cluster-ca.crt
+```
+
+Do not document `kubectl get kafkauser kafka-user --output yaml` as an input
+source. Strimzi normally creates a credential-bearing Kubernetes Secret with
+the same name as the `KafkaUser`; the generated Secret is the input Kantrip
+needs. The explicit `--from-strimzi` name identifies this supported producer
+and schema without implying that Kantrip accepts arbitrary Kubernetes Secrets
+or invokes Kubernetes APIs itself.
 
 ## 3. Kafka TLS and authentication
 
@@ -209,8 +557,8 @@ infrastructure.
 
 ### Standard Kafka client properties
 
-Kantrip stores one provider-neutral connection model. Import and rendering use
-the following product-native property allowlist; profile documents do not
+Kantrip stores one provider-neutral connection model. Input normalization and
+rendering use the following product-native property allowlist; profile documents do not
 expose these names as an arbitrary property map.
 
 | Connection concern | Java client properties | librdkafka properties |
@@ -230,8 +578,8 @@ For Java clients that predate the direct
 `sasl.oauthbearer.client.credentials.*` properties, Kantrip may generate the
 standard `OAuthBearerLoginModule` JAAS options (`clientId`, `clientSecret`, and
 optional `scope`) and the official `sasl.login.callback.handler.class`. That is
-a version-gated renderer, not a second profile shape. Imports may accept either
-documented Java form and normalize both to the same profile fields.
+a version-gated renderer, not a second profile shape. Input processing may
+accept either documented Java form and normalize both to the same profile fields.
 
 `ssl.endpoint.identification.algorithm` cannot be empty, and librdkafka's
 certificate verification cannot be false. Custom SSL engines, security
@@ -402,7 +750,7 @@ documented config-path environment variables so secrets never appear in argv.
 1. Complete recoverable secret-bearing profile updates on top of the credential
    store, reconciliation journal, and plaintext `edit` lifecycle.
 2. Add TLS, PLAIN, SCRAM, and mTLS to the schema and shared renderers.
-3. Add properties import and Strimzi credential import.
+3. Add the properties and Strimzi input sources to `add`.
 4. Extend the existing adapters and authenticated `ping` for those mechanisms.
 5. Add secure Registry connections.
 6. Add OAuth client credentials through verified native Java and librdkafka
@@ -422,15 +770,24 @@ renderer and adapter boundaries are proven before token lifecycle is added.
   half-updated profile.
 - `edit` can secure an existing Registry connection without displaying or
   unintentionally replacing existing secrets.
-- Properties import accepts verified Java, librdkafka, and
+- The properties input source accepts verified Java, librdkafka, and
   Confluent-generated fixtures, extracts their secrets, and rejects ambiguous or
   unsupported security configuration.
-- Import and rendering cover only the documented Kafka, Confluent Schema
-  Registry, and native Apicurio connection-property allowlists. Non-connection
+- Input normalization and rendering cover only the documented Kafka, Confluent
+  Schema Registry, and native Apicurio connection-property allowlists. Non-connection
   properties are reported by name and never persisted or injected; unknown
   security-like properties fail closed.
-- Strimzi credential import accepts standard TLS and SCRAM KafkaUser Secret
-  fixtures from a file or stdin without persisting the decoded source document.
+- The Strimzi input source accepts standard TLS and SCRAM Kubernetes Secret
+  fixtures generated for a `KafkaUser`, from a file or stdin, without persisting
+  the decoded source document.
+- `add`, `edit`, and `list` share the label contract; human lists display labels,
+  exact repeated filters use logical AND, and deterministic presentation colors
+  require no separately stored label lifecycle.
+- `describe` replaces `show` with safe human, JSON, and YAML representations,
+  none of which exposes secret values or credential references or acts as an
+  export document.
+- Profile-scoped doctor output can associate detailed sessions with the exact
+  profile ID and revision on which each session started.
 - TLS, PLAIN, both SCRAM mechanisms, and mTLS pass unit, renderer, adapter, and
   disposable-cluster integration tests.
 - OAuth client credentials refresh through verified Java and librdkafka native
@@ -454,10 +811,12 @@ renderer and adapter boundaries are proven before token lifecycle is added.
   to product release numbers.
 - Detached or managed background sessions.
 - Automatic Kubernetes discovery.
-- Arbitrary secret-provider automation beyond the supported import commands.
+- Arbitrary secret-provider automation beyond the supported `add` input sources.
+- Secret retrieval, round-trip profile export, profile cloning, retained profile
+  history, and rollback to old secret values.
 - Refresh-token and fixed-access-token Kafka OAuth profiles.
 - The Strimzi OAuth module and its custom Java login callback. Strimzi
-  credential import remains in scope because it only normalizes KafkaUser TLS
+  credential input remains in scope because it only normalizes KafkaUser TLS
   and SCRAM credentials.
 - Amazon MSK IAM authentication.
 - Windows support.

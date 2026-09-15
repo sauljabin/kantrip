@@ -25,13 +25,27 @@ manage topics, groups, or schemas, or keep a globally active profile. The
 selected client performs the requested operation using the connection material
 Kantrip supplies for that session.
 
+## Command surface
+
+The CLI follows one resource-oriented lifecycle. `add` creates a profile,
+`edit` changes it, `remove` deletes it, `list` selects profiles, and `describe`
+inspects one safely. `doctor`, `ping`, `exec`, and `current` retain their
+diagnostic, connectivity, execution, and session roles.
+
+External documents are explicit input sources for `add`, and prompted secret
+replacement belongs to `edit`. Kantrip has no separate `import`, `secret`,
+`export`, `clone`, or `configure` command family. Human, JSON, and YAML
+inspection are observations rather than round-trip profile documents; they omit
+secret values and internal credential references. The exact planned CLI
+contract remains centralized in [MVP.md](MVP.md).
+
 ## Data flow
 
 ![Kantrip connection data flow](images/data-flow.svg)
 
-Profiles and imports converge on the same validated connection model. Each
-renderer translates that model into one client's native configuration;
-diagnostics reuse the same resolution path.
+Manual profile fields and external input sources converge on the same validated
+connection model. Each renderer translates that model into one client's native
+configuration; diagnostics reuse the same resolution path.
 
 ## Profiles and connection material
 
@@ -113,17 +127,17 @@ Every stored Registry connection names its provider explicitly. The CLI may
 select Confluent as a convenience default, but it persists that choice rather
 than relying on schema normalization or read-time inference.
 
-Importers allowlist connection properties and report ignored property names
-without their values. Unknown security-like settings, conflicting aliases, and
-options that disable certificate or hostname verification fail closed.
+Input handlers allowlist connection properties and report ignored property
+names without their values. Unknown security-like settings, conflicting aliases,
+and options that disable certificate or hostname verification fail closed.
 
 Renderers produce native Java, librdkafka, Confluent Schema Registry, and
 Apicurio configurations. They use documented properties such as
 `sasl.oauthbearer.token.endpoint.url`, `bearer.auth.issuer.endpoint.url`, and
-`apicurio.registry.auth.service.token.endpoint`; imported files are never
-replayed as unvalidated configuration.
+`apicurio.registry.auth.service.token.endpoint`; source files are never replayed
+as unvalidated configuration.
 
-## Profile lifecycle and imports
+## Profile lifecycle and input sources
 
 Profile mutations share validation, cross-store locking, secret staging,
 transactional database updates, and reconciliation. `edit` may add or update a
@@ -145,10 +159,20 @@ backend to enumerate credentials:
   cleanup work for idempotent retry by a mutation or `doctor --repair`; a normal
   `doctor` run only reports the pending record.
 
-Java, librdkafka, Confluent-generated, and Strimzi KafkaUser TLS or SCRAM files
-import into the same profile model. Importers use format-specific parsers,
-extract supported secrets before commit, and never modify the source. Private
-vendor CLI files and Kubernetes discovery are outside this boundary.
+Each profile row has a stable UUID, a unique name, and a monotonically
+increasing revision. The revision is a generation and concurrency token, not
+retained history. Interactive secret edits collect and validate input without
+holding the maintenance lock, then reload the profile under the lock and update
+only if its expected UUID and revision still match. A mismatch safely abandons
+or journals staged credentials and requires a retry; it never overwrites a
+concurrent change.
+
+Java, librdkafka, and Confluent-generated properties, plus Kubernetes Secrets
+generated for Strimzi KafkaUsers, enter the same profile model through
+`add`. Format-specific handlers extract supported secrets before commit and
+never modify the source. A `KafkaUser` custom resource is not a credential
+source; Kantrip accepts the generated same-named Secret. Private vendor CLI
+files and Kubernetes discovery are outside this boundary.
 
 ## Session resolution and rendering
 
@@ -227,7 +251,10 @@ execution.
 Managed directories use mode `0700`. Each direct child is named
 `session-<32-lowercase-hex-id>` and contains owner-only connection material,
 `session.lock`, and `session.json`. The marker contains only the session ID,
-owner UID, supervisor PID, creation time, and lifecycle state.
+owner UID, supervisor PID, creation time, lifecycle state, profile ID, and
+profile revision. A running session remains pinned to the revision from which
+its private configuration was generated; later profile edits affect only later
+sessions.
 
 Kantrip holds an exclusive `fcntl.flock` for the session lifetime. The kernel
 lock, not the recorded PID, establishes liveness. A crash releases the lock even
@@ -277,6 +304,11 @@ availability, secret references, reconciliation state, certificates, runtime
 sessions, and installed client capabilities without resolving values for
 display. Its default mode is always read-only; `--repair` explicitly enables
 only the deterministic maintenance sequence described above.
+
+`doctor PROFILE --sessions` filters validated active, recent, and stale session
+observations by stored profile ID and reports their captured profile revision.
+It never infers ownership from generated client configuration or exposes its
+private paths or contents.
 
 `ping` reuses normal connection construction for bounded Kafka metadata and
 provider-specific Registry requests. Its result is limited to the operation it
