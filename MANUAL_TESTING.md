@@ -240,7 +240,7 @@ from kantrip.secret_store import load_secret_store, secret_reference
 
 path = Path(os.environ["KANTRIP_DATABASE"])
 profile = load_profiles(path).profile("journal-check")
-reference = secret_reference(profile["id"], "oauth/client-secret")
+reference = secret_reference(profile["id"], "kafka/oauth/client-secret")
 load_secret_store().set(reference, "kantrip-manual-synthetic-secret")
 with sqlite3.connect(path) as connection:
     queue_secret_cleanup(connection, reference)

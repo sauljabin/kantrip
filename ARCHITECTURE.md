@@ -63,10 +63,12 @@ WAL permits readers while writes are serialized with bounded
 `BEGIN IMMEDIATE` transactions. The profile document schema is independent of
 the internal database schema version.
 
-Long-lived secrets use immutable profile-ID-based keys in macOS Keychain or a
-Linux Secret Service-compatible backend. Kantrip rejects unavailable,
-plaintext, encrypted-file, null, and unknown backends instead of weakening
-storage.
+Long-lived secrets use immutable
+`profile/<profile-uuid>/<credential-uuid>/<field>` keys in macOS Keychain or a
+Linux Secret Service-compatible backend. The credential UUID changes on every
+replacement, so staging never overwrites the value referenced by the usable
+profile. Kantrip rejects unavailable, plaintext, encrypted-file, null, and
+unknown backends instead of weakening storage.
 
 The implemented connection model supports plaintext transport and
 server-authenticated TLS with default client or profile trust, currently without
@@ -144,6 +146,11 @@ Profile mutations share validation, cross-store locking, secret staging,
 transactional database updates, and reconciliation. `edit` may add or update a
 Registry; only an explicit removal deletes it. Existing secrets have explicit
 keep, replace, and remove semantics and are never displayed or prefilled.
+
+The reusable cross-store transaction engine lives in
+`kantrip/credential_mutations.py`. Authentication-specific profile fields and
+commands build on this engine; they do not implement their own keyring or
+journal sequence.
 
 SQLite and the credential store cannot participate in one atomic transaction.
 Kantrip therefore stores non-secret exact-delete records in

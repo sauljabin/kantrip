@@ -14,11 +14,12 @@ SERVICE_NAME = "kantrip"
 SECRET_FIELDS = frozenset(
     {
         "kafka/password",
-        "oauth/client-secret",
-        "tls/private-key",
-        "tls/private-key-password",
+        "kafka/oauth/client-secret",
+        "kafka/tls/private-key",
+        "kafka/tls/private-key-password",
         "registry/password",
         "registry/token",
+        "registry/oauth/client-secret",
     }
 )
 _APPROVED_BACKENDS = {
@@ -59,6 +60,15 @@ class SecretStoreInfo:
 
     backend: str
     display_name: str
+
+
+@dataclass(frozen=True)
+class SecretReference:
+    """Validated identity encoded by one immutable credential reference."""
+
+    profile_id: str
+    credential_id: str
+    field: str
 
 
 class KeyringSecretStore:
@@ -135,33 +145,53 @@ def load_secret_store(
     return KeyringSecretStore(selected_backend, SecretStoreInfo(identifier, display_name))
 
 
-def secret_reference(profile_id: str, field: str) -> str:
+def secret_reference(
+    profile_id: str,
+    field: str,
+    *,
+    credential_id: str | None = None,
+) -> str:
     """Construct one canonical immutable profile secret reference."""
     if field not in SECRET_FIELDS:
         raise SecretStoreError("secret field is not supported")
-    canonical_id = _canonical_profile_id(profile_id)
-    return f"profile/{canonical_id}/{field}"
+    canonical_profile_id = _canonical_uuid(profile_id, label="profile ID")
+    canonical_credential_id = _canonical_uuid(
+        credential_id or str(uuid.uuid4()),
+        label="credential ID",
+    )
+    return f"profile/{canonical_profile_id}/{canonical_credential_id}/{field}"
 
 
 def validate_secret_reference(reference: str) -> None:
     """Reject references outside Kantrip's exact profile-key namespace."""
+    parse_secret_reference(reference)
+
+
+def parse_secret_reference(reference: str) -> SecretReference:
+    """Parse a canonical reference without accessing its secret value."""
     if not isinstance(reference, str):
         raise SecretStoreError("secret reference is invalid")
-    parts = reference.split("/", 2)
-    if len(parts) != 3 or parts[0] != "profile" or parts[2] not in SECRET_FIELDS:
+    parts = reference.split("/", 3)
+    if len(parts) != 4 or parts[0] != "profile" or parts[3] not in SECRET_FIELDS:
         raise SecretStoreError("secret reference is invalid")
-    if _canonical_profile_id(parts[1]) != parts[1]:
+    try:
+        profile_id = _canonical_uuid(parts[1], label="profile ID")
+        credential_id = _canonical_uuid(parts[2], label="credential ID")
+    except SecretStoreError as error:
+        raise SecretStoreError("secret reference is invalid") from error
+    if profile_id != parts[1] or credential_id != parts[2]:
         raise SecretStoreError("secret reference is invalid")
+    return SecretReference(profile_id, credential_id, parts[3])
 
 
-def _canonical_profile_id(value: str) -> str:
+def _canonical_uuid(value: str, *, label: str) -> str:
     try:
         parsed = uuid.UUID(value)
     except (AttributeError, ValueError) as error:
-        raise SecretStoreError("profile ID is not a canonical UUID") from error
+        raise SecretStoreError(f"{label} is not a canonical UUID") from error
     canonical = str(parsed)
     if canonical != value:
-        raise SecretStoreError("profile ID is not a canonical UUID")
+        raise SecretStoreError(f"{label} is not a canonical UUID")
     return canonical
 
 
@@ -183,10 +213,12 @@ __all__ = [
     "SERVICE_NAME",
     "KeyringSecretStore",
     "SecretNotFoundError",
+    "SecretReference",
     "SecretStore",
     "SecretStoreError",
     "SecretStoreInfo",
     "load_secret_store",
+    "parse_secret_reference",
     "secret_reference",
     "validate_secret_reference",
 ]

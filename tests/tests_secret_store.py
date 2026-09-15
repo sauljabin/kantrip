@@ -12,6 +12,7 @@ from kantrip.secret_store import (
 )
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+CREDENTIAL_ID = "018f8f13-7c21-7cee-8000-000000000011"
 
 
 class TestSecretStore(unittest.TestCase):
@@ -56,13 +57,18 @@ class TestSecretStore(unittest.TestCase):
             load_secret_store(backend=backend, platform_name="darwin")
 
     def test_references_are_limited_to_canonical_profile_keys(self) -> None:
-        valid = secret_reference(PROFILE_ID, "registry/token")
+        valid = secret_reference(
+            PROFILE_ID,
+            "registry/token",
+            credential_id=CREDENTIAL_ID,
+        )
         validate_secret_reference(valid)
         for invalid in (
-            "profile/not-a-uuid/registry/token",
-            f"profile/{PROFILE_ID}/unknown",
-            f"other/{PROFILE_ID}/registry/token",
-            f"profile/{PROFILE_ID.upper()}/registry/token",
+            f"profile/not-a-uuid/{CREDENTIAL_ID}/registry/token",
+            f"profile/{PROFILE_ID}/not-a-uuid/registry/token",
+            f"profile/{PROFILE_ID}/{CREDENTIAL_ID}/unknown",
+            f"other/{PROFILE_ID}/{CREDENTIAL_ID}/registry/token",
+            f"profile/{PROFILE_ID.upper()}/{CREDENTIAL_ID}/registry/token",
         ):
             with self.subTest(reference=invalid), self.assertRaises(SecretStoreError):
                 validate_secret_reference(invalid)
@@ -71,7 +77,7 @@ class TestSecretStore(unittest.TestCase):
         backend = _backend("keyring.backends.macOS")
         backend.set_error = PasswordSetError("synthetic-secret")
         store = load_secret_store(backend=backend, platform_name="darwin")
-        reference = secret_reference(PROFILE_ID, "oauth/client-secret")
+        reference = secret_reference(PROFILE_ID, "kafka/oauth/client-secret")
 
         with self.assertRaises(SecretStoreError) as raised:
             store.set(reference, "synthetic-secret")
