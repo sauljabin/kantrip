@@ -1,0 +1,140 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  replicas: 1
+  roles:
+    - controller
+    - broker
+  storage:
+    type: persistent-claim
+    size: 2Gi
+    deleteClaim: true
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: kantrip
+  namespace: kantrip-sandbox
+spec:
+  kafka:
+    version: ${KAFKA_VERSION}
+    metadataVersion: 4.3-IV0
+    listeners:
+      - name: plaintext
+        port: 9092
+        type: nodeport
+        tls: false
+        configuration:
+          bootstrap:
+            nodePort: 30092
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9092
+      - name: tls
+        port: 9093
+        type: nodeport
+        tls: true
+        configuration:
+          brokerCertChainAndKey:
+            secretName: kafka-listeners-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            nodePort: 30093
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9093
+      - name: scram
+        port: 9094
+        type: nodeport
+        tls: true
+        authentication:
+          type: scram-sha-512
+        configuration:
+          brokerCertChainAndKey:
+            secretName: kafka-listeners-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            nodePort: 30094
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9094
+      - name: mtls
+        port: 9095
+        type: nodeport
+        tls: true
+        authentication:
+          type: tls
+        configuration:
+          brokerCertChainAndKey:
+            secretName: kafka-listeners-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            nodePort: 30095
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9095
+      - name: oauth
+        port: 9096
+        type: nodeport
+        tls: true
+        authentication:
+          type: custom
+          sasl: true
+          listenerConfig:
+            sasl.enabled.mechanisms: OAUTHBEARER
+            oauthbearer.sasl.server.callback.handler.class: >-
+              io.strimzi.kafka.oauth.server.JaasServerOauthValidatorCallbackHandler
+            oauthbearer.sasl.jaas.config: 'org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required unsecuredLoginStringClaim_sub="unused" oauth.valid.issuer.uri="https://localhost:8443/realms/kantrip" oauth.jwks.endpoint.uri="https://keycloak:8443/realms/kantrip/protocol/openid-connect/certs" oauth.username.claim="preferred_username" oauth.ssl.truststore.location="/mnt/oauth-ca/ca.crt" oauth.ssl.truststore.type="PEM";'
+            connections.max.reauth.ms: 3600000
+        configuration:
+          brokerCertChainAndKey:
+            secretName: kafka-listeners-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            nodePort: 30096
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9096
+      - name: registry
+        port: 9097
+        type: internal
+        tls: false
+    config:
+      auto.create.topics.enable: true
+      default.replication.factor: 1
+      min.insync.replicas: 1
+      offsets.topic.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      transaction.state.log.replication.factor: 1
+      principal.builder.class: io.strimzi.kafka.oauth.server.OAuthKafkaPrincipalBuilder
+    template:
+      pod:
+        volumes:
+          - name: oauth-ca
+            secret:
+              secretName: sandbox-root-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
+      kafkaContainer:
+        volumeMounts:
+          - name: oauth-ca
+            mountPath: /mnt/oauth-ca
+            readOnly: true
+  entityOperator:
+    topicOperator: {}
+    userOperator: {}

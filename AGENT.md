@@ -154,12 +154,25 @@
 - Tests and their fixtures live in `tests` and remain offline. Shared workflow
   helpers belong in `scripts/__init__.py`; other script modules are executable
   workflows.
-- Keep Compose, versions, synthetic data, and population tools in `sandbox`.
-  Tests may inspect versions and Compose structure, but sandbox and test code
-  must not import each other.
-- `python -m sandbox` runs the adapter smoke workflow against an active sandbox
-  with locally installed clients and optional shells. It is a pre-commit hook,
-  not an offline or packaged E2E test.
+- Keep Kind configuration, Kubernetes manifests, pinned versions, synthetic
+  bootstrap data, and lifecycle tooling in `sandbox`. Bind every host endpoint
+  to loopback. Offline tests may inspect manifests and import side-effect-free
+  sandbox helpers; sandbox code must never import tests.
+- Generate sandbox credentials at deployment time. Store exported credentials,
+  client properties, and certificate material only below ignored
+  `sandbox/.state`, with directory mode `0700` and file mode `0600`. Never print
+  credential values from sandbox lifecycle commands.
+- `python -m sandbox up` reconciles the Kind laboratory; `status`, `credentials`,
+  and `down` inspect or remove it. Keep plaintext, verified TLS, SCRAM-SHA-512,
+  mTLS, and OAuth listeners on one Strimzi cluster. SASL/PLAIN is not a sandbox
+  scenario; `plaintext` means no authentication and no encryption.
+- Kafka uses a disposable persistent volume so data survives broker pod restarts.
+  Both Apicurio variants use KafkaSQL with isolated journal and snapshot topics,
+  delete cleanup policy, and infinite retention so their data survives Apicurio
+  pod restarts. Destroying the Kind cluster intentionally removes sandbox data.
+- `python -m scripts.smoke` runs the adapter smoke workflow against the active
+  plaintext listener on `localhost:9092`, with locally installed clients and
+  optional shells. It is a pre-commit hook, not an offline or packaged E2E test.
 - `python -m scripts.verify_shell_contract` tests Bash, Zsh, and Fish through PTYs
   and fake clients. Keep assertions in Python and delete safe-metadata event logs
   with their temporary directory.

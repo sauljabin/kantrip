@@ -1,179 +1,191 @@
-import io
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import yaml
-from click.testing import CliRunner
-from rich.console import Console
 
 from sandbox.__main__ import (
-    SmokeFailure,
-    _failure_details,
-    _kantrip_cli,
-    _show_section,
-    _write_shell_driver,
-    main,
+    SECRET_FIELDS,
+    load_credentials,
+    load_or_create_credentials,
+    load_versions,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SANDBOX_ENV = PROJECT_ROOT / "sandbox" / ".env"
-SANDBOX_COMPOSE = PROJECT_ROOT / "sandbox" / "compose.yml"
+SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
+VERSIONS_FILE = SANDBOX_ROOT / "versions.env"
+KIND_CONFIG = SANDBOX_ROOT / "kind.yaml"
+MANIFEST_ROOT = SANDBOX_ROOT / "kubernetes"
 
 
-def sandbox_versions() -> dict[str, str]:
-    return dict(
-        line.split("=", 1)
-        for line in SANDBOX_ENV.read_text(encoding="utf-8").splitlines()
-        if line and not line.startswith("#")
-    )
+def documents(name: str) -> list[dict[str, object]]:
+    content = (MANIFEST_ROOT / name).read_text(encoding="utf-8")
+    return [document for document in yaml.safe_load_all(content) if document]
+
+
+def resource(name: str, kind: str, resource_name: str) -> dict[str, object]:
+    for document in documents(name):
+        metadata = document.get("metadata", {})
+        if document.get("kind") == kind and metadata.get("name") == resource_name:
+            return document
+    raise AssertionError(f"{kind}/{resource_name} is missing from {name}")
 
 
 class TestSandbox(unittest.TestCase):
-    def setUp(self) -> None:
-        self.compose = yaml.safe_load(SANDBOX_COMPOSE.read_text(encoding="utf-8"))
-        self.services = self.compose["services"]
-        self.versions = sandbox_versions()
+    def test_pins_current_components(self) -> None:
+        versions = load_versions(VERSIONS_FILE)
 
-    def test_uses_current_kafka_image(self) -> None:
-        self.assertEqual("8.3.1", self.versions["CONFLUENT_VERSION"])
-        self.assertEqual("3.3.2", self.versions["APICURIO_VERSION"])
+        self.assertEqual("1.2.0", versions["STRIMZI_VERSION"])
+        self.assertEqual("v1.21.1", versions["CERT_MANAGER_VERSION"])
+        self.assertEqual("26.7.0", versions["KEYCLOAK_VERSION"])
+        self.assertEqual("4.3.1", versions["KAFKA_VERSION"])
+        self.assertEqual("3.3.3", versions["APICURIO_VERSION"])
+        self.assertEqual("8.3.1", versions["SCHEMA_REGISTRY_VERSION"])
+
+    def test_kind_binds_every_endpoint_to_loopback(self) -> None:
+        config = yaml.safe_load(KIND_CONFIG.read_text(encoding="utf-8"))
+        mappings = config["nodes"][0]["extraPortMappings"]
+
+        self.assertTrue(mappings)
+        self.assertTrue(all(mapping["listenAddress"] == "127.0.0.1" for mapping in mappings))
         self.assertEqual(
-            "confluentinc/cp-kafka:${CONFLUENT_VERSION}", self.services["kafka"]["image"]
+            {9092, 9093, 9094, 9095, 9096, 8081, 8082, 8083, 8084, 8085, 8443},
+            {mapping["hostPort"] for mapping in mappings},
         )
 
-    def test_contains_only_the_supported_plaintext_kafka_cluster(self) -> None:
-        self.assertEqual(
-            {"kafka", "schema-registry", "apicurio", "apicurio-topics"},
-            set(self.services),
-        )
-        protocols = self.services["kafka"]["environment"]["KAFKA_LISTENER_SECURITY_PROTOCOL_MAP"]
-        self.assertNotIn("SSL", protocols)
-        self.assertNotIn("SASL", protocols)
+    def test_one_kafka_cluster_exposes_the_supported_listener_matrix(self) -> None:
+        kafka = resource("20-kafka.yaml", "Kafka", "kantrip")
+        listeners = kafka["spec"]["kafka"]["listeners"]
+        by_name = {listener["name"]: listener for listener in listeners}
 
-    def test_exposes_the_broker_on_standard_host_port(self) -> None:
-        service = self.services["kafka"]
-        self.assertEqual(["9092:19092"], service["ports"])
-        self.assertIn(
-            "EXTERNAL://localhost:9092",
-            service["environment"]["KAFKA_ADVERTISED_LISTENERS"],
-        )
-        self.assertEqual("1", service["environment"]["KAFKA_DEFAULT_REPLICATION_FACTOR"])
+        self.assertEqual({"plaintext", "tls", "scram", "mtls", "oauth", "registry"}, set(by_name))
+        self.assertFalse(by_name["plaintext"]["tls"])
+        self.assertNotIn("authentication", by_name["plaintext"])
+        self.assertTrue(by_name["tls"]["tls"])
+        self.assertNotIn("authentication", by_name["tls"])
+        self.assertEqual("scram-sha-512", by_name["scram"]["authentication"]["type"])
+        self.assertEqual("tls", by_name["mtls"]["authentication"]["type"])
+        self.assertEqual("custom", by_name["oauth"]["authentication"]["type"])
+        self.assertTrue(by_name["oauth"]["authentication"]["sasl"])
+        self.assertEqual("internal", by_name["registry"]["type"])
+        self.assertFalse(by_name["registry"]["tls"])
+        for listener in listeners:
+            if listener["name"] == "registry":
+                continue
+            broker = listener["configuration"]["brokers"][0]
+            self.assertEqual("localhost", broker["advertisedHost"])
+            self.assertEqual(listener["port"], broker["advertisedPort"])
 
-    def test_contains_plain_schema_registry(self) -> None:
-        registry = self.services["schema-registry"]
-        environment = registry["environment"]
+    def test_kafka_storage_survives_pod_restarts(self) -> None:
+        pool = resource("20-kafka.yaml", "KafkaNodePool", "dual-role")
 
-        self.assertEqual("confluentinc/cp-schema-registry:${CONFLUENT_VERSION}", registry["image"])
-        self.assertEqual(["8081:8081"], registry["ports"])
-        self.assertEqual("http://0.0.0.0:8081", environment["SCHEMA_REGISTRY_LISTENERS"])
-        self.assertEqual("_schemas", environment["SCHEMA_REGISTRY_KAFKASTORE_TOPIC"])
-        self.assertEqual("1", environment["SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR"])
-        self.assertNotIn("HTTPS", environment["SCHEMA_REGISTRY_LISTENERS"])
+        self.assertEqual("persistent-claim", pool["spec"]["storage"]["type"])
+        self.assertEqual("2Gi", pool["spec"]["storage"]["size"])
+        self.assertTrue(pool["spec"]["storage"]["deleteClaim"])
 
-    def test_schema_registry_healthcheck_uses_its_available_python_runtime(self) -> None:
-        healthcheck = self.services["schema-registry"]["healthcheck"]
-        command = healthcheck["test"]
-
-        self.assertEqual(["CMD", "python3", "-c"], command[:3])
-        self.assertIn("http://localhost:8081/subjects", command[3])
-        self.assertIn("timeout=5", command[3])
-        self.assertNotIn("curl", command[3])
-        self.assertEqual("30s", healthcheck["start_period"])
-
-    def test_contains_apicurio_on_standard_host_port(self) -> None:
-        registry = self.services["apicurio"]
-
-        self.assertEqual("apicurio/apicurio-registry:${APICURIO_VERSION}", registry["image"])
-        self.assertEqual(["8082:8080"], registry["ports"])
-        self.assertEqual(
-            "kafka:9092", registry["environment"]["APICURIO_KAFKASQL_BOOTSTRAP_SERVERS"]
-        )
-        self.assertEqual(
-            "service_completed_successfully",
-            registry["depends_on"]["apicurio-topics"]["condition"],
-        )
-
-    def test_does_not_use_compose_extension_fields(self) -> None:
-        self.assertFalse(any(key.startswith("x-") for key in self.compose))
-
-    def test_uses_stable_sandbox_network_name(self) -> None:
-        self.assertEqual("sandbox", self.compose["networks"]["default"]["name"])
-
-    def test_writes_one_sourced_driver_for_interactive_shell_commands(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-
-            driver = _write_shell_driver("bash", ("first", "second"), root)
-
-            self.assertEqual(f". {root / 'commands'} < /dev/null; exit $?", driver)
-            self.assertEqual("first\nsecond\n", (root / "commands").read_text())
-            self.assertEqual(0o600, (root / "commands").stat().st_mode & 0o777)
-
-    def test_uses_fish_source_syntax_for_the_shell_driver(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-
-            driver = _write_shell_driver("fish", (), root)
-
-            self.assertEqual(
-                f"source '{root / 'commands'}' < /dev/null; "
-                "set -l kantrip_status $status; exit $kantrip_status",
-                driver,
-            )
-
-    def test_sections_are_separated_from_the_sandbox_title(self) -> None:
-        stream = io.StringIO()
-        console = Console(file=stream, color_system=None)
-
-        console.print("Kantrip Sandbox")
-        _show_section(console, "Setup")
-        _show_section(console, "Kafka CLI")
+    def test_strimzi_provisions_only_native_user_types(self) -> None:
+        users = documents("21-kafka-users.yaml")
+        authentication = {
+            user["metadata"]["name"]: user["spec"]["authentication"]["type"] for user in users
+        }
 
         self.assertEqual(
-            "Kantrip Sandbox\n\nSetup\n\nKafka CLI\n",
-            stream.getvalue(),
+            {"kantrip-scram": "scram-sha-512", "kantrip-mtls": "tls"},
+            authentication,
         )
 
-    def test_captured_kantrip_commands_explicitly_disable_color(self) -> None:
-        command = _kantrip_cli("ping", "sandbox")
+    def test_cert_manager_issues_one_local_ca_and_all_service_certificates(self) -> None:
+        pki = documents("00-pki.yaml")
+        certificates = {
+            item["metadata"]["name"]: item for item in pki if item["kind"] == "Certificate"
+        }
+
+        self.assertTrue(certificates["sandbox-root-ca"]["spec"]["isCA"])
+        self.assertEqual(
+            {"sandbox-root-ca", "keycloak-tls", "kafka-listeners-tls", "registries-tls"},
+            set(certificates),
+        )
+        for name in ("keycloak-tls", "kafka-listeners-tls", "registries-tls"):
+            self.assertIn("localhost", certificates[name]["spec"]["dnsNames"])
+
+    def test_plain_and_secure_registry_variants_are_explicit(self) -> None:
+        deployments = {
+            item["metadata"]["name"]: item
+            for item in documents("30-registries.yaml")
+            if item["kind"] == "Deployment"
+        }
 
         self.assertEqual(
-            [
-                "-m",
-                "kantrip.cli",
-                "--no-color",
-                "ping",
-                "sandbox",
+            {
+                "schema-registry",
+                "schema-registry-secure",
+                "schema-registry-oauth",
+                "apicurio",
+                "apicurio-secure",
+            },
+            set(deployments),
+        )
+        secure_apicurio_env = _environment(deployments["apicurio-secure"])
+        plain_apicurio_env = _environment(deployments["apicurio"])
+        self.assertEqual("kafkasql", plain_apicurio_env["APICURIO_STORAGE_KIND"])
+        self.assertEqual("apicurio-journal", plain_apicurio_env["APICURIO_KAFKASQL_TOPIC"])
+        self.assertEqual(
+            {"port": "management", "path": "/health/ready"},
+            deployments["apicurio"]["spec"]["template"]["spec"]["containers"][0]["readinessProbe"][
+                "httpGet"
             ],
-            command[1:],
         )
+        self.assertEqual("kafkasql", secure_apicurio_env["APICURIO_STORAGE_KIND"])
+        self.assertEqual("apicurio-secure-journal", secure_apicurio_env["APICURIO_KAFKASQL_TOPIC"])
+        self.assertEqual("true", secure_apicurio_env["QUARKUS_OIDC_TENANT_ENABLED"])
+        self.assertEqual(
+            "true", secure_apicurio_env["APICURIO_AUTHN_BASIC_CLIENT_CREDENTIALS_ENABLED"]
+        )
+        secure_schema_env = _environment(deployments["schema-registry-secure"])
+        self.assertEqual("BASIC", secure_schema_env["SCHEMA_REGISTRY_AUTHENTICATION_METHOD"])
+        self.assertNotIn("SCHEMA_REGISTRY_OAUTHBEARER_JWKS_ENDPOINT_URL", secure_schema_env)
+        oauth_schema_env = _environment(deployments["schema-registry-oauth"])
+        self.assertIn("SCHEMA_REGISTRY_OAUTHBEARER_JWKS_ENDPOINT_URL", oauth_schema_env)
+        self.assertNotIn("SCHEMA_REGISTRY_AUTHENTICATION_METHOD", oauth_schema_env)
 
-    def test_failure_details_remove_nested_status_presentation(self) -> None:
-        result = subprocess.CompletedProcess(
-            ["kantrip", "ping", "sandbox"],
-            1,
-            stdout="[running] Checking profile 'sandbox'\n",
-            stderr=(
-                "[failed] Could not connect for profile 'sandbox': the Kafka cluster "
-                "did not return metadata\n"
-            ),
-        )
+    def test_apicurio_topics_have_lossless_retention(self) -> None:
+        topics = documents("22-apicurio-topics.yaml")
 
         self.assertEqual(
-            "Could not connect for profile 'sandbox': the Kafka cluster did not return metadata",
-            _failure_details(result),
+            {
+                "apicurio-journal",
+                "apicurio-snapshots",
+                "apicurio-secure-journal",
+                "apicurio-secure-snapshots",
+            },
+            {topic["metadata"]["name"] for topic in topics},
         )
+        for topic in topics:
+            config = topic["spec"]["config"]
+            self.assertEqual("delete", config["cleanup.policy"])
+            self.assertEqual("-1", config["retention.ms"])
+            self.assertEqual("-1", config["retention.bytes"])
 
-    @patch("sandbox.__main__.smoke", side_effect=SmokeFailure("connectivity failed"))
-    def test_main_renders_failures_with_its_selected_presentation(self, _smoke: object) -> None:
-        result = CliRunner().invoke(main, ["--no-color"])
+    def test_runtime_credentials_are_random_private_and_reused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state" / "credentials.env"
 
-        self.assertEqual(1, result.exit_code)
-        self.assertEqual("[failed] connectivity failed\n", result.output)
-        self.assertNotIn("Error:", result.output)
+            first = load_or_create_credentials(path)
+            second = load_or_create_credentials(path)
+
+            self.assertEqual(first, second)
+            self.assertEqual(set(SECRET_FIELDS), set(first))
+            self.assertEqual(0o700, path.parent.stat().st_mode & 0o777)
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual(first, load_credentials(path))
+            for key, value in first.items():
+                if key.endswith(("PASSWORD", "SECRET")):
+                    self.assertGreaterEqual(len(value), 32)
+
+
+def _environment(deployment: dict[str, object]) -> dict[str, object]:
+    entries = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+    return {entry["name"]: entry.get("value", entry.get("valueFrom")) for entry in entries}
 
 
 if __name__ == "__main__":

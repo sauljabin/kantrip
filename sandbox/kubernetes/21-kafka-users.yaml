@@ -1,0 +1,21 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-scram
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication:
+    type: scram-sha-512
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-mtls
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication:
+    type: tls

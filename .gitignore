@@ -37,7 +37,6 @@ coverage.xml
 
 # Environments and local secrets
 .env
-!sandbox/.env
 .venv/
 .release-venv/
 env/
@@ -63,6 +62,7 @@ kantrip-local/
 *.key
 *.p12
 *.jks
+sandbox/.state/
 
 # Internal planning notes
 KANTRIP_MVP_PLAN.md

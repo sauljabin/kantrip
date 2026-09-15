@@ -403,58 +403,280 @@ Remove only the synthetic entry after the check:
 rmdir "$XDG_RUNTIME_DIR/kantrip/sessions/unexpected"
 ```
 
-## Run the real adapter smoke workflow
+## Start and inspect the Kubernetes sandbox
 
-This workflow is retained independently of the manual lifecycle checks. It
-validates external client integration against real Kafka and Registry services.
+The sandbox is a loopback-only Kind cluster. It runs one Strimzi Kafka cluster
+with several listeners, two baseline registries, authenticated endpoints for
+both registry products, Keycloak, and a cert-manager-issued local CA. It
+deliberately excludes Amazon MSK IAM and Confluent Cloud.
 
 ### Setup
 
-Install the supported local clients, then start the sandbox:
+Install Docker, Kind, kubectl, Helm, HTTPie, and at least one supported Kafka CLI.
+Create the cluster and inspect its workloads:
 
 ```bash
-docker compose --project-directory sandbox up -d
-docker compose --project-directory sandbox ps
+uv run --locked python -m sandbox up
+uv run --locked python -m sandbox status
+uv run --locked python -m sandbox credentials
 ```
 
-Wait until Kafka, Confluent Schema Registry, and Apicurio report healthy.
+The last command lists private files and variable names, never values. Generated
+credentials and client configurations live below ignored `sandbox/.state` with
+private permissions. Load their paths and identifiers into the current shell:
+
+```bash
+set -a
+. sandbox/.state/credentials.env
+set +a
+```
 
 ### Exercise
 
-Run the default Confluent-compatible workflow and the interactive shell
-contract:
+List the preconfigured Strimzi users and inspect each declarative user without
+reading its generated Secret:
 
 ```bash
-uv run --locked python -m sandbox
-uv run --locked python -m sandbox \
-  --shell bash --shell zsh --shell fish
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox get kafkausers
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  get kafkauser kantrip-scram -o yaml
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  get kafkauser kantrip-mtls -o yaml
 ```
 
-Exercise Apicurio once through its Confluent compatibility API and once through
-its native Core API:
+Inspect the non-secret service discovery endpoints with HTTPie and the exported
+CA. A TLS error is a failure; do not use `--verify=no`:
 
 ```bash
-uv run --locked python -m sandbox apicurio-ccompat \
-  --profile sandbox-apicurio-ccompat \
-  --registry-provider confluent \
-  --registry-url http://localhost:8082/apis/ccompat/v7
-
-uv run --locked python -m sandbox apicurio-native \
-  --profile sandbox-apicurio-native \
-  --registry-provider apicurio \
-  --registry-url http://localhost:8082/apis/registry/v3
+http --verify "$KANTRIP_SANDBOX_CA" \
+  GET https://localhost:8443/realms/kantrip/.well-known/openid-configuration
+http GET http://localhost:8081/subjects
+http GET http://localhost:8082/apis/registry/v3/search/artifacts
 ```
 
 ### Expected result
 
-- Every installed compatible adapter reports a passed result.
-- The shell run completes for Bash, Zsh, and Fish without exceeding its timeout.
-- The compatibility endpoint exercises Confluent framing; the native endpoint
-  exercises Apicurio discovery and Kaskade's native configuration.
-- Temporary profiles and topics are removed even when a later probe fails.
+- Kubernetes reports both `KafkaUser` resources as ready. Their YAML identifies
+  SCRAM-SHA-512 and TLS authentication but contains no credential value.
+- Keycloak discovery reports issuer `https://localhost:8443/realms/kantrip`.
+- Both baseline Registry requests return successful JSON responses.
+- Every exposed host port is bound to `127.0.0.1`, not all interfaces.
 
-Stop and remove the sandbox services when finished:
+## Verify Apicurio persistence through KafkaSQL
+
+Both Apicurio deployments use isolated KafkaSQL journal and snapshot topics.
+Kafka uses a persistent volume inside Kind, so this check survives both an
+Apicurio pod restart and a Kafka broker pod restart. Deleting the Kind cluster
+still intentionally deletes all sandbox data.
+
+### Setup
+
+Start the sandbox, then inspect the topics and their retention policy:
 
 ```bash
-docker compose --project-directory sandbox down -v
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  get kafkatopics apicurio-journal apicurio-snapshots \
+  apicurio-secure-journal apicurio-secure-snapshots
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  get kafkatopic apicurio-journal -o yaml
 ```
+
+### Exercise
+
+Create a synthetic Avro artifact through the baseline HTTP endpoint:
+
+```bash
+http POST http://localhost:8082/apis/registry/v3/groups/sandbox/artifacts \
+  artifactId=restart-proof artifactType=AVRO \
+  firstVersion:='{"content":{"content":"{\"type\":\"string\"}","contentType":"application/json"}}'
+```
+
+Restart only Apicurio, wait for KafkaSQL to rebuild its local state, and read
+the artifact again:
+
+```bash
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  rollout restart deployment/apicurio
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  rollout status deployment/apicurio --timeout=5m
+http GET \
+  http://localhost:8082/apis/registry/v3/groups/sandbox/artifacts/restart-proof
+http GET \
+  http://localhost:8082/apis/registry/v3/groups/sandbox/artifacts/restart-proof/versions/1/content
+```
+
+For the stronger storage check, restart the broker and repeat the read:
+
+```bash
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox delete pod kantrip-dual-role-0
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  wait --for=create pod/kantrip-dual-role-0 --timeout=5m
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  wait pod/kantrip-dual-role-0 --for=condition=Ready --timeout=5m
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  rollout restart deployment/apicurio
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  rollout status deployment/apicurio --timeout=5m
+http GET \
+  http://localhost:8082/apis/registry/v3/groups/sandbox/artifacts/restart-proof
+http GET \
+  http://localhost:8082/apis/registry/v3/groups/sandbox/artifacts/restart-proof/versions/1/content
+```
+
+### Expected result
+
+- All four Kafka topics are ready with `cleanup.policy: delete`,
+  `retention.ms: -1`, and `retention.bytes: -1`.
+- The artifact identity and its version 1 content are returned after each restart.
+- The baseline and secure Apicurio instances never share a journal or snapshot
+  topic.
+
+## Exercise every Kafka listener
+
+One broker cluster exposes all of these connections. `PLAINTEXT` means no
+authentication and no encryption; it is not SASL/PLAIN. Password authentication
+uses SCRAM-SHA-512 over verified TLS.
+
+### Setup
+
+Start the Kubernetes sandbox and load `sandbox/.state/credentials.env` as shown
+above. The lifecycle tool has already written private Java client properties.
+
+### Exercise
+
+Run the current Kantrip adapter smoke test against the baseline listener:
+
+```bash
+uv run --locked python -m scripts.smoke
+uv run --locked python -m scripts.smoke \
+  --shell bash --shell zsh --shell fish
+```
+
+Exercise the server-authenticated TLS listener through today's Kantrip profile
+contract:
+
+```bash
+export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
+uv run --locked kantrip add sandbox-tls \
+  --bootstrap-servers localhost:9093 \
+  --transport tls \
+  --ca-file "$KANTRIP_SANDBOX_CA"
+uv run --locked kantrip ping sandbox-tls
+uv run --locked kantrip exec sandbox-tls -- kafka-topics --list
+```
+
+Exercise the prepared authenticated listeners directly with the official Kafka
+CLI. These property files contain credentials and must remain private:
+
+```bash
+kafka-topics --bootstrap-server localhost:9094 \
+  --command-config sandbox/.state/kafka-scram.properties --list
+kafka-topics --bootstrap-server localhost:9095 \
+  --command-config sandbox/.state/kafka-mtls.properties --list
+KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8443/realms/kantrip/protocol/openid-connect/token' \
+  kafka-topics --bootstrap-server localhost:9096 \
+  --command-config sandbox/.state/kafka-oauth.properties --list
+```
+
+### Expected result
+
+- The smoke workflow continues to pass through plaintext `localhost:9092` and
+  cleans up its temporary profile and topic.
+- Kantrip verifies the sandbox CA and reaches the TLS listener on `9093`.
+- The native client reaches SCRAM-SHA-512 on `9094`, mTLS on `9095`, and OAuth
+  client credentials on `9096`.
+- Kantrip does not yet accept the three authenticated profiles; this section
+  validates the environment that will exercise those contracts when implemented.
+
+## Exercise authenticated registries
+
+The authenticated Registry endpoints require HTTPS. Schema Registry exposes
+separate Basic and OAuth processes because the local JAAS and OAuth server paths
+cannot share this self-contained setup; Apicurio accepts both mechanisms on one
+endpoint. HTTPie sessions are generated below private `sandbox/.state`, so
+credentials and tokens do not appear in command arguments.
+
+### Setup
+
+Start the sandbox and load the generated environment. Refresh the short-lived
+OAuth bearer sessions without printing either client secrets or tokens:
+
+```bash
+uv run --locked python -m sandbox oauth-session schema-registry
+uv run --locked python -m sandbox oauth-session apicurio
+```
+
+### Exercise
+
+First confirm that anonymous requests are rejected:
+
+```bash
+http --verify "$KANTRIP_SANDBOX_CA" GET https://localhost:8083/subjects
+http --verify "$KANTRIP_SANDBOX_CA" GET https://localhost:8085/subjects
+http --verify "$KANTRIP_SANDBOX_CA" \
+  GET https://localhost:8084/apis/registry/v3/search/artifacts
+```
+
+Then exercise Basic and OAuth independently with read-only HTTPie sessions:
+
+```bash
+http --verify "$KANTRIP_SANDBOX_CA" \
+  --session-read-only sandbox/.state/schema-registry-basic.json \
+  GET https://localhost:8083/subjects
+http --verify "$KANTRIP_SANDBOX_CA" \
+  --session-read-only sandbox/.state/schema-registry-oauth.json \
+  GET https://localhost:8085/subjects
+
+http --verify "$KANTRIP_SANDBOX_CA" \
+  --session-read-only sandbox/.state/apicurio-basic.json \
+  GET https://localhost:8084/apis/registry/v3/search/artifacts
+http --verify "$KANTRIP_SANDBOX_CA" \
+  --session-read-only sandbox/.state/apicurio-oauth.json \
+  GET https://localhost:8084/apis/registry/v3/search/artifacts
+```
+
+Inspect the public certificate chain without disabling verification:
+
+```bash
+openssl s_client -connect localhost:8083 -servername localhost \
+  -CAfile "$KANTRIP_SANDBOX_CA" </dev/null
+openssl s_client -connect localhost:8085 -servername localhost \
+  -CAfile "$KANTRIP_SANDBOX_CA" </dev/null
+openssl s_client -connect localhost:8084 -servername localhost \
+  -CAfile "$KANTRIP_SANDBOX_CA" </dev/null
+```
+
+### Expected result
+
+- Anonymous secure Registry requests return HTTP 401.
+- Basic and OAuth requests return successful JSON responses from both products.
+- OpenSSL reports `Verify return code: 0 (ok)` for all three TLS endpoints.
+- No credential or bearer token appears in process arguments, command output, or
+  committed files.
+- These authenticated Registry variants are sandbox readiness checks until the
+  corresponding Kantrip profile fields and adapters are implemented.
+
+## Remove or rotate the sandbox
+
+### Exercise
+
+Delete only the managed cluster:
+
+```bash
+uv run --locked python -m sandbox down
+```
+
+The private generated state remains reusable. To rotate every local sandbox
+credential, remove exactly that ignored state directory before recreating the
+cluster:
+
+```bash
+rm -rf "$PWD/sandbox/.state"
+uv run --locked python -m sandbox up
+```
+
+### Expected result
+
+- `down` removes `kantrip-sandbox` and no unrelated Kind cluster.
+- Removing the exact private state rotates all generated passwords, OAuth client
+  secrets, client certificates, and HTTPie sessions on the next `up`.

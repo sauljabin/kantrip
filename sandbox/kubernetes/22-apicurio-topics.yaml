@@ -1,0 +1,59 @@
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: apicurio-journal
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "-1"
+    retention.bytes: "-1"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: apicurio-snapshots
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "-1"
+    retention.bytes: "-1"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: apicurio-secure-journal
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "-1"
+    retention.bytes: "-1"
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: apicurio-secure-snapshots
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  partitions: 1
+  replicas: 1
+  config:
+    cleanup.policy: delete
+    retention.ms: "-1"
+    retention.bytes: "-1"

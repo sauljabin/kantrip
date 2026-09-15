@@ -64,8 +64,8 @@ uv run python -m scripts.banner
 ```
 
 Shared script code belongs in `scripts/__init__.py`; modules are executable
-workflows. Keep test utilities with their suite and manual environment utilities
-in `sandbox`. Automated tests must not import `sandbox`.
+workflows. Keep test utilities with their suite and the reproducible integration
+environment in `sandbox`.
 
 ## Schema and application environment
 
@@ -126,33 +126,65 @@ credential store.
 
 ## Sandbox services and smoke workflow
 
-The sandbox supplies a single-node plaintext Kafka cluster, Confluent Schema
-Registry, and Apicurio Registry. Versions live in `sandbox/.env`.
+The sandbox is a local Kind laboratory with one Strimzi Kafka cluster,
+Keycloak, Schema Registry, Apicurio Registry, and cert-manager. Install Docker,
+Kind, kubectl, and Helm before using it. Component versions are pinned in
+`sandbox/versions.env`.
 
-Start and stop the services with:
+Create, inspect, and delete the environment with:
 
 ```bash
-docker compose --project-directory sandbox up -d
-docker compose --project-directory sandbox down -v
+uv run --locked python -m sandbox up
+uv run --locked python -m sandbox status
+uv run --locked python -m sandbox credentials
+uv run --locked python -m sandbox down
 ```
 
-The endpoints are:
+Generated credentials, CA material, and Java client property files are private
+and ignored below `sandbox/.state`. The lifecycle command does not print their
+values. `down` removes the cluster but retains this private state so another
+`up` can reuse the same credentials; remove that exact directory to rotate the
+local laboratory credentials.
 
-- Kafka: `localhost:9092`
-- Confluent Schema Registry: `http://localhost:8081`
-- Apicurio compatibility API: `http://localhost:8082/apis/ccompat/v7`
-- Apicurio Core API: `http://localhost:8082/apis/registry/v3`
+The loopback-only endpoints are:
+
+- Kafka plaintext: `localhost:9092`
+- Kafka TLS: `localhost:9093`
+- Kafka SCRAM-SHA-512 over TLS: `localhost:9094`
+- Kafka mTLS: `localhost:9095`
+- Kafka OAuth over TLS: `localhost:9096`
+- Schema Registry baseline: `http://localhost:8081`
+- Apicurio baseline: `http://localhost:8082`
+- Schema Registry with HTTPS and Basic Auth: `https://localhost:8083`
+- Apicurio with HTTPS and Basic/OAuth: `https://localhost:8084`
+- Schema Registry with HTTPS and OAuth: `https://localhost:8085`
+- Keycloak: `https://localhost:8443`
+
+The baseline registry endpoints keep today's unauthenticated Kantrip adapters
+executable. Schema Registry uses separate Basic and OAuth processes because its
+local JAAS property-file login and OAuth `AuthenticationHandler` are different
+server authentication paths; Apicurio accepts both mechanisms on one endpoint.
+These secure variants prepare authenticated Registry scenarios without claiming
+that those profile fields are already implemented. The Kafka cluster does not
+expose SASL/PLAIN: the name `plaintext` means no authentication and no
+encryption, while password authentication uses SCRAM-SHA-512 over TLS.
+
+Kafka uses a disposable persistent volume, so broker data survives pod restarts
+but is removed with the Kind cluster. Both Apicurio instances use KafkaSQL with
+separate journal and snapshot topics configured for delete cleanup and infinite
+retention. Their registry data therefore survives an Apicurio pod restart without
+leaking data between the baseline and authenticated variants.
 
 Run the adapter smoke workflow against the active services:
 
 ```bash
-uv run --locked python -m sandbox
+uv run --locked python -m scripts.smoke
 ```
 
 Include the interactive shell adapters with:
 
 ```bash
-uv run --locked python -m sandbox \
+uv run --locked python -m scripts.smoke \
   --shell bash --shell zsh --shell fish
 ```
 
