@@ -13,18 +13,19 @@
 <a href="https://pypi.org/project/kantrip"><img alt="macOS support" src="https://img.shields.io/badge/os-macOS-7C3AED?style=flat-square&logo=apple&logoColor=white"></a>
 </p>
 
-Kantrip securely manages plaintext Kafka profiles for kcat, the official Kafka
-CLIs, Kaskade, and compatible applications. This pre-release CLI validates and
-displays profiles, opens scoped sessions, and checks Kafka and registry
-connectivity.
+Kantrip securely manages plaintext and server-authenticated TLS Kafka profiles
+for kcat, the official Kafka CLIs, Kaskade, and compatible applications. This
+pre-release CLI validates and displays profiles, opens scoped sessions, and
+checks Kafka and registry connectivity.
 
 ## Features
 
-### Plaintext profiles
+### Kafka profiles
 
 - Schema-validated profiles in a private transactional SQLite database
 - Ordered automatic schema migrations with private recovery backups
 - Multiple bootstrap servers, descriptions, labels, and optional Registry endpoints
+- Plaintext or verified TLS transport with system trust or a copied PEM CA bundle
 - `add`, `edit`, `remove`, label-filtered `list`, and safe `describe` commands
 - Human, JSON, and YAML profile observations
 
@@ -60,7 +61,7 @@ The MVP roadmap has three stages:
 
 1. Complete secret-bearing profile updates on the local credential-store and
    reconciliation foundation.
-2. Add TLS, authenticated Kafka profiles, external input sources, and adapters.
+2. Add authenticated Kafka profiles, external input sources, and adapters.
 3. Add authenticated Registry connections, OAuth integration, and authenticated
    connectivity checks.
 

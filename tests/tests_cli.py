@@ -16,6 +16,8 @@ from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult
 from kantrip.profiles import add_profile, load_profiles
 
+CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
+
 
 class TestCli(unittest.TestCase):
     def setUp(self) -> None:
@@ -152,6 +154,49 @@ class TestCli(unittest.TestCase):
         self.assertEqual({"environment": "development"}, profile["labels"])
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
+
+    def test_add_and_edit_configure_kafka_tls(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+
+            added = self.runner.invoke(
+                cli,
+                [
+                    "add",
+                    "production",
+                    "--bootstrap-servers",
+                    "broker.example.com:9093",
+                    "--transport",
+                    "tls",
+                    "--ca-file",
+                    str(CA_FIXTURE),
+                ],
+                env=environment,
+            )
+            secure = load_profiles(database_path).profile("production")
+            system_ca = self.runner.invoke(
+                cli,
+                ["edit", "production", "--system-ca"],
+                env=environment,
+            )
+            system_trust = load_profiles(database_path).profile("production")
+            edited = self.runner.invoke(
+                cli,
+                ["edit", "production", "--transport", "plaintext"],
+                env=environment,
+            )
+            plaintext = load_profiles(database_path).profile("production")
+
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual("tls", secure["kafka"]["transport"])
+        self.assertIn("BEGIN CERTIFICATE", secure["kafka"]["tls"]["caCertificates"])
+        self.assertEqual(0, system_ca.exit_code, system_ca.output)
+        self.assertEqual("tls", system_trust["kafka"]["transport"])
+        self.assertNotIn("tls", system_trust["kafka"])
+        self.assertEqual(0, edited.exit_code, edited.output)
+        self.assertEqual("plaintext", plaintext["kafka"]["transport"])
+        self.assertNotIn("tls", plaintext["kafka"])
 
     def test_edit_updates_and_removes_explicit_profile_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

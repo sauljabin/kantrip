@@ -34,6 +34,7 @@ class TestProfileOutput(unittest.TestCase):
             "kafka": {
                 "bootstrapServers": ["kafka.example.com:9093"],
                 "transport": "tls",
+                "tls": {"caCertificates": "classified public material"},
                 "auth": {
                     "type": "scram-sha-512",
                     "username": "application",
@@ -50,6 +51,7 @@ class TestProfileOutput(unittest.TestCase):
         self.assertEqual("production", observation["name"])
         self.assertEqual(4, observation["revision"])
         self.assertEqual({"type": "scram-sha-512"}, observation["kafka"]["auth"])
+        self.assertEqual({"trust": "custom"}, observation["kafka"]["tls"])
         self.assertNotIn("passwordRef", serialized)
         self.assertNotIn("properties", serialized)
         self.assertNotIn("classified", serialized)

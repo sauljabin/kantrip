@@ -68,11 +68,12 @@ Linux Secret Service-compatible backend. Kantrip rejects unavailable,
 plaintext, encrypted-file, null, and unknown backends instead of weakening
 storage.
 
-The connection model supports plaintext development profiles, TLS with system
-or profile trust, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mutual TLS, and
-OAuth 2.0 client credentials. A Registry may independently use TLS and
-authentication through Confluent-compatible or native Apicurio properties.
-Kafka and Registry credentials are never inherited across those boundaries.
+The implemented connection model supports plaintext transport and
+server-authenticated TLS with system or profile trust, currently without Kafka
+authentication. The remaining model adds SASL/PLAIN, SCRAM-SHA-256,
+SCRAM-SHA-512, mutual TLS, and OAuth 2.0 client credentials. A Registry remains
+an independent connection; Kafka and Registry credentials are never inherited
+across those boundaries.
 
 ## Schema evolution and maintenance
 
@@ -179,9 +180,16 @@ files and Kubernetes discovery are outside this boundary.
 Secret resolution creates one in-memory session model. Renderers derive all
 client files from it; adapters cannot query the credential store independently.
 
-Generated properties, certificates, private keys, adapter files, and shims live
-only in the private session directory. Secrets do not appear in child
-arguments, diagnostics, snapshots, or normal output.
+Generated properties, custom CA bundles, certificates, private keys, adapter
+files, and shims live only in the private session directory. A selected Kafka
+CA bundle is validated and copied into the profile as public material, then
+materialized privately for Java and librdkafka clients. Secrets do not appear
+in child arguments, diagnostics, snapshots, or normal output.
+
+Custom CA profiles use native PEM properties in librdkafka. Java adapters first
+verify Apache Kafka 2.7+ or Confluent Platform 6.1+, the releases that introduced
+PEM trust-store support. Older or unidentifiable Java clients fail before the
+Kafka operation instead of attempting an incompatible or weaker configuration.
 
 Java and librdkafka OAuth use their verified native client-credentials flows.
 Kantrip supplies native connection properties but does not implement token

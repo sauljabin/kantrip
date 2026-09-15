@@ -1,6 +1,7 @@
 # Kantrip Usage
 
-Kantrip is a pre-release CLI for plaintext profiles and scoped sessions:
+Kantrip is a pre-release CLI for plaintext or verified TLS profiles and scoped
+sessions:
 
 ```bash
 kantrip add local
@@ -17,8 +18,9 @@ Kantrip is not a persistent process manager, a global context selector, or a
 replacement for Kafka clients. Its responsibility ends at storing profiles,
 resolving the connection material supported by the installed release,
 generating the correct temporary configuration, and supervising active
-execution. This pre-release currently supports plaintext profiles;
-secret-backed profiles remain tracked in the MVP roadmap.
+execution. This pre-release currently supports plaintext and
+server-authenticated TLS profiles with `auth.type: none`; secret-backed profiles
+remain tracked in the MVP roadmap.
 
 ## Local diagnostics
 
@@ -57,7 +59,8 @@ Check Kafka and, when configured, registry connectivity:
 kantrip ping local
 ```
 
-`ping` uses Confluent's Admin client for Kafka metadata. It requests `/subjects`
+`ping` uses Confluent's Admin client for Kafka metadata with the profile's
+plaintext or verified TLS transport. It requests `/subjects`
 from a Confluent-compatible registry or `/search/artifacts` from native
 Apicurio, reporting broker and provider-specific resource counts. It needs no
 external CLI and defaults to a five-second timeout, configurable with
@@ -78,6 +81,34 @@ Add a plaintext profile using the default local broker:
 ```bash
 kantrip add local
 ```
+
+Use TLS with normal operating-system trust for a broker whose certificate is
+issued by a public CA:
+
+```bash
+kantrip add production \
+  --bootstrap-servers kafka.example.com:9093 \
+  --transport tls
+```
+
+For a private CA, pass a PEM certificate bundle. Kantrip validates the bundle,
+copies the public certificates into the profile, and later materializes them
+only in the private session directory:
+
+```bash
+kantrip add production-private-ca \
+  --bootstrap-servers kafka.internal.example:9093 \
+  --transport tls \
+  --ca-file ./cluster-ca.pem
+```
+
+The CA source must be a regular UTF-8 PEM file of at most 1 MiB. Certificate and
+hostname verification cannot be disabled. `kcat`, `kafkacat`, and Kaskade use
+the PEM bundle directly. Java Kafka commands require Apache Kafka 2.7+ or
+Confluent Platform 6.1+ for native PEM trust-store support. Kantrip checks the
+installed Java client version before the Kafka operation and reports an
+actionable error when it cannot prove support. Kafka 2.6 and Confluent Platform
+6.0 can still use TLS with system trust.
 
 Choose one or more broker addresses when needed:
 
@@ -103,8 +134,8 @@ kantrip add development-apicurio \
 `--registry-provider` without `--registry-url` is invalid.
 
 `add` creates the database when needed and never overwrites a profile. `-l` is
-the short form of repeatable `--label KEY=VALUE`. Edit explicit plaintext fields
-without changing the profile identity:
+the short form of repeatable `--label KEY=VALUE`. Edit explicit fields without
+changing the profile identity:
 
 ```bash
 kantrip edit development \
@@ -113,6 +144,13 @@ kantrip edit development \
   --label environment=development \
   --registry-url http://registry.example.com:8081
 ```
+
+`edit --transport tls` enables system-trusted TLS. `edit --ca-file PATH`
+replaces the custom CA for an existing TLS profile; combine it with
+`--transport tls` when upgrading a plaintext profile. Switching back to
+system trust is an explicit `edit --system-ca` operation and does not disable
+TLS. Switching to `--transport plaintext` removes the stored TLS configuration.
+`--system-ca` and `--ca-file` are mutually exclusive.
 
 `edit` adds or updates labels and can add a Registry to a profile that has none.
 When only `--registry-url` is supplied, the new Registry defaults to Confluent.
@@ -481,7 +519,12 @@ The database directory is private to the current user (`0700`), the database is
 `0600`, and writes use SQLite transactions. A missing database is created by
 the first mutation; read-only commands do not create it.
 
-Profiles support plaintext Kafka metadata and one optional registry connection.
+Profiles support plaintext or server-authenticated TLS Kafka connections and
+one optional registry connection. TLS uses system trust by default; a custom
+PEM CA supplied through `--ca-file` is validated and copied into the profile.
+Java adapters version-gate custom PEM trust stores at Kafka 2.7 or Confluent
+Platform 6.1; librdkafka adapters consume the same profile without that Java
+version constraint.
 The `provider` is explicit in every stored profile. When `--registry-url` is
 supplied without `--registry-provider`, `kantrip add` and `kantrip edit` select
 and persist Confluent:
@@ -507,7 +550,9 @@ For native Apicurio:
 ```
 
 The two providers are mutually exclusive, and `provider` is required in stored
-profiles. Kafka and registry authentication and TLS are schema-invalid. The
+profiles. Kafka authentication and Registry TLS or authentication remain
+schema-invalid. Profile documents accept no arbitrary Java or librdkafka
+property maps; Kantrip renders only its typed connection fields. Registry
 property names follow the official
 [Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
 and [Apicurio](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-kafka-client-serdes.html)
@@ -545,7 +590,7 @@ may instead pass generated client files directly.
 | Variable | Meaning |
 | --- | --- |
 | `KAFKA_BOOTSTRAP_SERVERS` | Comma-separated broker addresses |
-| `KAFKA_SECURITY_PROTOCOL` | Always `PLAINTEXT` for a valid current profile |
+| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` or `SSL`, matching the selected profile |
 | `KAFKA_JAVA_CONFIG_FILE` | Generated Java Kafka properties path |
 | `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Generated librdkafka properties path |
 | `KCAT_CONFIG` | Generated librdkafka properties path read natively by kcat |

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient
 
+from kantrip.kafka import KafkaProfileError, kafka_connection, librdkafka_properties
 from kantrip.redaction import redact_text
 from kantrip.registry import (
     RegistryConnection,
@@ -58,10 +59,11 @@ def ping_profile(profile: Mapping[str, Any], *, timeout: float = 5.0) -> PingRes
     except RegistryProfileError as error:
         raise PingError(str(error)) from error
     try:
-        client = AdminClient(
-            _client_configuration(profile, timeout),
-            logger=_QUIET_KAFKA_LOGGER,
-        )
+        configuration = _client_configuration(profile, timeout)
+    except KafkaProfileError as error:
+        raise PingError(str(error)) from error
+    try:
+        client = AdminClient(configuration, logger=_QUIET_KAFKA_LOGGER)
         metadata = client.list_topics(timeout=timeout)
     except KafkaException as error:
         raise PingError(
@@ -137,17 +139,12 @@ def _exception_message(error: Exception) -> str:
 
 
 def _client_configuration(profile: Mapping[str, Any], timeout: float) -> dict[str, Any]:
-    kafka = profile["kafka"]
-    configured = kafka.get("properties", {})
-    properties = {
-        str(key): value
-        for group in (configured.get("common", {}), configured.get("librdkafka", {}))
-        for key, value in group.items()
-    }
+    properties: dict[str, Any] = librdkafka_properties(
+        kafka_connection(profile),
+        inline_ca=True,
+    )
     properties.update(
         {
-            "bootstrap.servers": ",".join(kafka["bootstrapServers"]),
-            "security.protocol": "PLAINTEXT",
             "client.id": "kantrip-ping",
             "socket.timeout.ms": max(100, round(timeout * 1000)),
         }

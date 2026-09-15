@@ -96,6 +96,7 @@ class TestConsole(unittest.TestCase):
             "kafka": {
                 "bootstrapServers": ["kafka.example.com:9093"],
                 "transport": "tls",
+                "tls": {"trust": "custom"},
                 "auth": {"type": "scram-sha-512"},
             },
             "registry": None,
@@ -109,6 +110,8 @@ class TestConsole(unittest.TestCase):
             "Revision",
             "Kafka",
             "kafka.example.com:9093",
+            "TLS trust",
+            "custom",
             "Registry",
             "Not configured",
             "Labels",

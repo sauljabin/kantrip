@@ -1,0 +1,16 @@
+{
+  "id": "018f8f13-7c21-7cee-8000-000000000002",
+  "description": "Production with system-trusted TLS",
+  "labels": {
+    "environment": "production"
+  },
+  "kafka": {
+    "bootstrapServers": [
+      "kafka.example.com:9093"
+    ],
+    "transport": "tls",
+    "auth": {
+      "type": "none"
+    }
+  }
+}

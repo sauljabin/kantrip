@@ -9,6 +9,7 @@ from email.parser import BytesParser
 from pathlib import Path
 
 WHEEL_REQUIRED = {
+    "kantrip/kafka.py",
     "kantrip/migrations.py",
     "kantrip/profiles.py",
     "kantrip/reconciliation.py",
@@ -30,6 +31,7 @@ SDIST_REQUIRED = {
     "THREAT_MODEL.md",
     "USAGE.md",
     "examples/profile.json",
+    "examples/tls-profile.json",
     "images/banner.svg",
     "images/data-flow.svg",
     "images/database-migration.svg",
@@ -47,6 +49,7 @@ SDIST_REQUIRED = {
     "kantrip/secret_store.py",
     "pyproject.toml",
     "schemas/profile.schema.json",
+    "tests/fixtures/kafka-ca.pem",
 }
 
 

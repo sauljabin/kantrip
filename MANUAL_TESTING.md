@@ -71,6 +71,34 @@ uv run --locked kantrip describe manual
 - Running `kantrip edit manual` without any edit option fails without changing
   the profile.
 
+## Create a verified TLS profile
+
+### Setup
+
+Initialize isolated state. The repository contains a synthetic public CA
+certificate for this configuration-only check.
+
+### Exercise
+
+```bash
+uv run --locked kantrip add tls-manual \
+  --bootstrap-servers kafka.example.com:9093 \
+  --transport tls \
+  --ca-file tests/fixtures/kafka-ca.pem
+uv run --locked kantrip describe tls-manual
+uv run --locked kantrip exec tls-manual -- sh -c \
+  'grep -E "^(security.protocol|ssl.ca.location|ssl.endpoint.identification.algorithm|enable.ssl.certificate.verification)=" "$KAFKA_LIBRDKAFKA_CONFIG_FILE"; stat -f "%Lp" "$KANTRIP_SESSION_DIR/kafka-ca.pem" 2>/dev/null || stat -c "%a" "$KANTRIP_SESSION_DIR/kafka-ca.pem"'
+```
+
+### Expected result
+
+- `describe` reports transport `tls`, custom TLS trust, and no authentication.
+- The generated librdkafka configuration uses `security.protocol=SSL`, enables
+  hostname verification, and references the session-owned CA file.
+- The copied CA file has mode `0600` and disappears with the private session.
+- Replacing the fixture with malformed text causes `add` to fail without
+  creating the profile.
+
 ## Filter and describe profiles
 
 ### Setup

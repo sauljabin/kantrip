@@ -13,8 +13,8 @@ must not be restated here as future work.
 Complete Kantrip's local profile model with:
 
 - OS-backed storage for Kafka and Registry secrets.
-- TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and generic OAuth client
-  credentials.
+- SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and generic OAuth client
+  credentials over the implemented verified TLS transport.
 - Authenticated Confluent-compatible and native Apicurio Registry connections.
 - Profile creation from Java/librdkafka properties, Confluent-generated client
   properties, and Strimzi KafkaUser-generated Kubernetes Secrets.
@@ -171,6 +171,7 @@ Kafka security:
       --auth TYPE                  Replace the authentication method.
       --username TEXT              Replace the Kafka username.
       --ca-file PATH               Replace Kafka CA configuration.
+      --system-ca                  Use the system CA store for Kafka TLS.
       --client-certificate-file PATH
                                    Replace the client certificate.
       --client-key-file PATH       Replace the private client key.
@@ -351,9 +352,9 @@ of the inspection commands can return them.
 
 - Store textual PEM private keys as credential values. Validate realistic PEM
   sizes against both supported store families before declaring mTLS complete.
-- Treat CA bundles and public certificate chains as non-secret. They may be
-  copied into the same store for portability or referenced by a user-owned
-  path; Kantrip never deletes a referenced source file.
+- Treat public client certificate chains as non-secret. They may be copied into
+  the profile for portability or referenced by a user-owned path; Kantrip never
+  deletes a referenced source file.
 
 ### Recoverable updates
 
@@ -381,11 +382,11 @@ atomic transaction. Do not promise cross-store atomicity.
 
 ### Commands
 
-- Extend `kantrip add PROFILE` with labels, transport, authentication, Registry,
-  and the explicit `--from-properties` and `--from-strimzi` input sources.
+- Extend `kantrip add PROFILE` with authentication and the explicit
+  `--from-properties` and `--from-strimzi` input sources.
 - Extend `kantrip edit PROFILE` with every mutable profile field, including
-  labels, transport, authentication, Registry TLS and authentication, and
-  prompted secret replacement. With no options, open an interactive editor.
+  authentication, Registry TLS and authentication, and prompted secret
+  replacement. With no options, open an interactive editor.
 - For each existing secret, offer explicit keep, replace, or remove decisions.
   Never display or prefill the current value.
 - Support direct prompted rotation or recovery through repeatable
@@ -467,10 +468,9 @@ the client properties emitted by Confluent's public client-config generator.
 - Fail closed on unknown `ssl.*`, `sasl.*`, `*.auth.*`, token, password,
   secret, credential, certificate, or private-key properties. This prevents a
   misspelled or newer security property from being silently discarded.
-- Replace the current generic `properties.common`, `properties.java`, and
-  `properties.librdkafka` escape hatch with typed connection fields as part of
-  the secure-profile schema change. Existing non-connection entries become
-  invalid and are not injected into secure sessions.
+- Normalize into the existing typed connection fields. Never reintroduce the
+  removed generic `properties.common`, `properties.java`, or
+  `properties.librdkafka` passthroughs.
 - Treat an input file as user-owned and never modify or delete it. Recommend
   stdin for generated files that contain secrets so users do not need to leave
   another plaintext copy on disk.
@@ -542,14 +542,13 @@ or invokes Kubernetes APIs itself.
 
 ## 3. Kafka TLS and authentication
 
-Extend the current schema and canonical client-property construction in this
-order:
+Extend the current verified-TLS schema and canonical client-property
+construction in this order:
 
-1. TLS server verification.
-2. SASL/PLAIN over TLS.
-3. SCRAM-SHA-256 and SCRAM-SHA-512 over TLS.
-4. Mutual TLS.
-5. OAuth/OAUTHBEARER client credentials over TLS.
+1. SASL/PLAIN over TLS.
+2. SCRAM-SHA-256 and SCRAM-SHA-512 over TLS.
+3. Mutual TLS.
+4. OAuth/OAUTHBEARER client credentials over TLS.
 
 SASL without TLS is rejected except for explicitly documented loopback test
 infrastructure.
@@ -597,7 +596,7 @@ deserializers, and `request.timeout.ms`.
   properties independently.
 - Construct and escape Java JAAS internally. Raw JAAS input is not part of the
   profile schema.
-- Materialize CA, certificate, and private-key PEM only inside the private
+- Materialize client certificates and private-key PEM only inside the private
   session directory when their source is the credential store.
 - Prefer Java PEM properties on verified Kafka client versions. Older clients
   that require JKS or PKCS12 fail with an actionable capability error; Kantrip
@@ -748,7 +747,7 @@ documented config-path environment variables so secrets never appear in argv.
 
 1. Complete recoverable secret-bearing profile updates on top of the credential
    store, reconciliation journal, and plaintext `edit` lifecycle.
-2. Add TLS, PLAIN, SCRAM, and mTLS to the schema and shared renderers.
+2. Add PLAIN, SCRAM, and mTLS to the schema and shared renderers.
 3. Add the properties and Strimzi input sources to `add`.
 4. Extend the existing adapters and authenticated `ping` for those mechanisms.
 5. Add secure Registry connections.
@@ -781,7 +780,7 @@ renderer and adapter boundaries are proven before token lifecycle is added.
   the decoded source document.
 - Profile-scoped doctor output can associate detailed sessions with the exact
   profile ID and revision on which each session started.
-- TLS, PLAIN, both SCRAM mechanisms, and mTLS pass unit, renderer, adapter, and
+- PLAIN, both SCRAM mechanisms, and mTLS pass unit, renderer, adapter, and
   disposable-cluster integration tests.
 - OAuth client credentials refresh through verified Java and librdkafka native
   mechanisms without exposing the client secret.
