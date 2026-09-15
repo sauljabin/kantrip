@@ -46,7 +46,7 @@ outside the supported lifecycle.
 “Profile-aware” means Kantrip maps the selected profile into the command. The
 Confluent console clients and kcat require `provider: confluent`. This includes
 Apicurio's `/apis/ccompat/v7` endpoint, which uses Confluent framing. Native
-Apicurio `/apis/registry/v3` profiles work only with Kaskade 5 registry
+Apicurio `/apis/registry/v3` profiles work only with Kaskade registry
 deserializers and use Apicurio's default `contentId` framing.
 
 Every registry connection uses an `http://` URL. Kantrip rejects missing,

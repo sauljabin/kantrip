@@ -112,7 +112,7 @@
   are unsuffixed. They receive the matching Kafka producer/consumer config file
   and a Confluent-compatible `schema.registry.url`; connection overrides and
   native Apicurio profiles are rejected.
-- Kaskade 5 `admin` and `consumer` receive a private INI file through
+- Kaskade `admin` and `consumer` receive a private INI file through
   `--config-file`; registry deserializers select a second private file with a
   provider-specific `[registry]` section. Kaskade alone supports native
   Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
