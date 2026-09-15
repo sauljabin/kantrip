@@ -1,561 +1,574 @@
-"""Exercise Kantrip's supported clients against the manual sandbox."""
+"""Create and manage Kantrip's local Kubernetes integration sandbox."""
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import secrets
+import shlex
 import shutil
+import ssl
 import subprocess
-import sys
-import tempfile
-from collections.abc import Iterable, Mapping, Sequence
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import click
 import cloup
-from rich.console import Console
-from rich.text import Text
+import yaml
 
-from kantrip._files import write_exclusive_text
-from kantrip.adapters import (
-    KAFKA_ACLS_EXECUTABLES,
-    KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
-    KAFKA_CONFIGS_EXECUTABLES,
-    KAFKA_CONSOLE_CONSUMER_EXECUTABLES,
-    KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
-    KAFKA_CONSUMER_GROUPS_EXECUTABLES,
-    KAFKA_TOPICS_EXECUTABLES,
-    KCAT_EXECUTABLES,
-    SCHEMA_REGISTRY_EXECUTABLES,
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
+MANIFEST_ROOT = SANDBOX_ROOT / "kubernetes"
+STATE_ROOT = SANDBOX_ROOT / ".state"
+VERSIONS_FILE = SANDBOX_ROOT / "versions.env"
+KIND_CONFIG = SANDBOX_ROOT / "kind.yaml"
+CLUSTER_NAME = "kantrip-sandbox"
+NAMESPACE = "kantrip-sandbox"
+KUBECTL_CONTEXT = f"kind-{CLUSTER_NAME}"
+STATE_FILE = STATE_ROOT / "credentials.env"
+CA_FILE = STATE_ROOT / "ca.crt"
+
+SECRET_FIELDS = (
+    "KEYCLOAK_ADMIN_USERNAME",
+    "KEYCLOAK_ADMIN_PASSWORD",
+    "KAFKA_OAUTH_CLIENT_ID",
+    "KAFKA_OAUTH_CLIENT_SECRET",
+    "APICURIO_CLIENT_ID",
+    "APICURIO_CLIENT_SECRET",
+    "SCHEMA_REGISTRY_OAUTH_CLIENT_ID",
+    "SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET",
+    "SCHEMA_REGISTRY_BASIC_USERNAME",
+    "SCHEMA_REGISTRY_BASIC_PASSWORD",
 )
-from kantrip.console import create_console, create_status_text, show_progress
-from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
-from scripts import TerminalTimeout, run_terminal
-
-DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
-DEFAULT_REGISTRY_URL = "http://localhost:8081"
-KAFKA_COMMANDS = {
-    "topics": KAFKA_TOPICS_EXECUTABLES,
-    "producer": KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
-    "consumer": KAFKA_CONSOLE_CONSUMER_EXECUTABLES,
-    "groups": KAFKA_CONSUMER_GROUPS_EXECUTABLES,
-    "configs": KAFKA_CONFIGS_EXECUTABLES,
-    "acls": KAFKA_ACLS_EXECUTABLES,
-    "broker API versions": KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
-    "Schema Registry console": SCHEMA_REGISTRY_EXECUTABLES,
-}
 
 
-class SmokeFailure(RuntimeError):
-    """Raised when a sandbox smoke check cannot complete."""
+class SandboxFailure(RuntimeError):
+    """Raised when a sandbox lifecycle operation cannot complete."""
 
 
-@cloup.command()
-@cloup.argument("topic", required=False)
-@cloup.option("--profile", default="sandbox", show_default=True)
-@cloup.option(
-    "-b",
-    "--bootstrap-servers",
-    "bootstrap_servers",
-    default=DEFAULT_BOOTSTRAP_SERVERS,
-    show_default=True,
-    help="Comma-separated sandbox broker addresses.",
-)
-@cloup.option("--keep-topic", is_flag=True, help="Leave the smoke topic in the cluster.")
-@cloup.option(
-    "--registry-provider",
-    type=cloup.Choice(("confluent", "apicurio")),
-    default="confluent",
-    show_default=True,
-    help="Sandbox registry provider.",
-)
-@cloup.option(
-    "--registry-url",
-    default=DEFAULT_REGISTRY_URL,
-    show_default=True,
-    help="Sandbox registry URL.",
-)
-@cloup.option("--no-color", is_flag=True, help="Disable styled terminal output.")
-@cloup.option(
-    "--shell",
-    "shells",
-    multiple=True,
-    type=cloup.Choice(sorted(SUPPORTED_SHELLS)),
-    help="Also exercise an interactive shell; may be repeated.",
-)
-def main(
-    topic: str | None,
-    profile: str,
-    bootstrap_servers: str,
-    keep_topic: bool,
-    registry_provider: str,
-    registry_url: str,
-    no_color: bool,
-    shells: tuple[str, ...],
-) -> None:
-    """Create TOPIC and smoke-test installed adapters against the sandbox."""
-    environment = dict(os.environ)
-    plain_output = (
-        no_color or bool(environment.get("CI")) or bool(environment.get("GITHUB_ACTIONS"))
-    )
-    console = create_console(no_color=plain_output, environment=environment)
-    error_console = create_console(
-        stream=sys.stderr,
-        no_color=plain_output,
-        environment=environment,
-    )
-    smoke_topic = topic or f"kantrip-smoke-{secrets.token_hex(6)}"
+@cloup.group(invoke_without_command=True)
+@cloup.pass_context
+def main(context: cloup.Context) -> None:
+    """Manage the isolated Kind, Strimzi, Registry, and Keycloak sandbox."""
+    if context.invoked_subcommand is None:
+        click.echo(context.get_help())
+
+
+@main.command()
+def up() -> None:
+    """Create the cluster and reconcile every sandbox service."""
     try:
-        smoke(
-            console,
-            profile=profile,
-            bootstrap_servers=tuple(server.strip() for server in bootstrap_servers.split(",")),
-            topic=smoke_topic,
-            keep_topic=keep_topic,
-            registry_provider=registry_provider,
-            registry_url=registry_url,
-            environment=environment,
-            shells=shells,
+        _require_commands(("docker", "helm", "kind", "kubectl"))
+        versions = load_versions(VERSIONS_FILE)
+        credentials = load_or_create_credentials(STATE_FILE)
+        if not cluster_exists():
+            _run(
+                ("kind", "create", "cluster", "--name", CLUSTER_NAME, "--config", str(KIND_CONFIG))
+            )
+        _install_operators(versions)
+        _apply_manifest("00-pki.yaml", versions)
+        _wait_for_certificates()
+        _apply_runtime_secrets(credentials)
+        _apply_manifest("10-keycloak.yaml", versions)
+        _wait_for_deployment("keycloak", timeout="5m")
+        _apply_manifest("20-kafka.yaml", versions)
+        _apply_manifest("21-kafka-users.yaml", versions)
+        _wait_for_kafka()
+        _apply_manifest("22-apicurio-topics.yaml", versions)
+        _wait_for_apicurio_topics()
+        _apply_manifest("30-registries.yaml", versions)
+        _wait_for_registries()
+        _export_credentials(credentials)
+    except SandboxFailure as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Sandbox is ready. Private client material: {STATE_ROOT}")
+
+
+@main.command()
+def down() -> None:
+    """Delete the Kind cluster while retaining private generated credentials."""
+    try:
+        _require_commands(("kind",))
+        if cluster_exists():
+            _run(("kind", "delete", "cluster", "--name", CLUSTER_NAME))
+        else:
+            click.echo(f"Kind cluster '{CLUSTER_NAME}' does not exist.")
+    except SandboxFailure as error:
+        raise click.ClickException(str(error)) from error
+
+
+@main.command()
+def status() -> None:
+    """Show the cluster and workload status without displaying credentials."""
+    try:
+        _require_commands(("kind", "kubectl"))
+        if not cluster_exists():
+            raise SandboxFailure(f"Kind cluster '{CLUSTER_NAME}' does not exist")
+        _run(("kubectl", "--context", KUBECTL_CONTEXT, "get", "pods,services", "-n", NAMESPACE))
+    except SandboxFailure as error:
+        raise click.ClickException(str(error)) from error
+
+
+@main.command(name="credentials")
+def credentials_command() -> None:
+    """Show where generated credentials are stored, without revealing values."""
+    if not STATE_FILE.exists():
+        raise click.ClickException("sandbox credentials do not exist; run 'python -m sandbox up'")
+    fields = sorted(load_credentials(STATE_FILE))
+    click.echo(f"Private environment file: {STATE_FILE}")
+    click.echo(f"Trusted CA bundle: {CA_FILE}")
+    click.echo("Available variables:")
+    for field in fields:
+        click.echo(f"  {field}")
+
+
+@main.command(name="oauth-session")
+@cloup.argument("service", type=cloup.Choice(("apicurio", "schema-registry")))
+def oauth_session(service: str) -> None:
+    """Obtain a short-lived token and write a private HTTPie bearer session."""
+    try:
+        credentials = load_credentials(STATE_FILE)
+        client_prefix = "APICURIO" if service == "apicurio" else "SCHEMA_REGISTRY_OAUTH"
+        token = _request_access_token(
+            credentials[f"{client_prefix}_CLIENT_ID"],
+            credentials[f"{client_prefix}_CLIENT_SECRET"],
         )
-    except SmokeFailure as error:
-        error_console.print(create_status_text(error_console, "error", str(error)))
-        raise click.exceptions.Exit(1) from error
+        path = STATE_ROOT / f"{service}-oauth.json"
+        _write_httpie_session(path, auth_type="bearer", raw_auth=token)
+    except SandboxFailure as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"Private HTTPie session: {path}")
 
 
-def smoke(
-    console: Console,
-    *,
-    profile: str,
-    bootstrap_servers: Sequence[str],
-    topic: str,
-    keep_topic: bool,
-    registry_provider: str,
-    registry_url: str,
-    environment: Mapping[str, str],
-    shells: Sequence[str] = (),
-) -> None:
-    """Run the adapter smoke checks with an isolated Kantrip configuration."""
-    installed = {
-        adapter: _installed_commands(executables, environment)
-        for adapter, executables in KAFKA_COMMANDS.items()
+def load_versions(path: Path) -> dict[str, str]:
+    """Read the pinned sandbox component versions."""
+    versions = _read_assignment_file(path)
+    required = {
+        "APICURIO_VERSION",
+        "CERT_MANAGER_VERSION",
+        "KEYCLOAK_VERSION",
+        "KAFKA_VERSION",
+        "SCHEMA_REGISTRY_VERSION",
+        "STRIMZI_VERSION",
     }
-    for adapter, executables in installed.items():
-        if adapter == "Schema Registry console" and registry_provider == "apicurio":
-            continue
-        _require_command(f"Kafka {adapter} CLI", bool(executables))
-    kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
-    _require_command("kcat", "kcat" in kcat_executables)
-    _require_command("kaskade", shutil.which("kaskade", path=environment.get("PATH")) is not None)
-    resolved_shells = _resolve_shells(shells, environment)
-
-    with tempfile.TemporaryDirectory(prefix="kantrip-smoke-") as directory:
-        smoke_environment = dict(environment)
-        smoke_environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
-        console.print(Text("Kantrip Sandbox", style="heading"))
-        _show_section(console, "Setup")
-        _add_profile(
-            console,
-            profile,
-            bootstrap_servers,
-            registry_provider,
-            registry_url,
-            smoke_environment,
-        )
-        _check(
-            console,
-            f"connect to Kafka and {_registry_name(registry_provider)}",
-            _kantrip_cli("ping", profile),
-            smoke_environment,
-        )
-        creator = installed["topics"][0]
-        created = False
-        try:
-            _check(
-                console,
-                f"{creator}: create smoke topic",
-                _kantrip(
-                    profile,
-                    creator,
-                    "--create",
-                    "--topic",
-                    topic,
-                    "--partitions",
-                    "1",
-                    "--replication-factor",
-                    "1",
-                ),
-                smoke_environment,
-            )
-            created = True
-            if registry_provider == "confluent":
-                _show_section(console, "Confluent registry clients")
-                for executable in installed["Schema Registry console"]:
-                    _check(
-                        console,
-                        f"{executable}: load registry settings",
-                        _kantrip(profile, *_schema_registry_probe(executable)),
-                        smoke_environment,
-                    )
-            _show_section(console, "Kafka CLI")
-            for executable in installed["topics"]:
-                output = _check(
-                    console,
-                    f"{executable}: list topics",
-                    _kantrip(profile, executable, "--list"),
-                    smoke_environment,
-                )
-                _require_topic(topic, output, executable)
-            _check(
-                console,
-                f"{installed['producer'][0]}: write smoke record",
-                _kantrip(profile, installed["producer"][0], "--topic", topic),
-                smoke_environment,
-                input_text="kantrip smoke record\n",
-            )
-            output = _check(
-                console,
-                f"{installed['consumer'][0]}: read smoke record",
-                _kantrip(
-                    profile,
-                    installed["consumer"][0],
-                    "--topic",
-                    topic,
-                    "--from-beginning",
-                    "--max-messages",
-                    "1",
-                ),
-                smoke_environment,
-            )
-            _require_topic("kantrip smoke record", output, installed["consumer"][0])
-            _check(
-                console,
-                f"{installed['groups'][0]}: list consumer groups",
-                _kantrip(profile, installed["groups"][0], "--list"),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"{installed['configs'][0]}: describe smoke topic",
-                _kantrip(
-                    profile,
-                    installed["configs"][0],
-                    "--describe",
-                    "--entity-type",
-                    "topics",
-                    "--entity-name",
-                    topic,
-                ),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"{installed['acls'][0]}: load profile settings",
-                _kantrip(profile, installed["acls"][0], "--version"),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"{installed['broker API versions'][0]}: inspect broker APIs",
-                _kantrip(profile, installed["broker API versions"][0]),
-                smoke_environment,
-            )
-            _show_section(console, "Additional clients")
-            output = _check(
-                console,
-                "kcat: inspect cluster metadata",
-                _kantrip(profile, "kcat", "-L"),
-                smoke_environment,
-            )
-            _require_topic(topic, output, "kcat")
-            _check(
-                console,
-                "kaskade: load Kafka settings",
-                _kantrip(profile, "kaskade", "admin", "--help"),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"kaskade: load {_registry_name(registry_provider)} settings",
-                _kantrip(profile, "kaskade", "consumer", "-v", "registry", "--help"),
-                smoke_environment,
-            )
-            if resolved_shells:
-                _show_section(console, "Interactive shells")
-            for shell_name, shell in resolved_shells:
-                _check_shell(
-                    console,
-                    shell_name=shell_name,
-                    shell=shell,
-                    profile=profile,
-                    topic=topic,
-                    installed=installed,
-                    kcat_executables=kcat_executables,
-                    registry_provider=registry_provider,
-                    environment=smoke_environment,
-                )
-        finally:
-            if created and not keep_topic:
-                _show_section(console, "Cleanup")
-                _delete_topic(console, profile, creator, topic, smoke_environment)
-        console.print()
-        topic_outcome = "kept" if keep_topic else "deleted"
-        console.print(
-            create_status_text(
-                console,
-                "success",
-                f"Sandbox smoke checks passed (topic {topic_outcome}: {topic})",
-            )
-        )
+    missing = sorted(required.difference(versions))
+    if missing:
+        raise SandboxFailure(f"missing sandbox versions: {', '.join(missing)}")
+    return versions
 
 
-def _installed_commands(
-    executables: Iterable[str], environment: Mapping[str, str]
-) -> tuple[str, ...]:
-    path = environment.get("PATH")
-    return tuple(
-        executable
-        for executable in sorted(executables)
-        if shutil.which(executable, path=path) is not None
-    )
+def load_credentials(path: Path) -> dict[str, str]:
+    """Read the private generated sandbox credential file."""
+    credentials = _read_assignment_file(path)
+    missing = sorted(set(SECRET_FIELDS).difference(credentials))
+    if missing:
+        raise SandboxFailure(f"credential file is incomplete: {', '.join(missing)}")
+    return credentials
 
 
-def _require_command(name: str, available: bool) -> None:
-    if not available:
-        raise SmokeFailure(f"required command '{name}' was not found on PATH")
+def load_or_create_credentials(path: Path) -> dict[str, str]:
+    """Reuse credentials or create a complete private set atomically."""
+    if path.exists():
+        return load_credentials(path)
+    credentials = {
+        "KEYCLOAK_ADMIN_USERNAME": "sandbox-admin",
+        "KEYCLOAK_ADMIN_PASSWORD": _password(),
+        "KAFKA_OAUTH_CLIENT_ID": "kantrip-kafka",
+        "KAFKA_OAUTH_CLIENT_SECRET": _password(),
+        "APICURIO_CLIENT_ID": "kantrip-apicurio",
+        "APICURIO_CLIENT_SECRET": _password(),
+        "SCHEMA_REGISTRY_OAUTH_CLIENT_ID": "kantrip-schema-registry",
+        "SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET": _password(),
+        "SCHEMA_REGISTRY_BASIC_USERNAME": "sandbox-schema",
+        "SCHEMA_REGISTRY_BASIC_PASSWORD": _password(),
+    }
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    content = "".join(f"{key}={shlex.quote(value)}\n" for key, value in credentials.items())
+    raw_descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    descriptor = os.fdopen(raw_descriptor, "w", encoding="utf-8")
+    try:
+        descriptor.write(content)
+    finally:
+        descriptor.close()
+    return credentials
 
 
-def _resolve_shells(
-    shells: Sequence[str], environment: Mapping[str, str]
-) -> tuple[tuple[str, str], ...]:
-    resolved: list[tuple[str, str]] = []
-    for shell_name in dict.fromkeys(shells):
-        shell = shutil.which(shell_name, path=environment.get("PATH"))
-        _require_command(f"{shell_name} shell", shell is not None)
-        assert shell is not None
-        resolved.append((shell_name, shell))
-    return tuple(resolved)
-
-
-def _show_section(console: Console, title: str) -> None:
-    """Render one readable phase heading in colored and plain terminals."""
-    console.print()
-    console.print(Text(title, style="heading"))
-
-
-def _registry_name(provider: str) -> str:
-    """Return the user-facing name for a sandbox registry provider."""
-    return "Apicurio Registry" if provider == "apicurio" else "Confluent Schema Registry"
-
-
-def _check_shell(
-    console: Console,
-    *,
-    shell_name: str,
-    shell: str,
-    profile: str,
-    topic: str,
-    installed: Mapping[str, Sequence[str]],
-    kcat_executables: Sequence[str],
-    registry_provider: str,
-    environment: Mapping[str, str],
-) -> None:
-    label = f"{shell_name}: verify session adapter shims"
-    shell_environment = dict(environment)
-    shell_environment["SHELL"] = shell
-    commands = _shell_commands(
-        shell_name,
-        topic=topic,
-        installed=installed,
-        kcat_executables=kcat_executables,
-        registry_provider=registry_provider,
-    )
-    markers = tuple(f"__KANTRIP_SMOKE_{index}__" for index in range(len(commands)))
-    checked = [
-        f"{command} && echo {marker} || exit 70"
-        for command, marker in zip(commands, markers, strict=True)
-    ]
-    with tempfile.TemporaryDirectory(prefix=f"kantrip-{shell_name}-smoke-") as directory:
-        driver = _write_shell_driver(shell_name, checked, Path(directory))
-        try:
-            with show_progress(console, label):
-                status, output = run_terminal(
-                    (sys.executable, "-m", "kantrip.cli", "exec", profile),
-                    (driver,),
-                    environment=shell_environment,
-                    timeout=120,
-                )
-        except TerminalTimeout as error:
-            raise SmokeFailure(f"{label} failed: {error}") from error
-    if status or any(marker not in output for marker in markers):
-        details = output.strip() or f"shell exited with status {status}"
-        raise SmokeFailure(f"{label} failed:\n{details}")
-    _require_topic(topic, output, shell_name)
-    _require_topic("kantrip smoke record", output, shell_name)
-    console.print(create_status_text(console, "success", label))
-
-
-def _write_shell_driver(shell_name: str, commands: Sequence[str], directory: Path) -> str:
-    """Write one sourced command batch so terminal clients cannot consume later commands."""
-    script_path = directory / "commands"
-    write_exclusive_text(
-        script_path,
-        "\n".join(commands) + "\n",
-        mode=0o600,
-    )
-    quoted_path = quote_shell_argument(shell_name, str(script_path))
-    if shell_name == "fish":
-        return (
-            f"source {quoted_path} < /dev/null; "
-            "set -l kantrip_status $status; exit $kantrip_status"
-        )
-    return f". {quoted_path} < /dev/null; exit $?"
-
-
-def _shell_commands(
-    shell_name: str,
-    *,
-    topic: str,
-    installed: Mapping[str, Sequence[str]],
-    kcat_executables: Sequence[str],
-    registry_provider: str,
-) -> list[str]:
-    quoted_topic = quote_shell_argument(shell_name, topic)
-    quoted_python = quote_shell_argument(shell_name, sys.executable)
-    commands = [f"{quoted_python} -m kantrip.cli current"]
-    commands.extend(f"{executable} --list" for executable in installed["topics"])
-    commands.extend(
-        f"printf 'kantrip smoke record\\n' | {executable} --topic {quoted_topic}"
-        for executable in installed["producer"]
-    )
-    commands.extend(
-        f"{executable} --topic {quoted_topic} --from-beginning --max-messages 1"
-        for executable in installed["consumer"]
-    )
-    commands.extend(f"{executable} --list" for executable in installed["groups"])
-    commands.extend(
-        f"{executable} --describe --entity-type topics --entity-name {quoted_topic}"
-        for executable in installed["configs"]
-    )
-    commands.extend(f"{executable} --version" for executable in installed["acls"])
-    commands.extend(executable for executable in installed["broker API versions"])
-    if registry_provider == "confluent":
-        commands.extend(
-            " ".join(_schema_registry_probe(executable))
-            for executable in installed["Schema Registry console"]
-        )
-    commands.extend(f"{executable} -L" for executable in kcat_executables)
-    commands.extend(
-        (
-            "kaskade admin --help",
-            "kaskade consumer --help",
-            "kaskade consumer -v registry --help",
-        )
-    )
-    return commands
-
-
-def _add_profile(
-    console: Console,
-    profile: str,
-    bootstrap_servers: Sequence[str],
-    registry_provider: str,
-    registry_url: str,
-    environment: Mapping[str, str],
-) -> None:
-    command = _kantrip_cli(
-        "add",
-        profile,
-        "--bootstrap-servers",
-        ",".join(bootstrap_servers),
-    )
-    command.extend(("--registry-provider", registry_provider, "--registry-url", registry_url))
-    _check(console, "create isolated Kantrip profile", command, environment)
-
-
-def _kantrip_cli(*arguments: str) -> list[str]:
-    """Build a plain-output Kantrip command for capture by the sandbox runner."""
-    return [sys.executable, "-m", "kantrip.cli", "--no-color", *arguments]
-
-
-def _kantrip(profile: str, executable: str, *arguments: str) -> list[str]:
-    return _kantrip_cli(
-        "exec",
-        profile,
-        "--",
-        executable,
-        *arguments,
-    )
-
-
-def _schema_registry_probe(executable: str) -> tuple[str, str]:
-    """Return a side-effect-free Schema Registry adapter command that exits successfully."""
-    return executable, "--version"
-
-
-def _check(
-    console: Console,
-    label: str,
-    command: Sequence[str],
-    environment: Mapping[str, str],
-    *,
-    input_text: str | None = None,
-) -> str:
-    with show_progress(console, label):
-        result = subprocess.run(
-            command,
-            env=environment,
-            capture_output=True,
-            text=True,
-            input=input_text,
-            check=False,
-        )
-    output = f"{result.stdout}{result.stderr}"
-    if result.returncode:
-        details = _failure_details(result)
-        raise SmokeFailure(f"{label} failed:\n{details}")
-    console.print(create_status_text(console, "success", label))
-    return output
-
-
-def _failure_details(result: subprocess.CompletedProcess[str]) -> str:
-    """Remove nested Kantrip presentation while preserving diagnostic content."""
-    output = "\n".join(part.rstrip("\n") for part in (result.stdout, result.stderr) if part)
-    details: list[str] = []
-    for line in output.splitlines():
-        if line.startswith("[running] "):
-            continue
-        for prefix in ("[failed] ", "[warning] ", "[passed] ", "[cleanup] "):
-            if line.startswith(prefix):
-                line = line.removeprefix(prefix)
-                break
-        details.append(line)
-    return "\n".join(details).strip() or f"command exited with status {result.returncode}"
-
-
-def _require_topic(topic: str, output: str, executable: str) -> None:
-    if topic not in output:
-        raise SmokeFailure(f"{executable} did not list the smoke topic '{topic}'")
-
-
-def _delete_topic(
-    console: Console,
-    profile: str,
-    executable: str,
-    topic: str,
-    environment: Mapping[str, str],
-) -> None:
-    console.print(create_status_text(console, "cleanup", f"kafka-topics: delete {topic}"))
+def cluster_exists() -> bool:
+    """Return whether the managed Kind cluster exists."""
     result = subprocess.run(
-        _kantrip(profile, executable, "--delete", "--topic", topic),
-        env=environment,
+        ("kind", "get", "clusters"), capture_output=True, text=True, check=False
+    )
+    return CLUSTER_NAME in result.stdout.splitlines()
+
+
+def _install_operators(versions: Mapping[str, str]) -> None:
+    _run(
+        (
+            "helm",
+            "upgrade",
+            "--install",
+            "cert-manager",
+            "oci://quay.io/jetstack/charts/cert-manager",
+            "--version",
+            versions["CERT_MANAGER_VERSION"],
+            "--namespace",
+            "cert-manager",
+            "--create-namespace",
+            "--set",
+            "crds.enabled=true",
+            "--wait",
+            "--timeout",
+            "5m",
+        )
+    )
+    _run(
+        (
+            "helm",
+            "upgrade",
+            "--install",
+            "strimzi",
+            "oci://quay.io/strimzi-helm/strimzi-kafka-operator",
+            "--version",
+            versions["STRIMZI_VERSION"],
+            "--namespace",
+            NAMESPACE,
+            "--create-namespace",
+            "--set",
+            f"watchNamespaces={{{NAMESPACE}}}",
+            "--wait",
+            "--timeout",
+            "5m",
+        )
+    )
+
+
+def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
+    realm = {
+        "realm": "kantrip",
+        "enabled": True,
+        "sslRequired": "external",
+        "clients": [
+            _keycloak_client(
+                credentials["KAFKA_OAUTH_CLIENT_ID"], credentials["KAFKA_OAUTH_CLIENT_SECRET"]
+            ),
+            _keycloak_client(
+                credentials["APICURIO_CLIENT_ID"], credentials["APICURIO_CLIENT_SECRET"]
+            ),
+            _keycloak_client(
+                credentials["SCHEMA_REGISTRY_OAUTH_CLIENT_ID"],
+                credentials["SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET"],
+            ),
+        ],
+    }
+    password_line = (
+        f"{credentials['SCHEMA_REGISTRY_BASIC_USERNAME']}: "
+        f"{credentials['SCHEMA_REGISTRY_BASIC_PASSWORD']},developer\n"
+    )
+    documents = (
+        _secret(
+            "keycloak-admin",
+            {
+                "username": credentials["KEYCLOAK_ADMIN_USERNAME"],
+                "password": credentials["KEYCLOAK_ADMIN_PASSWORD"],
+            },
+        ),
+        _secret("keycloak-realm", {"realm.json": json.dumps(realm, indent=2)}),
+        _secret(
+            "registry-clients",
+            {
+                "apicurio-client-id": credentials["APICURIO_CLIENT_ID"],
+                "apicurio-client-secret": credentials["APICURIO_CLIENT_SECRET"],
+            },
+        ),
+        _secret(
+            "schema-registry-auth",
+            {
+                "password.properties": password_line,
+                "jaas.conf": (
+                    "SchemaRegistry-Props {\n"
+                    "  org.eclipse.jetty.security.jaas.spi.PropertyFileLoginModule required\n"
+                    '  file="/etc/schema-registry-auth/password.properties"\n'
+                    '  debug="true";\n'
+                    "};\n"
+                ),
+            },
+        ),
+    )
+    content = "---\n".join(yaml.safe_dump(document, sort_keys=False) for document in documents)
+    _run(("kubectl", "--context", KUBECTL_CONTEXT, "apply", "-f", "-"), input_text=content)
+
+
+def _apply_manifest(name: str, versions: Mapping[str, str]) -> None:
+    path = MANIFEST_ROOT / name
+    content = path.read_text(encoding="utf-8")
+    for key, value in versions.items():
+        content = content.replace(f"${{{key}}}", value)
+    unresolved = sorted(part.split("}", 1)[0] for part in content.split("${")[1:])
+    if unresolved:
+        raise SandboxFailure(f"unresolved version placeholders in {path}: {', '.join(unresolved)}")
+    _run(("kubectl", "--context", KUBECTL_CONTEXT, "apply", "-f", "-"), input_text=content)
+
+
+def _keycloak_client(client_id: str, client_secret: str) -> dict[str, object]:
+    return {
+        "clientId": client_id,
+        "secret": client_secret,
+        "enabled": True,
+        "publicClient": False,
+        "serviceAccountsEnabled": True,
+        "standardFlowEnabled": False,
+        "directAccessGrantsEnabled": False,
+        "protocol": "openid-connect",
+    }
+
+
+def _secret(name: str, string_data: Mapping[str, str]) -> dict[str, object]:
+    return {
+        "apiVersion": "v1",
+        "kind": "Secret",
+        "metadata": {"name": name, "namespace": NAMESPACE},
+        "type": "Opaque",
+        "stringData": dict(string_data),
+    }
+
+
+def _wait_for_certificates() -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    for certificate in ("sandbox-root-ca", "keycloak-tls", "kafka-listeners-tls", "registries-tls"):
+        _run((*base, "wait", f"certificate/{certificate}", "--for=condition=Ready", "--timeout=3m"))
+
+
+def _wait_for_deployment(name: str, *, timeout: str) -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    _run((*base, "rollout", "status", f"deployment/{name}", "--timeout", timeout))
+
+
+def _wait_for_kafka() -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    _run((*base, "wait", "kafka/kantrip", "--for=condition=Ready", "--timeout=10m"))
+    _run((*base, "wait", "kafkauser/kantrip-scram", "--for=condition=Ready", "--timeout=5m"))
+    _run((*base, "wait", "kafkauser/kantrip-mtls", "--for=condition=Ready", "--timeout=5m"))
+
+
+def _wait_for_apicurio_topics() -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    for topic in (
+        "apicurio-journal",
+        "apicurio-snapshots",
+        "apicurio-secure-journal",
+        "apicurio-secure-snapshots",
+        "schema-registry",
+        "schema-registry-secure",
+        "schema-registry-oauth",
+    ):
+        _run((*base, "wait", f"kafkatopic/{topic}", "--for=condition=Ready", "--timeout=3m"))
+
+
+def _wait_for_registries() -> None:
+    for deployment in (
+        "apicurio",
+        "apicurio-secure",
+        "schema-registry",
+        "schema-registry-secure",
+        "schema-registry-oauth",
+    ):
+        _wait_for_deployment(deployment, timeout="10m")
+
+
+def _export_credentials(credentials: Mapping[str, str]) -> None:
+    _write_private_bytes(CA_FILE, _secret_value("sandbox-root-ca", "ca.crt"))
+    generated = {
+        "KAFKA_SCRAM_USERNAME": "kantrip-scram",
+        "KAFKA_SCRAM_PASSWORD": _secret_value("kantrip-scram", "password").decode(),
+    }
+    for key, secret_key, filename in (
+        ("KAFKA_MTLS_CERTIFICATE", "user.crt", "user.crt"),
+        ("KAFKA_MTLS_KEY", "user.key", "user.key"),
+        ("KAFKA_MTLS_KEYSTORE", "user.p12", "user.p12"),
+    ):
+        target = STATE_ROOT / filename
+        _write_private_bytes(target, _secret_value("kantrip-mtls", secret_key))
+        generated[key] = str(target)
+    generated["KAFKA_MTLS_KEYSTORE_PASSWORD"] = _secret_value(
+        "kantrip-mtls", "user.password"
+    ).decode()
+    combined = {**credentials, **generated, "KANTRIP_SANDBOX_CA": str(CA_FILE)}
+    content = "".join(f"{key}={shlex.quote(value)}\n" for key, value in combined.items())
+    _write_private_text(STATE_FILE, content)
+    _write_client_properties(combined)
+
+
+def _write_client_properties(values: Mapping[str, str]) -> None:
+    ca = values["KANTRIP_SANDBOX_CA"]
+    common_tls = f"ssl.truststore.type=PEM\nssl.truststore.location={ca}\n"
+    properties = {
+        "kafka-tls.properties": "security.protocol=SSL\n" + common_tls,
+        "kafka-scram.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=SCRAM-SHA-512\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="{values["KAFKA_SCRAM_USERNAME"]}" '
+            f'password="{values["KAFKA_SCRAM_PASSWORD"]}";\n' + common_tls
+        ),
+        "kafka-mtls.properties": (
+            "security.protocol=SSL\n"
+            + common_tls
+            + "ssl.keystore.type=PKCS12\n"
+            + f'ssl.keystore.location={values["KAFKA_MTLS_KEYSTORE"]}\n'
+            + f'ssl.keystore.password={values["KAFKA_MTLS_KEYSTORE_PASSWORD"]}\n'
+        ),
+        "kafka-oauth.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=OAUTHBEARER\n"
+            "sasl.login.callback.handler.class="
+            "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule "
+            f'required ssl.truststore.type="PEM" ssl.truststore.location="{ca}";\n'
+            "sasl.oauthbearer.client.credentials.client.id="
+            f'{values["KAFKA_OAUTH_CLIENT_ID"]}\n'
+            "sasl.oauthbearer.client.credentials.client.secret="
+            f'{values["KAFKA_OAUTH_CLIENT_SECRET"]}\n'
+            "sasl.oauthbearer.token.endpoint.url="
+            "https://localhost:8443/realms/kantrip/protocol/openid-connect/token\n" + common_tls
+        ),
+    }
+    for filename, content in properties.items():
+        _write_private_text(STATE_ROOT / filename, content)
+    _write_httpie_session(
+        STATE_ROOT / "apicurio-basic.json",
+        auth_type="basic",
+        raw_auth=f'{values["APICURIO_CLIENT_ID"]}:{values["APICURIO_CLIENT_SECRET"]}',
+    )
+    _write_httpie_session(
+        STATE_ROOT / "schema-registry-basic.json",
+        auth_type="basic",
+        raw_auth=(
+            f'{values["SCHEMA_REGISTRY_BASIC_USERNAME"]}:'
+            f'{values["SCHEMA_REGISTRY_BASIC_PASSWORD"]}'
+        ),
+    )
+
+
+def _request_access_token(client_id: str, client_secret: str) -> str:
+    if not CA_FILE.is_file():
+        raise SandboxFailure("sandbox CA is unavailable; run 'python -m sandbox up'")
+    encoded_auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    request = urllib.request.Request(
+        "https://localhost:8443/realms/kantrip/protocol/openid-connect/token",
+        data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
+        headers={
+            "Authorization": f"Basic {encoded_auth}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            context=ssl.create_default_context(cafile=str(CA_FILE)),
+            timeout=10,
+        ) as response:
+            payload = json.load(response)
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as error:
+        raise SandboxFailure("could not obtain an OAuth token from the sandbox") from error
+    token = payload.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise SandboxFailure("Keycloak returned no OAuth access token")
+    return token
+
+
+def _write_httpie_session(path: Path, *, auth_type: str, raw_auth: str) -> None:
+    session = {
+        "__meta__": {
+            "about": "HTTPie session file",
+            "help": "https://httpie.io/docs#sessions",
+            "httpie": "3",
+        },
+        "auth": {"raw_auth": raw_auth, "type": auth_type},
+        "cookies": [],
+        "headers": [{"name": "Accept", "value": "application/json"}],
+    }
+    _write_private_text(path, json.dumps(session, indent=4) + "\n")
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    _write_private_bytes(path, content.encode())
+
+
+def _write_private_bytes(path: Path, content: bytes) -> None:
+    raw_descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(raw_descriptor, 0o600)
+    with os.fdopen(raw_descriptor, "wb") as descriptor:
+        descriptor.write(content)
+
+
+def _secret_value(name: str, key: str) -> bytes:
+    escaped_key = key.replace(".", r"\.")
+    result = _run(
+        (
+            "kubectl",
+            "--context",
+            KUBECTL_CONTEXT,
+            "-n",
+            NAMESPACE,
+            "get",
+            "secret",
+            name,
+            "-o",
+            f"jsonpath={{.data.{escaped_key}}}",
+        ),
         capture_output=True,
+    )
+    return base64.b64decode(result.stdout)
+
+
+def _read_assignment_file(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise SandboxFailure(f"required file does not exist: {path}")
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        key, separator, raw_value = line.partition("=")
+        if not separator or not key.isidentifier():
+            raise SandboxFailure(f"invalid assignment in {path}: {line!r}")
+        parsed = shlex.split(raw_value)
+        if len(parsed) != 1:
+            raise SandboxFailure(f"invalid value for {key} in {path}")
+        values[key] = parsed[0]
+    return values
+
+
+def _password() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _require_commands(commands: Sequence[str]) -> None:
+    missing = [command for command in commands if shutil.which(command) is None]
+    if missing:
+        raise SandboxFailure(f"required commands were not found on PATH: {', '.join(missing)}")
+
+
+def _run(
+    command: Sequence[str], *, input_text: str | None = None, capture_output: bool = False
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command,
+        input=input_text,
         text=True,
+        capture_output=capture_output,
         check=False,
     )
     if result.returncode:
-        console.print(
-            create_status_text(console, "warning", f"Could not delete smoke topic {topic}")
-        )
+        details = result.stderr.strip() if capture_output else ""
+        suffix = f": {details}" if details else ""
+        raise SandboxFailure(f"command failed ({command[0]} exited {result.returncode}){suffix}")
+    return result
 
 
 if __name__ == "__main__":
