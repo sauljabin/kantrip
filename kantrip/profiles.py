@@ -23,6 +23,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError
 
 from kantrip import APP_VERSION
+from kantrip.kafka import KafkaProfileError, kafka_connection, validate_ca_bundle
 from kantrip.migrations import (
     LATEST_SEQUENCE,
     MigrationError,
@@ -257,6 +258,8 @@ def add_profile(
     bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
     description: str | None = None,
     labels: Mapping[str, str] | None = None,
+    transport: str = "plaintext",
+    ca_certificates: str | None = None,
     registry_provider: str | None = None,
     registry_url: str | None = None,
     environment: Mapping[str, str] | None = None,
@@ -268,6 +271,8 @@ def add_profile(
         bootstrap_servers,
         description=description,
         labels=labels or {},
+        transport=transport,
+        ca_certificates=ca_certificates,
         registry_provider=registry_provider,
         registry_url=registry_url,
     )
@@ -336,6 +341,9 @@ def edit_profile(
     clear_description: bool = False,
     labels: Mapping[str, str] | None = None,
     remove_labels: tuple[str, ...] = (),
+    transport: str | None = None,
+    ca_certificates: str | None = None,
+    system_ca: bool = False,
     registry_provider: str | None = None,
     registry_url: str | None = None,
     remove_registry: bool = False,
@@ -349,6 +357,9 @@ def edit_profile(
         clear_description=clear_description,
         labels=labels,
         remove_labels=remove_labels,
+        transport=transport,
+        ca_certificates=ca_certificates,
+        system_ca=system_ca,
         registry_provider=registry_provider,
         registry_url=registry_url,
         remove_registry=remove_registry,
@@ -371,6 +382,9 @@ def edit_profile(
                     clear_description=clear_description,
                     labels=labels or {},
                     remove_labels=remove_labels,
+                    transport=transport,
+                    ca_certificates=ca_certificates,
+                    system_ca=system_ca,
                     registry_provider=registry_provider,
                     registry_url=registry_url,
                     remove_registry=remove_registry,
@@ -405,6 +419,9 @@ def _validate_edit_request(
     clear_description: bool,
     labels: Mapping[str, str] | None,
     remove_labels: tuple[str, ...],
+    transport: str | None,
+    ca_certificates: str | None,
+    system_ca: bool,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -416,6 +433,9 @@ def _validate_edit_request(
             clear_description,
             bool(labels),
             bool(remove_labels),
+            transport is not None,
+            ca_certificates is not None,
+            system_ca,
             registry_provider is not None,
             registry_url is not None,
             remove_registry,
@@ -429,6 +449,12 @@ def _validate_edit_request(
         raise ProfileStoreError("--remove-registry cannot be combined with Registry update options")
     if labels and set(labels).intersection(remove_labels):
         raise ProfileStoreError("a label cannot be set and removed in the same edit")
+    if ca_certificates is not None and transport == "plaintext":
+        raise ProfileStoreError("--ca-file cannot be combined with --transport plaintext")
+    if ca_certificates is not None and system_ca:
+        raise ProfileStoreError("--ca-file cannot be combined with --system-ca")
+    if system_ca and transport == "plaintext":
+        raise ProfileStoreError("--system-ca cannot be combined with --transport plaintext")
 
 
 def _apply_profile_edits(
@@ -439,6 +465,9 @@ def _apply_profile_edits(
     clear_description: bool,
     labels: Mapping[str, str],
     remove_labels: tuple[str, ...],
+    transport: str | None,
+    ca_certificates: str | None,
+    system_ca: bool,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -451,8 +480,34 @@ def _apply_profile_edits(
     elif description is not None:
         updated["description"] = description
     _apply_label_edits(updated, labels, remove_labels)
+    _apply_kafka_transport_edits(updated, transport, ca_certificates, system_ca)
     _apply_registry_edits(updated, registry_provider, registry_url, remove_registry)
     return updated
+
+
+def _apply_kafka_transport_edits(
+    profile: dict[str, Any],
+    transport: str | None,
+    ca_certificates: str | None,
+    system_ca: bool,
+) -> None:
+    kafka = profile["kafka"]
+    if transport is not None:
+        kafka["transport"] = transport
+        if transport == "plaintext":
+            kafka.pop("tls", None)
+        elif "tls" not in kafka:
+            kafka["tls"] = {}
+    if ca_certificates is None:
+        if not system_ca:
+            return
+        if kafka["transport"] != "tls":
+            raise ProfileStoreError("--system-ca requires Kafka TLS transport")
+        kafka.pop("tls", None)
+        return
+    if kafka["transport"] != "tls":
+        raise ProfileStoreError("--ca-file requires Kafka TLS transport")
+    kafka.setdefault("tls", {})["caCertificates"] = _validated_ca_bundle(ca_certificates)
 
 
 def _apply_label_edits(
@@ -513,6 +568,8 @@ def _new_profile(
     *,
     description: str | None,
     labels: Mapping[str, str],
+    transport: str,
+    ca_certificates: str | None,
     registry_provider: str | None,
     registry_url: str | None,
 ) -> dict[str, Any]:
@@ -520,10 +577,14 @@ def _new_profile(
         "id": str(uuid.uuid4()),
         "kafka": {
             "bootstrapServers": list(bootstrap_servers),
-            "transport": "plaintext",
+            "transport": transport,
             "auth": {"type": "none"},
         },
     }
+    if ca_certificates is not None:
+        if transport != "tls":
+            raise ProfileStoreError("--ca-file requires --transport tls")
+        profile["kafka"]["tls"] = {"caCertificates": _validated_ca_bundle(ca_certificates)}
     if description is not None:
         profile["description"] = description
     if labels:
@@ -542,6 +603,13 @@ def _new_profile(
         except RegistryProfileError as error:
             raise ProfileStoreError(str(error)) from error
     return profile
+
+
+def _validated_ca_bundle(contents: str) -> str:
+    try:
+        return validate_ca_bundle(contents)
+    except KafkaProfileError as error:
+        raise ProfileStoreError(str(error)) from error
 
 
 @contextmanager
@@ -698,14 +766,17 @@ def _validate_profile(profile: dict[str, Any], *, name: str | None = None) -> No
         validator.iter_errors(profile),
         key=lambda item: tuple(str(part) for part in item.absolute_path),
     )
-    if not errors:
-        return
-    validation_error = errors[0]
-    location = ".".join(str(part) for part in validation_error.absolute_path) or "document root"
-    detail = _validation_detail(validation_error)
-    suffix = f": {detail}" if detail else ""
     prefix = f"stored profile '{name}'" if name is not None else "profile"
-    raise ProfileStoreError(f"{prefix} does not match schema at {location}{suffix}")
+    if errors:
+        validation_error = errors[0]
+        location = ".".join(str(part) for part in validation_error.absolute_path) or "document root"
+        detail = _validation_detail(validation_error)
+        suffix = f": {detail}" if detail else ""
+        raise ProfileStoreError(f"{prefix} does not match schema at {location}{suffix}")
+    try:
+        kafka_connection(profile)
+    except KafkaProfileError as error:
+        raise ProfileStoreError(f"{prefix} has invalid Kafka configuration: {error}") from error
 
 
 def _validation_detail(error: ValidationError) -> str | None:

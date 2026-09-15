@@ -6,6 +6,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile.schema.json"
+CA_FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "kafka-ca.pem"
 
 
 class TestProfileSchema(unittest.TestCase):
@@ -15,12 +16,11 @@ class TestProfileSchema(unittest.TestCase):
     def test_programmatic_profile_matches_schema(self) -> None:
         self._validator().validate(_profile_configuration())
 
-    def test_documented_profile_example_matches_schema(self) -> None:
-        example = json.loads(
-            (PROJECT_ROOT / "examples" / "profile.json").read_text(encoding="utf-8")
-        )
-
-        self._validator().validate(example)
+    def test_documented_profile_examples_match_schema(self) -> None:
+        for path in sorted((PROJECT_ROOT / "examples").glob("*.json")):
+            with self.subTest(path=path.name):
+                example = json.loads(path.read_text(encoding="utf-8"))
+                self._validator().validate(example)
 
     def test_plain_confluent_registry_is_accepted(self) -> None:
         profile = _profile_configuration()
@@ -86,11 +86,33 @@ class TestProfileSchema(unittest.TestCase):
 
         self.assertFalse(self._validator().is_valid(profile))
 
-    def test_authenticated_or_encrypted_profiles_are_not_accepted(self) -> None:
+    def test_tls_with_system_or_custom_ca_is_accepted(self) -> None:
+        system_trust = _profile_configuration()
+        system_trust["kafka"]["transport"] = "tls"
+        custom_trust = _profile_configuration()
+        custom_trust["kafka"]["transport"] = "tls"
+        custom_trust["kafka"]["tls"] = {"caCertificates": CA_FIXTURE.read_text(encoding="utf-8")}
+
+        self.assertTrue(self._validator().is_valid(system_trust))
+        self.assertTrue(self._validator().is_valid(custom_trust))
+
+    def test_plaintext_cannot_include_tls_configuration(self) -> None:
+        profile = _profile_configuration()
+        profile["kafka"]["tls"] = {}
+
+        self.assertFalse(self._validator().is_valid(profile))
+
+    def test_authenticated_profiles_are_not_yet_accepted(self) -> None:
         profile = _profile_configuration()
         kafka = profile["kafka"]
         kafka["transport"] = "tls"
         kafka["auth"] = {"type": "plain", "username": "synthetic"}
+
+        self.assertFalse(self._validator().is_valid(profile))
+
+    def test_arbitrary_client_properties_are_rejected(self) -> None:
+        profile = _profile_configuration()
+        profile["kafka"]["properties"] = {"common": {"client.id": "unsafe-passthrough"}}
 
         self.assertFalse(self._validator().is_valid(profile))
 

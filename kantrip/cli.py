@@ -6,6 +6,7 @@ import os
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import click
@@ -25,6 +26,7 @@ from kantrip.console import (
     show_progress,
 )
 from kantrip.doctor import run_doctor
+from kantrip.kafka import KafkaProfileError, read_ca_bundle
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, ping_profile
 from kantrip.profile_output import (
@@ -156,6 +158,20 @@ def _parse_labels(
     return labels
 
 
+def _read_ca_file(
+    context: click.Context,
+    parameter: click.Parameter,
+    value: Path | None,
+) -> str | None:
+    del context
+    if value is None:
+        return None
+    try:
+        return read_ca_bundle(value)
+    except KafkaProfileError as error:
+        raise click.BadParameter(str(error), param=parameter) from error
+
+
 @cli.command("add")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
@@ -179,6 +195,20 @@ def _parse_labels(
     help="Add a label; repeat for multiple labels.",
 )
 @cloup.option(
+    "--transport",
+    type=cloup.Choice(("plaintext", "tls")),
+    default="plaintext",
+    show_default=True,
+    help="Kafka transport security.",
+)
+@cloup.option(
+    "--ca-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    callback=_read_ca_file,
+    metavar="PATH",
+    help="Copy a PEM CA bundle for Kafka TLS verification.",
+)
+@cloup.option(
     "--registry-provider",
     type=cloup.Choice(("confluent", "apicurio")),
     help="Registry provider; defaults to confluent when --registry-url is supplied.",
@@ -192,16 +222,20 @@ def add_configured_profile(
     bootstrap_servers: tuple[str, ...],
     description: str | None,
     labels: dict[str, str],
+    transport: str,
+    ca_file: str | None,
     registry_provider: str | None,
     registry_url: str | None,
 ) -> None:
-    """Add a plaintext profile."""
+    """Add a profile."""
     try:
         profiles = add_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
             description=description,
             labels=labels,
+            transport=transport,
+            ca_certificates=ca_file,
             registry_provider=registry_provider,
             registry_url=registry_url,
         )
@@ -238,6 +272,23 @@ def add_configured_profile(
     help="Remove a label; repeat for multiple labels.",
 )
 @cloup.option(
+    "--transport",
+    type=cloup.Choice(("plaintext", "tls")),
+    help="Replace Kafka transport security.",
+)
+@cloup.option(
+    "--ca-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    callback=_read_ca_file,
+    metavar="PATH",
+    help="Replace the PEM CA bundle used for Kafka TLS verification.",
+)
+@cloup.option(
+    "--system-ca",
+    is_flag=True,
+    help="Use the system CA store for Kafka TLS verification.",
+)
+@cloup.option(
     "--registry-provider",
     type=cloup.Choice(("confluent", "apicurio")),
     help="Replace the Registry provider.",
@@ -251,6 +302,9 @@ def edit_configured_profile(
     clear_description: bool,
     labels: dict[str, str],
     remove_labels: tuple[str, ...],
+    transport: str | None,
+    ca_file: str | None,
+    system_ca: bool,
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
@@ -264,6 +318,9 @@ def edit_configured_profile(
             clear_description=clear_description,
             labels=labels,
             remove_labels=remove_labels,
+            transport=transport,
+            ca_certificates=ca_file,
+            system_ca=system_ca,
             registry_provider=registry_provider,
             registry_url=registry_url,
             remove_registry=remove_registry,

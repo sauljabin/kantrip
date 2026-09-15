@@ -25,6 +25,8 @@ from kantrip.profiles import (
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
 
+CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
+
 
 class TestProfiles(unittest.TestCase):
     def test_resolves_documented_database_precedence(self) -> None:
@@ -369,6 +371,74 @@ class TestProfiles(unittest.TestCase):
             profiles.profile("production")["labels"],
         )
         self.assertEqual(1, profiles.revision("production"))
+
+    def test_add_and_edit_persist_validated_tls_transport(self) -> None:
+        ca_certificates = CA_FIXTURE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+
+            added = add_profile(
+                "production",
+                path,
+                bootstrap_servers=("broker.example.com:9093",),
+                transport="tls",
+                ca_certificates=ca_certificates,
+            )
+            system_trust = edit_profile("production", path, system_ca=True)
+            plaintext = edit_profile("production", path, transport="plaintext")
+
+        kafka = added.profile("production")["kafka"]
+        self.assertEqual("tls", kafka["transport"])
+        self.assertEqual(ca_certificates, kafka["tls"]["caCertificates"])
+        self.assertEqual("tls", system_trust.profile("production")["kafka"]["transport"])
+        self.assertNotIn("tls", system_trust.profile("production")["kafka"])
+        self.assertEqual("plaintext", plaintext.profile("production")["kafka"]["transport"])
+        self.assertNotIn("tls", plaintext.profile("production")["kafka"])
+
+    def test_custom_ca_requires_tls_and_valid_pem(self) -> None:
+        ca_certificates = CA_FIXTURE.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            for arguments, message in (
+                ({"ca_certificates": ca_certificates}, "requires --transport tls"),
+                (
+                    {"transport": "tls", "ca_certificates": "not a certificate"},
+                    "only PEM certificates",
+                ),
+            ):
+                with (
+                    self.subTest(arguments=arguments),
+                    self.assertRaisesRegex(ProfileStoreError, message),
+                ):
+                    add_profile("invalid", path, **arguments)
+            self.assertFalse(path.exists())
+
+            add_profile("plaintext", path)
+            with self.assertRaisesRegex(ProfileStoreError, "requires Kafka TLS transport"):
+                edit_profile("plaintext", path, system_ca=True)
+            with self.assertRaisesRegex(ProfileStoreError, "cannot be combined"):
+                edit_profile(
+                    "plaintext",
+                    path,
+                    transport="tls",
+                    ca_certificates=ca_certificates,
+                    system_ca=True,
+                )
+
+    def test_tampered_stored_ca_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            profile = add_profile("production", path, transport="tls").profile("production")
+            profile["kafka"]["tls"] = {"caCertificates": "not a certificate"}
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "UPDATE profiles SET document = ? WHERE name = 'production'",
+                    (json.dumps(profile, sort_keys=True, separators=(",", ":")),),
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(ProfileStoreError, "does not match schema"):
+                load_profiles(path)
 
     def test_edit_can_add_and_explicitly_remove_a_default_confluent_registry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

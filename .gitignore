@@ -59,6 +59,7 @@ ENV/
 .kantrip/
 kantrip-local/
 *.pem
+!tests/fixtures/kafka-ca.pem
 *.key
 *.p12
 *.jks

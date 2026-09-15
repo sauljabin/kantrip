@@ -78,8 +78,15 @@
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
-  session. The schema and execution accept only `transport: plaintext` with
-  `auth.type: none`.
+  session. The schema and execution accept `transport: plaintext` or verified
+  `transport: tls` with `auth.type: none`; authenticated profiles remain
+  unimplemented.
+- Copy user-selected Kafka CA bundles into the profile as validated public PEM
+  material. TLS always verifies certificates and hostnames. Materialize a
+  custom CA only inside the private session and use canonical Java and
+  librdkafka properties; never accept arbitrary client-property passthroughs.
+  Version-gate Java custom-CA sessions at Apache Kafka 2.7 or Confluent Platform
+  6.1 and fail before the Kafka operation when support cannot be verified.
 - Supervise one-off commands in their own POSIX process boundary and interactive
   shells through a PTY. Forward SIGINT, SIGTERM, and SIGHUP, preserve child exit
   status, and escalate after five seconds or a repeated signal.

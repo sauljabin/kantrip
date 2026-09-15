@@ -88,8 +88,17 @@ def _kafka_observation(profile: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "bootstrapServers": list(kafka.get("bootstrapServers", ())),
         "transport": kafka.get("transport"),
+        "tls": _tls_observation(kafka),
         "auth": {"type": auth_type},
     }
+
+
+def _tls_observation(kafka: Mapping[str, Any]) -> dict[str, str] | None:
+    if kafka.get("transport") != "tls":
+        return None
+    tls = kafka.get("tls")
+    custom_ca = isinstance(tls, Mapping) and bool(tls.get("caCertificates"))
+    return {"trust": "custom" if custom_ca else "system"}
 
 
 def _registry_observation(profile: Mapping[str, Any]) -> dict[str, Any] | None:

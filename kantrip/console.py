@@ -137,6 +137,7 @@ def create_profile_description(observation: Mapping[str, Any]) -> Group:
             (
                 ("Bootstrap servers", _bootstrap_servers(kafka)),
                 ("Transport", _mapping_value(kafka, "transport")),
+                ("TLS trust", _tls_trust(kafka)),
                 ("Authentication", _auth_type(kafka)),
             ),
         ),
@@ -185,6 +186,15 @@ def _mapping_value(value: object, key: str) -> object:
 def _auth_type(kafka: object) -> object:
     auth = kafka.get("auth", {}) if isinstance(kafka, Mapping) else {}
     return _mapping_value(auth, "type")
+
+
+def _tls_trust(kafka: object) -> object:
+    if not isinstance(kafka, Mapping):
+        return "-"
+    tls = kafka.get("tls")
+    if not isinstance(tls, Mapping):
+        return "-"
+    return _mapping_value(tls, "trust")
 
 
 def _registry_details(registry: object) -> tuple[tuple[str, object], ...]:

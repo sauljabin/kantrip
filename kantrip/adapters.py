@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -101,6 +103,70 @@ class AdapterError(ValueError):
     """Raised when command arguments conflict with a selected profile."""
 
 
+_CLIENT_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.\d+)?")
+_JAVA_PEM_VERSION_TIMEOUT_SECONDS = 5
+
+
+def require_java_pem_support(
+    executable: str,
+    *,
+    environment: Mapping[str, str],
+) -> None:
+    """Reject Java clients whose version cannot safely consume a PEM trust store."""
+    resolved = shutil.which(executable, path=environment.get("PATH"))
+    if resolved is None:
+        raise AdapterError(f"command '{Path(executable).name}' was not found")
+    try:
+        result = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
+            check=False,
+            env=dict(environment),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError(_java_pem_unknown_version_message(Path(executable).name)) from error
+
+    version = _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
+    if result.returncode != 0 or version is None:
+        raise AdapterError(_java_pem_unknown_version_message(Path(executable).name))
+    if not _java_client_supports_pem(version):
+        rendered_version = ".".join(str(part) for part in version)
+        raise AdapterError(
+            f"{Path(executable).name} {rendered_version} does not support PEM trust stores; "
+            "custom CA profiles require Apache Kafka 2.7+ or Confluent Platform 6.1+"
+        )
+
+
+def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
+    recognized: tuple[int, int] | None = None
+    for match in _CLIENT_VERSION_PATTERN.finditer(output):
+        version = int(match.group(1)), int(match.group(2))
+        if version[0] in {2, 3, 4, 5, 6, 7, 8}:
+            recognized = version
+    return recognized
+
+
+def _java_client_supports_pem(version: tuple[int, int]) -> bool:
+    major, minor = version
+    if major == 2:
+        return minor >= 7
+    if major in {3, 4}:
+        return True
+    if major == 6:
+        return minor >= 1
+    return major in {7, 8}
+
+
+def _java_pem_unknown_version_message(executable: str) -> str:
+    return (
+        f"could not verify whether {executable} supports PEM trust stores; use system trust "
+        "or install Apache Kafka 2.7+ or Confluent Platform 6.1+"
+    )
+
+
 def prepare_command(
     arguments: Sequence[str],
     *,
@@ -186,6 +252,7 @@ def create_subshell_shims(
     kaskade_registry_config_path: Path,
     environment: Mapping[str, str],
     registry: RegistryConnection | None = None,
+    require_java_pem: bool = False,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     search_path = environment.get("PATH", os.defpath)
@@ -200,8 +267,17 @@ def create_subshell_shims(
         for name in sorted(KCAT_EXECUTABLES)
         if (resolved := shutil.which(name, path=search_path)) is not None
     }
+    java_pem_errors: dict[Path, str | None] = {}
     directory.mkdir(mode=0o700)
     for name, executable in kafka_executables.items():
+        executable_directory = Path(executable).parent
+        if require_java_pem and executable_directory not in java_pem_errors:
+            try:
+                require_java_pem_support(executable, environment=environment)
+            except AdapterError as error:
+                java_pem_errors[executable_directory] = str(error)
+            else:
+                java_pem_errors[executable_directory] = None
         bootstrap_option, config_option = KAFKA_EXECUTABLE_OPTIONS[name]
         contents = _render_kafka_shim(
             name,
@@ -212,6 +288,7 @@ def create_subshell_shims(
             config_option=config_option,
             registry=registry if name in SCHEMA_REGISTRY_EXECUTABLES else None,
             schema_registry_required=name in SCHEMA_REGISTRY_EXECUTABLES,
+            capability_error=java_pem_errors.get(executable_directory),
         )
         _write_executable(directory / name, contents)
     if kaskade_executable is not None:
@@ -362,6 +439,7 @@ def _render_kafka_shim(
     config_option: str,
     registry: RegistryConnection | None,
     schema_registry_required: bool,
+    capability_error: str | None,
 ) -> str:
     rejected_options = (
         bootstrap_option,
@@ -397,8 +475,11 @@ done
 """
         if registry is not None and registry.provider == CONFLUENT_PROVIDER:
             registry_arguments = " --property " + shlex.quote(f"schema.registry.url={registry.url}")
+    capability_guard = ""
+    if capability_error is not None:
+        capability_guard = f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
     return f"""#!/bin/sh
-{registry_guard}{property_guard}for argument in "$@"; do
+{registry_guard}{capability_guard}{property_guard}for argument in "$@"; do
   case "$argument" in
     {rejected_patterns})
       printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2

@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 from urllib.error import URLError
@@ -14,6 +15,8 @@ from kantrip.ping import (
     _client_configuration,
     ping_profile,
 )
+
+CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
 
 
 class TestPing(unittest.TestCase):
@@ -45,7 +48,7 @@ class TestPing(unittest.TestCase):
         self.assertFalse(logger.propagate)
         admin.list_topics.assert_called_once_with(timeout=2.5)
 
-    def test_profile_maps_common_and_librdkafka_properties(self) -> None:
+    def test_profile_does_not_map_arbitrary_client_properties(self) -> None:
         profile = {
             "kafka": {
                 "bootstrapServers": ["localhost:9092"],
@@ -60,9 +63,27 @@ class TestPing(unittest.TestCase):
 
         configuration = _client_configuration(profile, 1.0)
 
-        self.assertEqual(1000, configuration["metadata.max.age.ms"])
-        self.assertTrue(configuration["api.version.request"])
         self.assertEqual("kantrip-ping", configuration["client.id"])
+        self.assertNotIn("metadata.max.age.ms", configuration)
+        self.assertNotIn("api.version.request", configuration)
+
+    def test_tls_profile_enables_verification_and_uses_an_inline_ca(self) -> None:
+        ca_certificates = CA_FIXTURE.read_text(encoding="utf-8")
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["broker.invalid:9093"],
+                "transport": "tls",
+                "auth": {"type": "none"},
+                "tls": {"caCertificates": ca_certificates},
+            }
+        }
+
+        configuration = _client_configuration(profile, 1.0)
+
+        self.assertEqual("SSL", configuration["security.protocol"])
+        self.assertEqual("true", configuration["enable.ssl.certificate.verification"])
+        self.assertEqual("https", configuration["ssl.endpoint.identification.algorithm"])
+        self.assertEqual(ca_certificates, configuration["ssl.ca.pem"])
 
     def test_profile_wraps_kafka_errors_without_exposing_client_details(self) -> None:
         profile = {

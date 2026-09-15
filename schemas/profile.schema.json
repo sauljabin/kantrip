@@ -1,18 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/sauljabin/kantrip/main/schemas/profile.schema.json",
-  "title": "Kantrip plaintext profile",
+  "title": "Kantrip profile",
   "$ref": "#/$defs/profile",
   "$defs": {
-    "clientProperties": {
-      "type": "object",
-      "propertyNames": {
-        "minLength": 1
-      },
-      "additionalProperties": {
-        "type": ["string", "number", "integer", "boolean"]
-      }
-    },
     "noneAuth": {
       "type": "object",
       "additionalProperties": false,
@@ -23,10 +14,38 @@
         }
       }
     },
+    "kafkaTls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caCertificates": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^-----BEGIN CERTIFICATE-----"
+        }
+      }
+    },
     "kafka": {
       "type": "object",
       "additionalProperties": false,
       "required": ["bootstrapServers", "transport", "auth"],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transport": {
+                "const": "plaintext"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": ["tls"]
+            }
+          }
+        }
+      ],
       "properties": {
         "bootstrapServers": {
           "type": "array",
@@ -38,25 +57,13 @@
           }
         },
         "transport": {
-          "const": "plaintext"
+          "enum": ["plaintext", "tls"]
         },
         "auth": {
           "$ref": "#/$defs/noneAuth"
         },
-        "properties": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "common": {
-              "$ref": "#/$defs/clientProperties"
-            },
-            "java": {
-              "$ref": "#/$defs/clientProperties"
-            },
-            "librdkafka": {
-              "$ref": "#/$defs/clientProperties"
-            }
-          }
+        "tls": {
+          "$ref": "#/$defs/kafkaTls"
         }
       }
     },
