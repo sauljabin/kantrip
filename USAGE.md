@@ -136,8 +136,10 @@ Human list output includes labels. Filter by an exact pair with `-l` or
 kantrip list --label environment=development --label owner=platform
 ```
 
-Use `--output json` or `--output yaml` (`-o` for short) for a stable unstyled
-summary. Structured empty results are an empty sequence.
+Use `--output json` or `--output yaml` (`-o` for short) for a stable structured
+summary. On a colored TTY, Kantrip applies syntax highlighting; `--no-color` or
+output redirection emits plain machine-readable content without ANSI escapes.
+Structured empty results are an empty sequence.
 
 ## Profile workflow
 
@@ -589,8 +591,10 @@ kantrip list --no-color
 ```
 
 `kantrip list` shows profile endpoints and labels; `kantrip describe PROFILE`
-uses sectioned human output. Both also accept unstyled JSON or YAML through
-`--output`. Human output remains readable without ANSI color.
+uses sectioned human output. Both also accept JSON or YAML through `--output`.
+Kantrip syntax-highlights structured output on colored TTYs, while `--no-color`,
+`NO_COLOR`, `TERM=dumb`, and non-TTY streams remain plain and machine-readable.
+Human output remains readable without ANSI color.
 
 Values are classified before reaching Rich. Styling neither changes exit status
 nor carries essential information.

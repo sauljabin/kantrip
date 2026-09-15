@@ -94,12 +94,16 @@ uv run --locked kantrip list \
   --label owner=platform
 uv run --locked kantrip list --output json
 uv run --locked kantrip describe production --output yaml
+uv run --locked kantrip describe production --output yaml --no-color
 ```
 
 ### Expected result
 
 - The filtered human list contains only `production` and displays both labels.
-- JSON list output is an unstyled sequence and omits profile IDs and revisions.
+- On a colored TTY, JSON and YAML output use syntax highlighting. With
+  `--no-color` or when redirected, structured output is unstyled and contains no
+  ANSI escapes.
+- JSON list output omits profile IDs and revisions.
 - YAML describe output contains the profile ID and revision but no arbitrary
   client properties, secret values, or internal credential references.
 

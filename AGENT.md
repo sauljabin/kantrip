@@ -135,6 +135,9 @@
   colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output use
   stable text labels. Accept `--no-color` before or after a subcommand through
   the shared local-option decorator. Styling carries no essential information.
+- Syntax-highlight JSON and YAML only on colored TTYs. `--no-color`, `NO_COLOR`,
+  `TERM=dumb`, and non-TTY streams must contain no ANSI escapes and remain valid
+  structured documents.
 - Include a bounded, sanitized underlying cause in normal `ping` failures,
   never a traceback. `ping --quiet` emits nothing and communicates only through
   status `0` or `1`.
