@@ -545,8 +545,16 @@ uses SCRAM-SHA-512 over verified TLS.
 
 ### Setup
 
-Start the Kubernetes sandbox and load `sandbox/.state/credentials.env` as shown
-above. The lifecycle tool has already written private Java client properties.
+Start the Kubernetes sandbox and load the generated environment in this shell.
+Repeat the command here deliberately so this section can be run independently:
+
+```bash
+set -a
+. sandbox/.state/credentials.env
+set +a
+```
+
+The lifecycle tool has already written private Java client properties.
 
 ### Exercise
 
@@ -563,6 +571,10 @@ contract:
 
 ```bash
 export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
+uv run --locked kantrip add sandbox-plaintext \
+  --bootstrap-servers localhost:9092
+uv run --locked kantrip ping sandbox-plaintext
+
 uv run --locked kantrip add sandbox-tls \
   --bootstrap-servers localhost:9093 \
   --transport tls \
@@ -570,6 +582,11 @@ uv run --locked kantrip add sandbox-tls \
 uv run --locked kantrip ping sandbox-tls
 uv run --locked kantrip exec sandbox-tls -- kafka-topics --list
 ```
+
+Kantrip currently accepts only `plaintext` and unauthenticated verified `tls`
+profiles. The SCRAM-SHA-512, mTLS, and OAuth listeners cannot be represented by
+`kantrip add` yet; the native Kafka client checks below are therefore the
+exercises for those three authentication modes.
 
 Exercise the prepared authenticated listeners directly with the official Kafka
 CLI. These property files contain credentials and must remain private:
@@ -588,6 +605,8 @@ KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8
 
 - The smoke workflow continues to pass through plaintext `localhost:9092` and
   cleans up its temporary profile and topic.
+- `sandbox-plaintext` reaches `localhost:9092`, and `sandbox-tls` reaches
+  `localhost:9093` with the exported CA.
 - Kantrip verifies the sandbox CA and reaches the TLS listener on `9093`.
 - The native client reaches SCRAM-SHA-512 on `9094`, mTLS on `9095`, and OAuth
   client credentials on `9096`.
@@ -604,8 +623,34 @@ credentials and tokens do not appear in command arguments.
 
 ### Setup
 
-Start the sandbox and load the generated environment. Refresh the short-lived
-OAuth bearer sessions without printing either client secrets or tokens:
+Start the sandbox and load the generated environment in this shell:
+
+```bash
+set -a
+. sandbox/.state/credentials.env
+set +a
+```
+
+Create profiles for the two baseline Registry endpoints. These profiles contain
+only non-authenticated `http://` Registry URLs, which is the Registry contract
+currently supported by Kantrip:
+
+```bash
+export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
+uv run --locked kantrip add sandbox-schema-registry \
+  --bootstrap-servers localhost:9092 \
+  --registry-provider confluent \
+  --registry-url http://localhost:8081
+uv run --locked kantrip add sandbox-apicurio \
+  --bootstrap-servers localhost:9092 \
+  --registry-provider apicurio \
+  --registry-url http://localhost:8082/apis/registry/v3
+uv run --locked kantrip describe sandbox-schema-registry
+uv run --locked kantrip describe sandbox-apicurio
+```
+
+Refresh the short-lived OAuth bearer sessions without printing either client
+secrets or tokens:
 
 ```bash
 uv run --locked python -m sandbox oauth-session schema-registry
@@ -659,7 +704,10 @@ openssl s_client -connect localhost:8084 -servername localhost \
 - OpenSSL reports `Verify return code: 0 (ok)` for all three TLS endpoints.
 - No credential or bearer token appears in process arguments, command output, or
   committed files.
-- These authenticated Registry variants are sandbox readiness checks until the
+- `sandbox-schema-registry` and `sandbox-apicurio` describe the two baseline
+  Registry URLs without embedding credentials.
+- The baseline Registry profiles are visible through `kantrip describe`.
+- The authenticated Registry variants are HTTPie readiness checks until the
   corresponding Kantrip profile fields and adapters are implemented.
 
 ## Remove or rotate the sandbox
