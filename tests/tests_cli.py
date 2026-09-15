@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -60,7 +61,7 @@ class TestCli(unittest.TestCase):
             "edit",
             "remove",
             "list",
-            "show",
+            "describe",
             "current",
             "doctor",
             "ping",
@@ -79,7 +80,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("No such command 'cleanup'", result.output)
 
     def test_local_no_color_preserves_parser_errors(self) -> None:
-        result = self.runner.invoke(cli, ["show", "--no-color"])
+        result = self.runner.invoke(cli, ["describe", "--no-color"])
 
         self.assertEqual(2, result.exit_code, result.output)
         self.assertIn("Missing argument 'PROFILE'", result.output)
@@ -92,7 +93,7 @@ class TestCli(unittest.TestCase):
             environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
 
             listed = self.runner.invoke(cli, ["list"], env=environment)
-            shown = self.runner.invoke(cli, ["show", "local"], env=environment)
+            described = self.runner.invoke(cli, ["describe", "local"], env=environment)
 
         self.assertIn("Profile", listed.output)
         self.assertIn("Description", listed.output)
@@ -102,8 +103,10 @@ class TestCli(unittest.TestCase):
         self.assertIn("Local development", listed.output)
         self.assertIn("localhost:8081", listed.output)
         self.assertNotIn("\x1b[", listed.output)
-        self.assertEqual(0, shown.exit_code, shown.output)
-        self.assertIn('"bootstrapServers":', shown.output)
+        self.assertEqual(0, described.exit_code, described.output)
+        self.assertIn("Profile", described.output)
+        self.assertIn("Revision", described.output)
+        self.assertIn("localhost:9092", described.output)
 
     def test_add_and_remove_manage_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -118,6 +121,8 @@ class TestCli(unittest.TestCase):
                     "broker-1.example.com:9092,broker-2.example.com:9092",
                     "-d",
                     "Development cluster",
+                    "-l",
+                    "environment=development",
                     "--registry-url",
                     "http://registry.example.com:8081",
                 ],
@@ -131,7 +136,8 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, added.exit_code, added.output)
         self.assertIn("Profile", listed.output)
         self.assertIn("development", listed.output)
-        self.assertIn("Development cluster", listed.output)
+        self.assertIn("Development", listed.output)
+        self.assertIn("cluster", listed.output)
         self.assertEqual(
             ["broker-1.example.com:9092", "broker-2.example.com:9092"],
             profile["kafka"]["bootstrapServers"],
@@ -143,6 +149,7 @@ class TestCli(unittest.TestCase):
             },
             profile["registry"],
         )
+        self.assertEqual({"environment": "development"}, profile["labels"])
         self.assertEqual(0, removed.exit_code, removed.output)
         self.assertEqual("", empty.output)
 
@@ -197,6 +204,81 @@ class TestCli(unittest.TestCase):
         self.assertNotIn("description", final_profile)
         self.assertNotIn("labels", final_profile)
         self.assertNotIn("registry", final_profile)
+
+    def test_list_filters_labels_with_and_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            add_profile(
+                "production",
+                database_path,
+                labels={"environment": "production", "owner": "platform"},
+            )
+            add_profile(
+                "analytics",
+                database_path,
+                labels={"environment": "production", "owner": "data"},
+            )
+
+            result = self.runner.invoke(
+                cli,
+                ["list", "-l", "environment=production", "-l", "owner=platform"],
+                env=environment,
+            )
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("production", result.output)
+        self.assertIn("environment=production", result.output)
+        self.assertIn("owner=platform", result.output)
+        self.assertNotIn("analytics", result.output)
+
+    def test_list_supports_json_yaml_and_empty_structured_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            add_profile("local", database_path, labels={"environment": "development"})
+
+            as_json = self.runner.invoke(cli, ["list", "-o", "json"], env=environment)
+            as_yaml = self.runner.invoke(cli, ["list", "--output", "yaml"], env=environment)
+            empty = self.runner.invoke(
+                cli,
+                ["list", "--label", "environment=production", "--output", "json"],
+                env=environment,
+            )
+
+        self.assertEqual(0, as_json.exit_code, as_json.output)
+        self.assertEqual("local", json.loads(as_json.output)[0]["name"])
+        self.assertIn("name: local", as_yaml.output)
+        self.assertEqual([], json.loads(empty.output))
+
+    def test_describe_supports_safe_json_and_yaml_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            profile = add_profile(
+                "local",
+                database_path,
+                labels={"environment": "development"},
+            ).profile("local")
+
+            as_json = self.runner.invoke(
+                cli, ["describe", "local", "--output", "json"], env=environment
+            )
+            as_yaml = self.runner.invoke(cli, ["describe", "local", "-o", "yaml"], env=environment)
+
+        self.assertEqual(0, as_json.exit_code, as_json.output)
+        observation = json.loads(as_json.output)
+        self.assertEqual("local", observation["name"])
+        self.assertEqual(profile["id"], observation["id"])
+        self.assertEqual(1, observation["revision"])
+        self.assertEqual({"environment": "development"}, observation["labels"])
+        self.assertIn("revision: 1", as_yaml.output)
+
+    def test_show_is_no_longer_exposed(self) -> None:
+        result = self.runner.invoke(cli, ["show", "local"])
+
+        self.assertEqual(2, result.exit_code, result.output)
+        self.assertIn("No such command 'show'", result.output)
 
     def test_edit_requires_an_explicit_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

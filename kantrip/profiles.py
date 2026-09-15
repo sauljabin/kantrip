@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager, nullcontext
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -72,6 +72,7 @@ class ProfileCollection:
 
     path: Path
     profiles: dict[str, dict[str, Any]]
+    revisions: dict[str, int] = field(default_factory=dict)
 
     def profile(self, name: str) -> dict[str, Any]:
         """Return one profile or raise an actionable profile error."""
@@ -79,6 +80,14 @@ class ProfileCollection:
             return self.profiles[name]
         except KeyError as error:
             raise ProfileStoreError(f"profile '{name}' was not found") from error
+
+    def revision(self, name: str) -> int:
+        """Return one profile revision or raise an actionable profile error."""
+        self.profile(name)
+        try:
+            return self.revisions[name]
+        except KeyError as error:
+            raise ProfileStoreError(f"profile '{name}' has no revision metadata") from error
 
 
 def resolve_database_path(environment: Mapping[str, str] | None = None) -> Path:
@@ -118,7 +127,7 @@ def load_profiles(
         with closing(_connect(database_path, writable=False)) as connection:
             state = _inspect_migration_state(connection)
             if not state.requires_migration:
-                return ProfileCollection(database_path, _load_profile_rows(connection))
+                return _load_profile_collection(database_path, connection)
         if not migrate:
             raise ProfileStoreError(_pending_migration_message(state))
         migrate_profile_database(database_path)
@@ -126,7 +135,7 @@ def load_profiles(
             state = _inspect_migration_state(connection)
             if state.requires_migration:
                 raise ProfileStoreError(_pending_migration_message(state))
-            return ProfileCollection(database_path, _load_profile_rows(connection))
+            return _load_profile_collection(database_path, connection)
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
@@ -247,6 +256,7 @@ def add_profile(
     *,
     bootstrap_servers: tuple[str, ...] = (DEFAULT_BOOTSTRAP_SERVER,),
     description: str | None = None,
+    labels: Mapping[str, str] | None = None,
     registry_provider: str | None = None,
     registry_url: str | None = None,
     environment: Mapping[str, str] | None = None,
@@ -257,6 +267,7 @@ def add_profile(
     profile = _new_profile(
         bootstrap_servers,
         description=description,
+        labels=labels or {},
         registry_provider=registry_provider,
         registry_url=registry_url,
     )
@@ -278,7 +289,7 @@ def add_profile(
             except BaseException:
                 _rollback(connection)
                 raise
-            return ProfileCollection(database_path, _load_profile_rows(connection))
+            return _load_profile_collection(database_path, connection)
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
@@ -309,7 +320,7 @@ def remove_profile(
             except BaseException:
                 _rollback(connection)
                 raise
-            return ProfileCollection(database_path, _load_profile_rows(connection))
+            return _load_profile_collection(database_path, connection)
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
@@ -380,7 +391,7 @@ def edit_profile(
             except BaseException:
                 _rollback(connection)
                 raise
-            return ProfileCollection(database_path, _load_profile_rows(connection))
+            return _load_profile_collection(database_path, connection)
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
@@ -501,6 +512,7 @@ def _new_profile(
     bootstrap_servers: tuple[str, ...],
     *,
     description: str | None,
+    labels: Mapping[str, str],
     registry_provider: str | None,
     registry_url: str | None,
 ) -> dict[str, Any]:
@@ -514,6 +526,8 @@ def _new_profile(
     }
     if description is not None:
         profile["description"] = description
+    if labels:
+        profile["labels"] = dict(labels)
     if registry_provider is not None and registry_url is None:
         raise ProfileStoreError("--registry-provider requires --registry-url")
     if registry_url is not None:
@@ -619,7 +633,17 @@ def _rollback(connection: sqlite3.Connection) -> None:
         connection.execute("ROLLBACK")
 
 
-def _load_profile_rows(connection: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+def _load_profile_collection(path: Path, connection: sqlite3.Connection) -> ProfileCollection:
+    revisions: dict[str, int] = {}
+    profiles = _load_profile_rows(connection, revisions=revisions)
+    return ProfileCollection(path, profiles, revisions)
+
+
+def _load_profile_rows(
+    connection: sqlite3.Connection,
+    *,
+    revisions: dict[str, int] | None = None,
+) -> dict[str, dict[str, Any]]:
     profiles: dict[str, dict[str, Any]] = {}
     rows = connection.execute(
         "SELECT name, id, revision, document FROM profiles ORDER BY name"
@@ -639,10 +663,13 @@ def _load_profile_rows(connection: sqlite3.Connection) -> dict[str, dict[str, An
         _validate_profile(profile, name=name)
         if profile["id"] != row["id"]:
             raise ProfileStoreError(f"stored profile '{name}' has inconsistent identity")
-        if type(row["revision"]) is not int or row["revision"] < 1:
+        revision = row["revision"]
+        if type(revision) is not int or revision < 1:
             raise ProfileStoreError(f"stored profile '{name}' has an invalid revision")
         _validate_stored_registry(profile)
         profiles[name] = profile
+        if revisions is not None:
+            revisions[name] = revision
     return profiles
 
 

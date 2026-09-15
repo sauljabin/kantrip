@@ -24,8 +24,9 @@ connectivity.
 
 - Schema-validated profiles in a private transactional SQLite database
 - Ordered automatic schema migrations with private recovery backups
-- Multiple bootstrap servers, descriptions, and optional Registry endpoints
-- `add`, `edit`, `remove`, `list`, and redacted `show` commands
+- Multiple bootstrap servers, descriptions, labels, and optional Registry endpoints
+- `add`, `edit`, `remove`, label-filtered `list`, and safe `describe` commands
+- Human, JSON, and YAML profile observations
 
 ### Local diagnostics
 
@@ -62,7 +63,7 @@ The MVP roadmap has three stages:
 
 1. Complete secret-bearing profile updates on the local credential-store and
    reconciliation foundation.
-2. Add TLS, authenticated Kafka profiles, imports, and adapters.
+2. Add TLS, authenticated Kafka profiles, external input sources, and adapters.
 3. Add authenticated Registry connections, OAuth integration, and authenticated
    connectivity checks.
 
@@ -82,7 +83,7 @@ pipx install kantrip
 kantrip add local
 kantrip doctor
 kantrip list
-kantrip show local
+kantrip describe local
 kantrip ping local
 kantrip exec local -- kcat -L
 kantrip exec local -- kafka-topics --list
@@ -101,8 +102,8 @@ exit
 
 `add` creates `~/.local/share/kantrip/profiles.db` and defaults to
 `localhost:9092`. Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a
-description, and `--registry-url http://HOST:PORT` for a plain Confluent Schema
-Registry. Add
+description, repeatable `-l KEY=VALUE` for labels, and
+`--registry-url http://HOST:PORT` for a plain Confluent Schema Registry. Add
 `--registry-provider apicurio` for a native Apicurio Core Registry API v3 URL.
 Update brokers, descriptions, labels, or Registry settings with
 `kantrip edit PROFILE`; remove profiles with `kantrip remove PROFILE`.
