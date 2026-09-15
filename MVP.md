@@ -391,9 +391,6 @@ atomic transaction. Do not promise cross-store atomicity.
   group or a secret-reading interface.
 - Add confirmation to secret-bearing profile removal and `--force` to skip
   only the prompt, not validation.
-- Replace `show` with `describe`, add the approved human, JSON, and YAML output
-  contract, and extend `list` with labels, exact label filtering, and the same
-  output choices.
 - Extend `doctor` with optional profile scope, detailed `--sessions`,
   locked-store, missing-reference, certificate-match, and certificate-expiry
   checks.
@@ -780,12 +777,6 @@ renderer and adapter boundaries are proven before token lifecycle is added.
 - The Strimzi input source accepts standard TLS and SCRAM Kubernetes Secret
   fixtures generated for a `KafkaUser`, from a file or stdin, without persisting
   the decoded source document.
-- `add`, `edit`, and `list` share the label contract; human lists display labels,
-  exact repeated filters use logical AND, and deterministic presentation colors
-  require no separately stored label lifecycle.
-- `describe` replaces `show` with safe human, JSON, and YAML representations,
-  none of which exposes secret values or credential references or acts as an
-  export document.
 - Profile-scoped doctor output can associate detailed sessions with the exact
   profile ID and revision on which each session started.
 - TLS, PLAIN, both SCRAM mechanisms, and mTLS pass unit, renderer, adapter, and

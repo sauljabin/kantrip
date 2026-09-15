@@ -23,6 +23,7 @@ dependencies = [
     "confluent-kafka>=2.15,<3",
     "jsonschema>=4.25,<5",
     "keyring>=25.7,<26",
+    "pyyaml>=6.0,<7",
     "rich>=14.2,<16",
 ]
 
@@ -43,7 +44,6 @@ dev = [
     "black",
     "mypy",
     "pre-commit",
-    "pyyaml>=6.0,<7",
     "ruff",
     "types-pyyaml",
     "typos",

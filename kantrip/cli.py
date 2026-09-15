@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import click
 import cloup
@@ -19,7 +18,7 @@ from kantrip import APP_VERSION
 from kantrip.console import (
     StatusKind,
     create_console,
-    create_json_syntax,
+    create_profile_description,
     create_profile_table,
     create_status_text,
     show_progress,
@@ -27,6 +26,13 @@ from kantrip.console import (
 from kantrip.doctor import run_doctor
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, ping_profile
+from kantrip.profile_output import (
+    OutputFormat,
+    describe_observation,
+    dump_observation,
+    filter_profiles,
+    list_observation,
+)
 from kantrip.profiles import (
     ProfileStoreError,
     add_profile,
@@ -34,11 +40,11 @@ from kantrip.profiles import (
     load_profiles,
     remove_profile,
 )
-from kantrip.redaction import redact_mapping
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
 CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
+OUTPUT_FORMATS = ("human", "json", "yaml")
 
 
 def _configure_consoles(context: click.Context, *, no_color: bool) -> None:
@@ -150,6 +156,15 @@ def _parse_labels(
 )
 @cloup.option("-d", "--description", help="Optional profile description.")
 @cloup.option(
+    "-l",
+    "--label",
+    "labels",
+    multiple=True,
+    callback=_parse_labels,
+    metavar="KEY=VALUE",
+    help="Add a label; repeat for multiple labels.",
+)
+@cloup.option(
     "--registry-provider",
     type=cloup.Choice(("confluent", "apicurio")),
     help="Registry provider; defaults to confluent when --registry-url is supplied.",
@@ -162,6 +177,7 @@ def add_configured_profile(
     profile_name: str,
     bootstrap_servers: tuple[str, ...],
     description: str | None,
+    labels: dict[str, str],
     registry_provider: str | None,
     registry_url: str | None,
 ) -> None:
@@ -171,6 +187,7 @@ def add_configured_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
             description=description,
+            labels=labels,
             registry_provider=registry_provider,
             registry_url=registry_url,
         )
@@ -191,6 +208,7 @@ def add_configured_profile(
 @cloup.option("-d", "--description", help="Replace the profile description.")
 @cloup.option("--clear-description", is_flag=True, help="Remove the profile description.")
 @cloup.option(
+    "-l",
     "--label",
     "labels",
     multiple=True,
@@ -255,29 +273,68 @@ def remove_configured_profile(profile_name: str) -> None:
 
 @cli.command("list")
 @local_no_color
+@cloup.option(
+    "-l",
+    "--label",
+    "labels",
+    multiple=True,
+    callback=_parse_labels,
+    metavar="KEY=VALUE",
+    help="Require an exact label; repeat to combine filters with AND.",
+)
+@cloup.option(
+    "-o",
+    "--output",
+    "output_format",
+    type=cloup.Choice(OUTPUT_FORMATS),
+    default="human",
+    show_default=True,
+    help="Output representation.",
+)
 @cloup.pass_context
-def list_profiles(context: cloup.Context) -> None:
+def list_profiles(context: cloup.Context, labels: dict[str, str], output_format: str) -> None:
     """List configured profiles."""
     try:
-        profiles = load_profiles(missing_ok=True)
+        profiles = load_profiles(missing_ok=True).profiles
     except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
-    if profiles.profiles:
-        console_from_context(context).print(create_profile_table(profiles.profiles))
+    selected = filter_profiles(profiles, labels)
+    if output_format == "human":
+        if selected:
+            console_from_context(context).print(create_profile_table(selected))
+        return
+    click.echo(
+        dump_observation(list_observation(selected), cast(OutputFormat, output_format)),
+        nl=False,
+    )
 
 
-@cli.command("show")
+@cli.command("describe")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
+@cloup.option(
+    "-o",
+    "--output",
+    "output_format",
+    type=cloup.Choice(OUTPUT_FORMATS),
+    default="human",
+    show_default=True,
+    help="Output representation.",
+)
 @cloup.pass_context
-def show_profile(context: cloup.Context, profile_name: str) -> None:
-    """Show a profile with sensitive-looking values redacted."""
+def describe_profile(context: cloup.Context, profile_name: str, output_format: str) -> None:
+    """Describe a profile without exposing secret or internal reference values."""
     try:
-        profile = load_profiles(missing_ok=True).profile(profile_name)
+        profiles = load_profiles(missing_ok=True)
+        profile = profiles.profile(profile_name)
+        revision = profiles.revision(profile_name)
     except ProfileStoreError as error:
         raise click.ClickException(str(error)) from error
-    contents = json.dumps(redact_mapping(profile), indent=2) + "\n"
-    console_from_context(context).print(create_json_syntax(contents), end="")
+    observation = describe_observation(profile_name, revision, profile)
+    if output_format == "human":
+        console_from_context(context).print(create_profile_description(observation))
+        return
+    click.echo(dump_observation(observation, cast(OutputFormat, output_format)), nl=False)
 
 
 @cli.command("current")

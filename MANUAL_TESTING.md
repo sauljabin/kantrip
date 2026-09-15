@@ -35,7 +35,7 @@ Initialize the isolated state, then create a profile without a Registry:
 uv run --locked kantrip add manual \
   --bootstrap-servers localhost:9092 \
   --description 'Initial description'
-uv run --locked kantrip show manual
+uv run --locked kantrip describe manual
 ```
 
 Record the profile `id` shown by the second command.
@@ -52,13 +52,13 @@ uv run --locked kantrip edit manual \
   --label environment=development \
   --label owner=platform \
   --registry-url http://registry.example.com:8081
-uv run --locked kantrip show manual
+uv run --locked kantrip describe manual
 
 uv run --locked kantrip edit manual \
   --clear-description \
   --remove-label owner \
   --remove-registry
-uv run --locked kantrip show manual
+uv run --locked kantrip describe manual
 ```
 
 ### Expected result
@@ -70,6 +70,38 @@ uv run --locked kantrip show manual
   only the `owner` label, and preserves `environment`.
 - Running `kantrip edit manual` without any edit option fails without changing
   the profile.
+
+## Filter and describe profiles
+
+### Setup
+
+Initialize the isolated state and create profiles with overlapping labels:
+
+```bash
+uv run --locked kantrip add production \
+  --label environment=production \
+  --label owner=platform
+uv run --locked kantrip add analytics \
+  --label environment=production \
+  --label owner=data
+```
+
+### Exercise
+
+```bash
+uv run --locked kantrip list \
+  --label environment=production \
+  --label owner=platform
+uv run --locked kantrip list --output json
+uv run --locked kantrip describe production --output yaml
+```
+
+### Expected result
+
+- The filtered human list contains only `production` and displays both labels.
+- JSON list output is an unstyled sequence and omits profile IDs and revisions.
+- YAML describe output contains the profile ID and revision but no arbitrary
+  client properties, secret values, or internal credential references.
 
 ## Repair a pending database migration
 

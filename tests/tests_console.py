@@ -7,7 +7,8 @@ from kantrip.console import (
     ARCANA_THEME,
     colors_enabled,
     create_console,
-    create_json_syntax,
+    create_labels_text,
+    create_profile_description,
     create_profile_table,
     create_status_text,
     show_progress,
@@ -69,6 +70,51 @@ class TestConsole(unittest.TestCase):
         self.assertIn("local", stream.getvalue())
         self.assertIn("Local development", stream.getvalue())
 
+    def test_profile_table_displays_labels_with_stable_presentation_colors(self) -> None:
+        stream = TerminalBuffer()
+        console = create_console(stream=stream, environment={})
+        profile = {"labels": {"owner": "platform", "environment": "production"}}
+
+        console.print(create_profile_table({"production": profile}))
+        first = create_labels_text(profile["labels"])
+        second = create_labels_text(profile["labels"])
+
+        self.assertIn("environment=production", stream.getvalue())
+        self.assertIn("owner=platform", stream.getvalue())
+        self.assertEqual(first.spans, second.spans)
+
+    def test_profile_description_uses_sections_and_safe_observation_fields(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+        observation = {
+            "name": "production",
+            "id": "018f8f13-7c21-7cee-8000-000000000010",
+            "revision": 2,
+            "description": "Production cluster",
+            "labels": {"environment": "production"},
+            "kafka": {
+                "bootstrapServers": ["kafka.example.com:9093"],
+                "transport": "tls",
+                "auth": {"type": "scram-sha-512"},
+            },
+            "registry": None,
+        }
+
+        console.print(create_profile_description(observation))
+
+        output = stream.getvalue()
+        for expected in (
+            "Profile",
+            "Revision",
+            "Kafka",
+            "kafka.example.com:9093",
+            "Registry",
+            "Not configured",
+            "Labels",
+            "environment=production",
+        ):
+            self.assertIn(expected, output)
+
     def test_profile_table_has_spacing_without_borders_or_lines(self) -> None:
         stream = io.StringIO()
         console = create_console(stream=stream, environment={})
@@ -95,6 +141,21 @@ class TestConsole(unittest.TestCase):
         self.assertEqual(12, table.columns[0].min_width)
         self.assertEqual(12, table.columns[1].min_width)
 
+    def test_profile_text_is_not_interpreted_as_rich_markup(self) -> None:
+        stream = io.StringIO()
+        console = create_console(stream=stream, environment={})
+        profiles = {
+            "[red]x[/red]": {
+                "description": "plain",
+                "labels": {"x": "[b]y[/b]"},
+            }
+        }
+
+        console.print(create_profile_table(profiles))
+
+        self.assertIn("[red]x[/red]", stream.getvalue())
+        self.assertIn("x=[b]y[/b]", stream.getvalue())
+
     def test_profile_table_does_not_display_registry_url_credentials_or_query(self) -> None:
         stream = io.StringIO()
         console = create_console(stream=stream, environment={})
@@ -118,15 +179,6 @@ class TestConsole(unittest.TestCase):
         self.assertIn("/path", output)
         self.assertNotIn("secret", output)
         self.assertNotIn("classified", output)
-
-    def test_json_syntax_uses_color(self) -> None:
-        stream = TerminalBuffer()
-        console = create_console(stream=stream, environment={})
-
-        console.print(create_json_syntax('{"transport": "plaintext"}\n'), end="")
-
-        self.assertIn("\x1b[", stream.getvalue())
-        self.assertIn("transport", stream.getvalue())
 
     def test_status_text_uses_text_markers_for_plain_output(self) -> None:
         stream = io.StringIO()

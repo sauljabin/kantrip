@@ -6,7 +6,7 @@ Kantrip is a pre-release CLI for plaintext profiles and scoped sessions:
 kantrip add local
 kantrip doctor
 kantrip list
-kantrip show local
+kantrip describe local
 kantrip ping local
 kantrip exec local -- kcat -L
 ```
@@ -85,6 +85,8 @@ Choose one or more broker addresses when needed:
 kantrip add development \
   --bootstrap-servers kafka-1.example.com:9092,kafka-2.example.com:9092 \
   --description 'Development cluster' \
+  --label environment=development \
+  --label owner=platform \
   --registry-url http://registry.example.com:8081
 ```
 
@@ -100,8 +102,9 @@ kantrip add development-apicurio \
 
 `--registry-provider` without `--registry-url` is invalid.
 
-`add` creates the database when needed and never overwrites a profile. Edit
-explicit plaintext fields without changing the profile identity:
+`add` creates the database when needed and never overwrites a profile. `-l` is
+the short form of repeatable `--label KEY=VALUE`. Edit explicit plaintext fields
+without changing the profile identity:
 
 ```bash
 kantrip edit development \
@@ -126,13 +129,29 @@ kantrip remove development
 `kantrip list` succeeds without rows when no profiles exist. Kantrip validates
 every profile whenever it reads or updates the database.
 
+Human list output includes labels. Filter by an exact pair with `-l` or
+`--label`; repeated filters use logical AND:
+
+```bash
+kantrip list --label environment=development --label owner=platform
+```
+
+Use `--output json` or `--output yaml` (`-o` for short) for a stable unstyled
+summary. Structured empty results are an empty sequence.
+
 ## Profile workflow
 
 ```bash
 kantrip list
-kantrip show local
+kantrip describe local
+kantrip describe local --output yaml
 kantrip exec local -- kcat -L
 ```
+
+`describe` presents Rich sections by default. JSON and YAML are safe
+machine-readable observations rather than profile export documents. They omit
+arbitrary client properties, secret values, and internal credential references,
+and include the profile's current database revision.
 
 Without a command, `kantrip exec PROFILE` opens a supervised Bash, Zsh, or Fish
 subshell from `SHELL`, falling back to Bash when it is unset. Other shells fail
@@ -570,8 +589,9 @@ kantrip --no-color list
 kantrip list --no-color
 ```
 
-`kantrip list` shows profile endpoints; `kantrip show PROFILE` syntax-highlights
-redacted JSON. Both remain readable without ANSI color.
+`kantrip list` shows profile endpoints and labels; `kantrip describe PROFILE`
+uses sectioned human output. Both also accept unstyled JSON or YAML through
+`--output`. Human output remains readable without ANSI color.
 
 Values are classified before reaching Rich. Styling neither changes exit status
 nor carries essential information.

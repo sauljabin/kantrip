@@ -333,6 +333,7 @@ class TestProfiles(unittest.TestCase):
             )
 
             updated = profiles.profile("local")
+            self.assertEqual(2, profiles.revision("local"))
             self.assertEqual(original["id"], updated["id"])
             self.assertEqual(
                 ["broker-1.example.com:9092", "broker-2.example.com:9092"],
@@ -352,6 +353,22 @@ class TestProfiles(unittest.TestCase):
                     "SELECT revision FROM profiles WHERE name = 'local'"
                 ).fetchone()[0]
             self.assertEqual(2, revision)
+
+    def test_add_persists_labels_and_exposes_initial_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+
+            profiles = add_profile(
+                "production",
+                path,
+                labels={"environment": "production", "owner": "platform"},
+            )
+
+        self.assertEqual(
+            {"environment": "production", "owner": "platform"},
+            profiles.profile("production")["labels"],
+        )
+        self.assertEqual(1, profiles.revision("production"))
 
     def test_edit_can_add_and_explicitly_remove_a_default_confluent_registry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

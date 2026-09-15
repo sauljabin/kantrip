@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import IO, Any, Literal
 
-from rich.console import Console
-from rich.syntax import Syntax
+from rich.console import Console, Group
+from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -48,6 +49,14 @@ STATUS_PRESENTATION: dict[StatusKind, tuple[str, str, str]] = {
     "warning": ("warning", "⚠️", "warning"),
     "error": ("error", "❌", "failed"),
 }
+LABEL_COLORS = (
+    "#60A5FA",
+    "#22D3EE",
+    "#34D399",
+    "#A78BFA",
+    "#F472B6",
+    "#FBBF24",
+)
 
 
 def colors_enabled(
@@ -93,21 +102,99 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
     table.add_column("Description", style="foreground", min_width=12)
     table.add_column("Kafka", style="foreground", overflow="fold")
     table.add_column("Registry", style="foreground", overflow="fold")
+    table.add_column("Labels", overflow="fold")
     for name, profile in profiles.items():
         kafka = profile.get("kafka", {})
         bootstrap_servers = kafka.get("bootstrapServers", ()) if isinstance(kafka, Mapping) else ()
         table.add_row(
-            name,
-            str(profile.get("description") or "-"),
-            ",".join(str(server) for server in bootstrap_servers),
-            display_registry(profile),
+            Text(name),
+            Text(str(profile.get("description") or "-")),
+            Text(",".join(str(server) for server in bootstrap_servers)),
+            Text(display_registry(profile)),
+            create_labels_text(profile.get("labels")),
         )
     return table
 
 
-def create_json_syntax(contents: str) -> Syntax:
-    """Create syntax-colored JSON without a forced background."""
-    return Syntax(contents, "json", theme="ansi_dark", background_color="default")
+def create_profile_description(observation: Mapping[str, Any]) -> Group:
+    """Create a sectioned human representation of one safe observation."""
+    kafka = observation.get("kafka", {})
+    registry = observation.get("registry")
+    labels = observation.get("labels")
+    sections = [
+        _details_section(
+            "Profile",
+            (
+                ("Name", observation.get("name")),
+                ("ID", observation.get("id")),
+                ("Revision", observation.get("revision")),
+                ("Description", observation.get("description") or "-"),
+            ),
+        ),
+        _details_section(
+            "Kafka",
+            (
+                ("Bootstrap servers", _bootstrap_servers(kafka)),
+                ("Transport", _mapping_value(kafka, "transport")),
+                ("Authentication", _auth_type(kafka)),
+            ),
+        ),
+        _details_section("Registry", _registry_details(registry)),
+        _details_section("Labels", (("Values", create_labels_text(labels)),)),
+    ]
+    renderables: list[Any] = []
+    for index, section in enumerate(sections):
+        if index:
+            renderables.append(Text())
+        renderables.append(section)
+    return Group(*renderables)
+
+
+def create_labels_text(labels: object) -> Text:
+    """Render labels with deterministic presentation-only colors."""
+    if not isinstance(labels, Mapping) or not labels:
+        return Text("-", style="muted")
+    result = Text()
+    for index, (key, value) in enumerate(sorted(labels.items())):
+        if index:
+            result.append(", ", style="muted")
+        label = f"{key}={value}"
+        result.append(label, style=_label_color(str(key)))
+    return result
+
+
+def _details_section(title: str, values: tuple[tuple[str, object], ...]) -> Group:
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="muted", no_wrap=True)
+    table.add_column(style="foreground")
+    for label, value in values:
+        table.add_row(Text(label), value if isinstance(value, Text) else Text(str(value)))
+    return Group(Text(title, style="heading"), Padding(table, (0, 0, 0, 2)))
+
+
+def _bootstrap_servers(kafka: object) -> str:
+    servers = kafka.get("bootstrapServers", ()) if isinstance(kafka, Mapping) else ()
+    return ",".join(str(server) for server in servers)
+
+
+def _mapping_value(value: object, key: str) -> object:
+    return value.get(key, "-") if isinstance(value, Mapping) else "-"
+
+
+def _auth_type(kafka: object) -> object:
+    auth = kafka.get("auth", {}) if isinstance(kafka, Mapping) else {}
+    return _mapping_value(auth, "type")
+
+
+def _registry_details(registry: object) -> tuple[tuple[str, object], ...]:
+    if not isinstance(registry, Mapping):
+        return (("Status", "Not configured"),)
+    return (("Provider", registry.get("provider")), ("URL", registry.get("url")))
+
+
+def _label_color(key: str) -> str:
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return LABEL_COLORS[int.from_bytes(digest[:2], "big") % len(LABEL_COLORS)]
 
 
 def create_status_text(console: Console, status: StatusKind, message: str) -> Text:
@@ -134,7 +221,8 @@ __all__ = [
     "StatusKind",
     "colors_enabled",
     "create_console",
-    "create_json_syntax",
+    "create_labels_text",
+    "create_profile_description",
     "create_profile_table",
     "create_status_text",
     "show_progress",
