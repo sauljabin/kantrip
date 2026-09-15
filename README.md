@@ -36,16 +36,13 @@ connectivity.
 - Installed-command discovery for Kantrip's supported adapters
 - Colored status output with plain-text and `NO_COLOR` support
 
-### CLI sessions
+### Compatible CLI sessions
 
-- Native kcat configuration through a private `KCAT_CONFIG`, with Schema
-  Registry injection for Avro
-- Profile-aware Apache Kafka `.sh` commands and the equivalent unsuffixed
-  Confluent Platform commands
-- Profile-aware Avro, JSON Schema, and Protobuf console clients for plain
-  Confluent Schema Registry connections
-- Private Kaskade 5 configuration for admin, consumer, Confluent Schema
-  Registry, and native Apicurio Registry decoding
+- `kcat` and its `kafkacat` alias
+- Apache Kafka `.sh` commands and equivalent unsuffixed Confluent Platform commands
+- Confluent Avro, JSON Schema, and Protobuf console producers and consumers
+- Kaskade `admin` and `consumer`, including Confluent and native Apicurio decoding
+- Private, profile-aware client configuration with connection overrides blocked
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Process-group and PTY supervision with child exit-status preservation
 - Crash-safe runtime locks, automatic stale-session recovery, and `doctor --repair`
@@ -99,14 +96,6 @@ kcat -L
 kafka-topics --list
 exit
 ```
-
-`add` creates `~/.local/share/kantrip/profiles.db` and defaults to
-`localhost:9092`. Use `-b HOST:PORT[,HOST:PORT]` for brokers, `-d` for a
-description, repeatable `-l KEY=VALUE` for labels, and
-`--registry-url http://HOST:PORT` for a plain Confluent Schema Registry. Add
-`--registry-provider apicurio` for a native Apicurio Core Registry API v3 URL.
-Update brokers, descriptions, labels, or Registry settings with
-`kantrip edit PROFILE`; remove profiles with `kantrip remove PROFILE`.
 
 ## Command compatibility
 

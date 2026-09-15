@@ -434,7 +434,7 @@ and interactive sessions.
 They require a plain registry with the Confluent provider. Missing registries
 and native Apicurio profiles fail before launch.
 
-### Kaskade 5
+### Kaskade
 
 Kantrip passes a private INI to Kaskade `admin` and `consumer` through
 `--config-file`:
@@ -457,11 +457,10 @@ registry` or `-v registry`) selects a second INI with a provider-specific
 `--config-file`, and `--registry` overrides. Interactive shims behave
 identically.
 
-Kaskade 5+ supports Avro, JSON Schema, and Protobuf decoding with Confluent
-Schema Registry and native Apicurio Registry through this adapter. Native
-Apicurio uses its default `contentId` framing because Kantrip currently
-configures only the registry URL. Kantrip sets no Kaskade-specific environment
-variable.
+Kaskade supports Avro, JSON Schema, and Protobuf decoding with Confluent Schema
+Registry and native Apicurio Registry through this adapter. Native Apicurio uses
+its default `contentId` framing because Kantrip currently configures only the
+registry URL. Kantrip sets no Kaskade-specific environment variable.
 
 ## Profile storage
 
