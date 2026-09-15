@@ -17,6 +17,9 @@ Kantrip securely manages plaintext and server-authenticated TLS Kafka profiles
 for kcat, the official Kafka CLIs, Kaskade, and compatible applications. This
 pre-release CLI validates and displays profiles, opens scoped sessions, and
 checks Kafka and registry connectivity.
+The typed connection core also models, validates, resolves, and renders PLAIN,
+SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; authenticated command sessions and
+connectivity checks remain roadmap work.
 
 ## Features
 
@@ -26,6 +29,8 @@ checks Kafka and registry connectivity.
 - Ordered automatic schema migrations with private recovery backups
 - Multiple bootstrap servers, descriptions, labels, and optional Registry endpoints
 - Plaintext or verified TLS transport with default client trust or a copied PEM CA bundle
+- Typed PLAIN, SCRAM, and mTLS profile shapes with OS-backed secret references
+- Canonical Java and librdkafka authentication renderers
 - `add`, `edit`, `remove`, label-filtered `list`, and safe `describe` commands
 - Human, JSON, and YAML profile observations
 
@@ -59,11 +64,10 @@ checks Kafka and registry connectivity.
 
 The MVP roadmap has three stages:
 
-1. Complete secret-bearing profile updates on the local credential-store and
-   reconciliation foundation.
-2. Add authenticated Kafka profiles, external input sources, and adapters.
-3. Add authenticated Registry connections, OAuth integration, and authenticated
-   connectivity checks.
+1. Add properties and Strimzi input sources for authenticated Kafka profiles.
+2. Connect authenticated profiles to existing adapters and `ping`.
+3. Add secure Registry connections, OAuth, new adapters, and the full platform
+   security matrix.
 
 See the [MVP roadmap](MVP.md) for scope and non-goals.
 

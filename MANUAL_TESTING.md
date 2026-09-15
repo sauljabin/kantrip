@@ -583,10 +583,11 @@ uv run --locked kantrip ping sandbox-tls
 uv run --locked kantrip exec sandbox-tls -- kafka-topics --list
 ```
 
-Kantrip currently accepts only `plaintext` and unauthenticated verified `tls`
-profiles. The SCRAM-SHA-512, mTLS, and OAuth listeners cannot be represented by
-`kantrip add` yet; the native Kafka client checks below are therefore the
-exercises for those three authentication modes.
+Kantrip's schema and shared renderers accept SCRAM-SHA-512 and mTLS, but the
+current CLI input, session adapters, and `ping` still accept only `plaintext`
+and unauthenticated verified `tls` profiles. The native Kafka client checks
+below remain infrastructure-level exercises until those integration steps land;
+OAuth is not yet represented by the profile schema.
 
 Exercise the prepared authenticated listeners directly with the official Kafka
 CLI. These property files contain credentials and must remain private:

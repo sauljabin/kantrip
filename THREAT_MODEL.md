@@ -86,7 +86,10 @@ policy.
 Each JSON profile document crosses from the private SQLite database through
 schema validation and typed parsing. Secret references become usable only after
 the configured credential backend is approved and each exact reference
-resolves.
+resolves. Kafka authentication references must belong to that profile and the
+expected fully qualified field. PLAIN and SCRAM passwords, mTLS private keys,
+and optional key passwords never enter the profile document; public client
+certificate chains do and are checked against the resolved key before use.
 
 ### Import boundary
 

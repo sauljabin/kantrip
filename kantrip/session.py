@@ -79,6 +79,8 @@ def run_profile_session(
         kafka = kafka_connection(profile)
     except KafkaProfileError as error:
         raise SessionError(str(error)) from error
+    if kafka.requires_secrets:
+        raise SessionError("Kafka authentication is not yet supported for sessions")
     try:
         registry = plain_registry_connection(profile)
     except RegistryProfileError as error:

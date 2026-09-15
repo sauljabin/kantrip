@@ -15,6 +15,7 @@ from kantrip.ping import (
     _client_configuration,
     ping_profile,
 )
+from kantrip.secret_store import secret_reference
 
 CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
 
@@ -84,6 +85,29 @@ class TestPing(unittest.TestCase):
         self.assertEqual("true", configuration["enable.ssl.certificate.verification"])
         self.assertEqual("https", configuration["ssl.endpoint.identification.algorithm"])
         self.assertEqual(ca_certificates, configuration["ssl.ca.pem"])
+
+    def test_authenticated_profile_is_rejected_before_client_creation(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        profile = {
+            "id": profile_id,
+            "kafka": {
+                "bootstrapServers": ["broker.invalid:9093"],
+                "transport": "tls",
+                "auth": {
+                    "type": "scram-sha-512",
+                    "username": "synthetic-user",
+                    "passwordRef": secret_reference(profile_id, "kafka/password"),
+                },
+            },
+        }
+
+        with (
+            patch("kantrip.ping.AdminClient") as admin_client,
+            self.assertRaisesRegex(PingError, "authenticated Kafka ping is not yet supported"),
+        ):
+            ping_profile(profile)
+
+        admin_client.assert_not_called()
 
     def test_profile_wraps_kafka_errors_without_exposing_client_details(self) -> None:
         profile = {

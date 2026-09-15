@@ -86,9 +86,11 @@
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
-  session. The schema and execution accept `transport: plaintext` or verified
-  `transport: tls` with `auth.type: none`; authenticated profiles remain
-  unimplemented.
+  session. The schema accepts PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS only
+  over verified TLS. Resolve their exact profile-owned references through
+  `SecretStore`, validate mTLS certificate/key correspondence, construct Java
+  JAAS internally, and keep Java and librdkafka rendering independent. Until
+  authenticated adapters and ping land, reject those profiles before launch.
 - Copy user-selected Kafka CA bundles into the profile as validated public PEM
   material. TLS always verifies certificates and hostnames. Materialize a
   custom CA only inside the private session and use canonical Java and

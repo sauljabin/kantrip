@@ -71,7 +71,7 @@ class TestCredentialMutations(unittest.TestCase):
                 document=references["kafka/password"],
             )
 
-        result = commit_secret_replacements(self.connection, store, staged, switch)
+        result = commit_secret_replacements(self.connection, store, PROFILE_ID, staged, switch)
 
         row = self.connection.execute(
             "SELECT revision, document FROM profiles WHERE id = ?", (PROFILE_ID,)
@@ -96,12 +96,34 @@ class TestCredentialMutations(unittest.TestCase):
             raise RuntimeError("synthetic database failure")
 
         with self.assertRaisesRegex(RuntimeError, "database failure"):
-            commit_secret_replacements(self.connection, store, staged, fail_switch)
+            commit_secret_replacements(self.connection, store, PROFILE_ID, staged, fail_switch)
 
         row = self.connection.execute(
             "SELECT revision, document FROM profiles WHERE id = ?", (PROFILE_ID,)
         ).fetchone()
         self.assertEqual((1, "{}"), tuple(row))
+        self.assertNotIn(staged[0].reference, store.values)
+        self.assertEqual((), pending_secret_cleanup(self.connection))
+
+    def test_profile_switch_cannot_retire_its_new_active_reference(self) -> None:
+        store = _Store(self.connection)
+        staged = stage_secret_replacements(
+            self.connection,
+            store,
+            PROFILE_ID,
+            (SecretReplacement("kafka/password", "synthetic-secret"),),
+        )
+
+        with self.assertRaisesRegex(CredentialMutationError, "active credential"):
+            commit_secret_replacements(
+                self.connection,
+                store,
+                PROFILE_ID,
+                staged,
+                lambda references: None,
+                retire_references=(staged[0].reference,),
+            )
+
         self.assertNotIn(staged[0].reference, store.values)
         self.assertEqual((), pending_secret_cleanup(self.connection))
 
@@ -119,6 +141,7 @@ class TestCredentialMutations(unittest.TestCase):
             commit_secret_replacements(
                 self.connection,
                 store,
+                PROFILE_ID,
                 staged,
                 lambda references: update_profile_revision(
                     self.connection,
@@ -155,6 +178,7 @@ class TestCredentialMutations(unittest.TestCase):
         result = commit_secret_replacements(
             self.connection,
             store,
+            PROFILE_ID,
             staged,
             lambda references: self.connection.execute(
                 "UPDATE profiles SET revision = revision + 1, document = ? WHERE id = ?",

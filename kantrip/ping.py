@@ -139,8 +139,11 @@ def _exception_message(error: Exception) -> str:
 
 
 def _client_configuration(profile: Mapping[str, Any], timeout: float) -> dict[str, Any]:
+    connection = kafka_connection(profile)
+    if connection.requires_secrets:
+        raise KafkaProfileError("authenticated Kafka ping is not yet supported")
     properties: dict[str, Any] = librdkafka_properties(
-        kafka_connection(profile),
+        connection,
         inline_ca=True,
     )
     properties.update(

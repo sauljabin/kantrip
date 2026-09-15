@@ -348,13 +348,17 @@ of the inspection commands can return them.
 
 ## 1. Credential store and profile lifecycle
 
-### Remaining store work
+### Implemented foundation
 
-- Store textual PEM private keys as credential values. Validate realistic PEM
-  sizes against both supported store families before declaring mTLS complete.
-- Treat public client certificate chains as non-secret. They may be copied into
-  the profile for portability or referenced by a user-owned path; Kantrip never
-  deletes a referenced source file.
+- Password and mTLS profile mutations stage immutable references through the
+  reconciliation journal before switching SQLite state.
+- Textual PEM private keys and optional key passwords are credential values;
+  public client certificate chains are validated non-secret profile material.
+- PLAIN, both SCRAM mechanisms, and mTLS share one typed resolved connection and
+  separate canonical Java and librdkafka renderers.
+
+Production verification of realistic PEM sizes against both supported OS store
+families remains part of the final Linux/macOS security matrix.
 
 ### Commands
 
@@ -721,7 +725,7 @@ documented config-path environment variables so secrets never appear in argv.
 
 ## Delivery order
 
-1. Add PLAIN, SCRAM, and mTLS to the schema and shared renderers.
+1. **Complete:** add PLAIN, SCRAM, and mTLS to the schema and shared renderers.
 2. Add the properties and Strimzi input sources to `add`.
 3. Extend the existing adapters and authenticated `ping` for those mechanisms.
 4. Add secure Registry connections.
