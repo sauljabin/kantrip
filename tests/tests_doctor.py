@@ -42,7 +42,10 @@ class TestDoctor(unittest.TestCase):
 
         messages = [check.message for check in report.checks]
         self.assertTrue(report.healthy)
-        self.assertTrue(any("Profile database is valid" in message for message in messages))
+        self.assertIn(
+            "Profile database is healthy (1 profile, schema version 2)",
+            messages,
+        )
         self.assertTrue(any(message.startswith("kcat: ") for message in messages))
         self.assertTrue(any("Apache Kafka CLI: all 7" in message for message in messages))
         self.assertTrue(any("Schema Registry console: all 6" in message for message in messages))
