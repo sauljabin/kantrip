@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -33,8 +34,10 @@ from kantrip.credential_mutations import (
     update_profile_revision,
 )
 from kantrip.kafka import (
+    KafkaConnection,
     KafkaProfileError,
     kafka_connection,
+    resolve_kafka_connection,
     validate_ca_bundle,
     validate_client_identity,
     validate_sasl_credential,
@@ -86,6 +89,10 @@ _SQLITE_PRIVATE_SUFFIXES = (
 class ProfileStoreError(ValueError):
     """Raised when the profile database cannot be used safely."""
 
+    def __init__(self, message: str, *, exit_code: int = 1) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
 
 @dataclass(frozen=True)
 class KafkaAuthInput:
@@ -131,6 +138,17 @@ class ProfileCollection:
             return self.revisions[name]
         except KeyError as error:
             raise ProfileStoreError(f"profile '{name}' has no revision metadata") from error
+
+
+@dataclass(frozen=True)
+class ProfileSnapshot:
+    """One immutable profile generation with credentials resolved in memory."""
+
+    name: str
+    profile_id: str
+    revision: int
+    document: Mapping[str, Any]
+    kafka: KafkaConnection
 
 
 def resolve_database_path(environment: Mapping[str, str] | None = None) -> Path:
@@ -183,6 +201,48 @@ def load_profiles(
         raise
     except sqlite3.Error as error:
         raise ProfileStoreError("profile database could not be read safely") from error
+
+
+def resolve_profile_snapshot(
+    profile_name: str,
+    path: Path | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+    secret_store: SecretStore | None = None,
+) -> ProfileSnapshot:
+    """Load and resolve one generation while excluding credential mutation."""
+    _validate_profile_name(profile_name)
+    database_path = path if path is not None else resolve_database_path(environment)
+    if not _path_entry_exists(database_path):
+        raise ProfileStoreError(f"profile '{profile_name}' was not found")
+    _validate_private_parent(database_path.parent)
+    _validate_database_file(database_path)
+    try:
+        with (
+            database_maintenance_lock(database_path),
+            closing(_connect(database_path, writable=False)) as connection,
+        ):
+            state = _inspect_migration_state(connection)
+            if state.requires_migration:
+                raise ProfileStoreError(_pending_migration_message(state))
+            collection = _load_profile_collection(database_path, connection)
+            document = deepcopy(collection.profile(profile_name))
+            revision = collection.revision(profile_name)
+            parsed = kafka_connection(document)
+            if parsed.requires_secrets:
+                selected_store = secret_store or load_secret_store()
+                parsed = resolve_kafka_connection(parsed, selected_store)
+            return ProfileSnapshot(
+                profile_name,
+                str(document["id"]),
+                revision,
+                document,
+                parsed,
+            )
+    except (KafkaProfileError, SecretStoreError) as error:
+        raise ProfileStoreError(str(error)) from error
+    except sqlite3.Error as error:
+        raise ProfileStoreError("profile snapshot could not be resolved safely") from error
 
 
 def inspect_profile_database(
@@ -358,7 +418,9 @@ def add_profile(
                 insert,
             )
             return _load_profile_collection(database_path, connection)
-    except (CredentialMutationError, SecretStoreError) as error:
+    except CredentialMutationError as error:
+        raise _profile_mutation_error(error) from error
+    except SecretStoreError as error:
         raise ProfileStoreError(str(error)) from error
     except ProfileStoreError:
         raise
@@ -372,6 +434,8 @@ def remove_profile(
     *,
     environment: Mapping[str, str] | None = None,
     secret_store: SecretStore | None = None,
+    expected_profile_id: str | None = None,
+    expected_revision: int | None = None,
 ) -> ProfileCollection:
     """Remove one profile before reconciling its exact owned credentials."""
     _validate_profile_name(profile_name)
@@ -386,44 +450,83 @@ def remove_profile(
             profile = profiles.get(profile_name)
             if profile is None:
                 raise ProfileStoreError(f"profile '{profile_name}' was not found")
+            current_revision = revisions[profile_name]
+            if (
+                expected_profile_id is not None
+                and profile["id"] != expected_profile_id
+                or expected_revision is not None
+                and current_revision != expected_revision
+            ):
+                raise ProfileStoreError(
+                    f"profile '{profile_name}' changed after removal was requested"
+                )
             references = _profile_secret_references(profile)
             if references:
-                store = secret_store or load_secret_store()
-                result = commit_profile_removal(
+                return _remove_profile_with_credentials(
                     connection,
-                    store,
-                    profile["id"],
+                    database_path,
+                    profile_name,
+                    profile,
+                    current_revision,
                     references,
-                    lambda: remove_profile_revision(
-                        connection,
-                        profile_name=profile_name,
-                        profile_id=profile["id"],
-                        expected_revision=revisions[profile_name],
-                    ),
+                    secret_store,
                 )
-                collection = _load_profile_collection(database_path, connection)
-                if result.failed:
-                    raise ProfileStoreError(
-                        f"profile '{profile_name}' was removed but credential cleanup is pending; "
-                        "run 'kantrip doctor --repair'"
-                    )
-                return collection
             connection.execute("BEGIN IMMEDIATE")
             try:
-                cursor = connection.execute("DELETE FROM profiles WHERE name = ?", (profile_name,))
-                if cursor.rowcount != 1:
-                    raise ProfileStoreError(f"profile '{profile_name}' was not found")
-                connection.execute("COMMIT")
+                remove_profile_revision(
+                    connection,
+                    profile_name=profile_name,
+                    profile_id=profile["id"],
+                    expected_revision=current_revision,
+                )
+                _commit_or_unknown(
+                    connection,
+                    "profile removal commit outcome could not be established",
+                )
             except BaseException:
                 _rollback(connection)
                 raise
             return _load_profile_collection(database_path, connection)
-    except (CredentialMutationError, SecretStoreError) as error:
+    except CredentialMutationError as error:
+        raise _profile_mutation_error(error) from error
+    except SecretStoreError as error:
         raise ProfileStoreError(str(error)) from error
     except ProfileStoreError:
         raise
     except sqlite3.Error as error:
         raise ProfileStoreError("profile database could not be updated safely") from error
+
+
+def _remove_profile_with_credentials(
+    connection: sqlite3.Connection,
+    database_path: Path,
+    profile_name: str,
+    profile: Mapping[str, Any],
+    current_revision: int,
+    references: tuple[str, ...],
+    secret_store: SecretStore | None,
+) -> ProfileCollection:
+    store = secret_store or load_secret_store()
+    result = commit_profile_removal(
+        connection,
+        store,
+        profile["id"],
+        references,
+        lambda: remove_profile_revision(
+            connection,
+            profile_name=profile_name,
+            profile_id=profile["id"],
+            expected_revision=current_revision,
+        ),
+    )
+    collection = _load_profile_collection(database_path, connection)
+    if result.failed:
+        raise ProfileStoreError(
+            f"profile '{profile_name}' was removed but credential cleanup is pending; "
+            "run 'kantrip doctor --repair'",
+            exit_code=3,
+        )
+    return collection
 
 
 def edit_profile(
@@ -444,6 +547,7 @@ def edit_profile(
     remove_registry: bool = False,
     environment: Mapping[str, str] | None = None,
     expected_revision: int | None = None,
+    expected_profile_id: str | None = None,
     secret_store: SecretStore | None = None,
 ) -> ProfileCollection:
     """Update explicit fields of one existing profile transactionally."""
@@ -473,7 +577,12 @@ def edit_profile(
             if current is None:
                 raise ProfileStoreError(f"profile '{profile_name}' was not found")
             current_revision = revisions[profile_name]
-            if expected_revision is not None and current_revision != expected_revision:
+            if (
+                expected_profile_id is not None
+                and current["id"] != expected_profile_id
+                or expected_revision is not None
+                and current_revision != expected_revision
+            ):
                 raise ProfileStoreError(
                     f"profile '{profile_name}' changed while credentials were collected"
                 )
@@ -512,7 +621,9 @@ def edit_profile(
                 updated,
             )
             return _load_profile_collection(database_path, connection)
-    except (CredentialMutationError, SecretStoreError) as error:
+    except CredentialMutationError as error:
+        raise _profile_mutation_error(error) from error
+    except SecretStoreError as error:
         raise ProfileStoreError(str(error)) from error
     except ProfileStoreError:
         raise
@@ -541,7 +652,10 @@ def _commit_plain_edit(
             )
         except CredentialMutationError as error:
             raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly") from error
-        connection.execute("COMMIT")
+        _commit_or_unknown(
+            connection,
+            "profile update commit outcome could not be established",
+        )
     except BaseException:
         _rollback(connection)
         raise
@@ -573,7 +687,10 @@ def _commit_authenticated_edit(
         connection.execute("BEGIN IMMEDIATE")
         try:
             switch({})
-            connection.execute("COMMIT")
+            _commit_or_unknown(
+                connection,
+                "profile update commit outcome could not be established",
+            )
         except BaseException:
             _rollback(connection)
             raise
@@ -598,9 +715,24 @@ def _commit_authenticated_edit(
     if result.failed:
         raise ProfileStoreError(
             f"profile '{profile_name}' was updated but credential cleanup is pending; "
-            "run 'kantrip doctor --repair'"
+            "run 'kantrip doctor --repair'",
+            exit_code=3,
         )
     return collection
+
+
+def _profile_mutation_error(error: CredentialMutationError) -> ProfileStoreError:
+    if error.committed is True:
+        return ProfileStoreError(
+            f"{error}; inspect the profile and run 'kantrip doctor --repair'",
+            exit_code=3,
+        )
+    if error.committed is None:
+        return ProfileStoreError(
+            f"{error}; stop automatic retries and inspect the profile and doctor output",
+            exit_code=4,
+        )
+    return ProfileStoreError(str(error), exit_code=1)
 
 
 def _plan_authentication(
@@ -1024,7 +1156,10 @@ def _insert_profile(
             (profile_name, profile["id"], _encode_profile(profile)),
         )
         if transaction:
-            connection.execute("COMMIT")
+            _commit_or_unknown(
+                connection,
+                "profile creation commit outcome could not be established",
+            )
     except BaseException:
         if transaction:
             _rollback(connection)
@@ -1038,6 +1173,19 @@ def _validated_ca_bundle(contents: str) -> str:
         raise ProfileStoreError(str(error)) from error
 
 
+def _commit_or_unknown(connection: sqlite3.Connection, message: str) -> None:
+    try:
+        connection.execute("COMMIT")
+    except BaseException as error:
+        if connection.in_transaction:
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                raise ProfileStoreError(message, exit_code=4) from error
+            raise
+        raise ProfileStoreError(message, exit_code=4) from error
+
+
 @contextmanager
 def _writable_connection(path: Path) -> Iterator[sqlite3.Connection]:
     _ensure_private_parent(path.parent)
@@ -1049,8 +1197,7 @@ def _writable_connection(path: Path) -> Iterator[sqlite3.Connection]:
             path.chmod(0o600)
             _validate_database_file(path)
             _migrate_connection(connection, path)
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = FULL")
+            _configure_writable_connection(connection)
             yield connection
         except OSError as error:
             raise ProfileStoreError("profile database could not be opened safely") from error
@@ -1078,6 +1225,8 @@ def _connect(path: Path, *, writable: bool) -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute(f"PRAGMA busy_timeout = {int(DATABASE_TIMEOUT_SECONDS * 1000)}")
     connection.execute("PRAGMA foreign_keys = ON")
+    if writable:
+        _configure_writable_connection(connection)
     return connection
 
 
@@ -1087,8 +1236,7 @@ def _migrate_existing_database(path: Path) -> MigrationResult:
     try:
         with closing(_connect(path, writable=True)) as connection:
             result = _migrate_connection(connection, path)
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = FULL")
+            _configure_writable_connection(connection)
             return result
     except ProfileStoreError:
         raise
@@ -1267,7 +1415,9 @@ def _create_or_validate_database_file(path: Path) -> None:
         return
     except OSError as error:
         raise ProfileStoreError("profile database could not be created safely") from error
+    os.fsync(descriptor)
     os.close(descriptor)
+    _sync_directory(path.parent)
     _validate_database_file(path)
 
 
@@ -1319,7 +1469,10 @@ def _create_database_backup(connection: sqlite3.Connection, path: Path) -> None:
             connection.backup(destination)
         temporary_path.chmod(0o600)
         os.link(temporary_path, backup_path, follow_symlinks=False)
+        with backup_path.open("rb") as backup:
+            os.fsync(backup.fileno())
         temporary_path.unlink()
+        _sync_directory(path.parent)
     except (OSError, sqlite3.Error) as error:
         if descriptor is not None:
             os.close(descriptor)
@@ -1347,6 +1500,30 @@ def _harden_sqlite_files(path: Path) -> None:
             continue
 
 
+def _configure_writable_connection(connection: sqlite3.Connection) -> None:
+    journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]).lower()
+    if journal_mode != "wal":
+        raise ProfileStoreError("profile database could not enable durable WAL mode")
+    connection.execute("PRAGMA synchronous = FULL")
+    synchronous = int(connection.execute("PRAGMA synchronous").fetchone()[0])
+    if synchronous != 2:
+        raise ProfileStoreError("profile database could not enable FULL synchronization")
+    if sys.platform == "darwin":
+        connection.execute("PRAGMA fullfsync = ON")
+        fullfsync = int(connection.execute("PRAGMA fullfsync").fetchone()[0])
+        if fullfsync != 1:
+            raise ProfileStoreError("profile database could not enable fullfsync")
+
+
+def _sync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _path_entry_exists(path: Path) -> bool:
     try:
         path.lstat()
@@ -1371,6 +1548,7 @@ __all__ = [
     "DATABASE_SCHEMA_VERSION",
     "KafkaAuthInput",
     "ProfileCollection",
+    "ProfileSnapshot",
     "ProfileStoreError",
     "add_profile",
     "database_maintenance_lock",
@@ -1382,4 +1560,5 @@ __all__ = [
     "reconcile_pending_secrets",
     "remove_profile",
     "resolve_database_path",
+    "resolve_profile_snapshot",
 ]

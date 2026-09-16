@@ -8,6 +8,13 @@ from typing import Any, Literal
 
 import yaml
 
+from kantrip.secret_store import (
+    SecretNotFoundError,
+    SecretStore,
+    SecretStoreError,
+    load_secret_store,
+)
+
 OutputFormat = Literal["json", "yaml"]
 
 
@@ -36,9 +43,13 @@ def describe_observation(
     name: str,
     revision: int,
     profile: Mapping[str, Any],
+    *,
+    secret_store: SecretStore | None = None,
 ) -> dict[str, Any]:
     """Return one stable profile observation without arbitrary properties."""
-    return _profile_observation(name, profile, revision=revision)
+    observation = _profile_observation(name, profile, revision=revision)
+    observation["kafka"]["auth"]["credentials"] = _credential_states(profile, secret_store)
+    return observation
 
 
 def dump_observation(value: Any, output_format: OutputFormat) -> str:
@@ -108,6 +119,42 @@ def _registry_observation(profile: Mapping[str, Any]) -> dict[str, Any] | None:
     provider = registry.get("provider")
     url_key = "apicurio.registry.url" if provider == "apicurio" else "schema.registry.url"
     return {"provider": provider, "url": registry.get(url_key)}
+
+
+def _credential_states(
+    profile: Mapping[str, Any],
+    store: SecretStore | None,
+) -> dict[str, str]:
+    kafka = profile.get("kafka")
+    auth = kafka.get("auth") if isinstance(kafka, Mapping) else None
+    if not isinstance(auth, Mapping):
+        return {}
+    references = {
+        field: auth[property_name]
+        for property_name, field in (
+            ("passwordRef", "kafka/password"),
+            ("privateKeyRef", "kafka/tls/private-key"),
+            ("privateKeyPasswordRef", "kafka/tls/private-key-password"),
+        )
+        if isinstance(auth.get(property_name), str)
+    }
+    if not references:
+        return {}
+    try:
+        selected_store = store or load_secret_store()
+    except SecretStoreError:
+        return {field: "unavailable" for field in references}
+    states: dict[str, str] = {}
+    for field, reference in references.items():
+        try:
+            selected_store.get(reference)
+        except SecretNotFoundError:
+            states[field] = "missing"
+        except SecretStoreError:
+            states[field] = "unavailable"
+        else:
+            states[field] = "stored"
+    return states
 
 
 __all__ = [

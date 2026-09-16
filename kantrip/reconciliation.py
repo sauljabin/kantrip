@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -96,6 +97,12 @@ def reconcile_secret_cleanup(
 ) -> ReconciliationResult:
     """Delete exact orphan entries and then remove their journal records."""
     records = pending_secret_cleanup(connection)
+    live_references = _live_secret_references(connection)
+    conflicts = [
+        record.secret_reference for record in records if record.secret_reference in live_references
+    ]
+    if conflicts:
+        raise ReconciliationError("credential reconciliation references a live profile credential")
     removed = 0
     failed = 0
     for record in records:
@@ -119,6 +126,42 @@ def reconcile_secret_cleanup(
             raise
         removed += 1
     return ReconciliationResult(len(records), removed, failed)
+
+
+def _live_secret_references(connection: sqlite3.Connection) -> set[str]:
+    try:
+        rows = connection.execute("SELECT document FROM profiles").fetchall()
+    except sqlite3.Error as error:
+        raise ReconciliationError("live credential references could not be inspected") from error
+    references: set[str] = set()
+    for row in rows:
+        document = row["document"]
+        if not isinstance(document, str):
+            raise ReconciliationError("live profile document is invalid")
+        try:
+            value = json.loads(document)
+        except json.JSONDecodeError as error:
+            raise ReconciliationError("live profile document is invalid") from error
+        _collect_secret_references(value, references)
+    return references
+
+
+def _collect_secret_references(value: object, references: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if isinstance(key, str) and key.endswith("Ref"):
+                if not isinstance(nested, str):
+                    raise ReconciliationError("live credential reference is invalid")
+                try:
+                    validate_secret_reference(nested)
+                except SecretStoreError as error:
+                    raise ReconciliationError("live credential reference is invalid") from error
+                references.add(nested)
+            else:
+                _collect_secret_references(nested, references)
+    elif isinstance(value, list):
+        for nested in value:
+            _collect_secret_references(nested, references)
 
 
 def _validate_record_id(record_id: str) -> None:

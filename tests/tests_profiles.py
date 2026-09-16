@@ -31,8 +31,7 @@ from kantrip.profiles import (
 )
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
-
-CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
+from tests.pki import synthetic_pki
 
 
 class TestProfiles(unittest.TestCase):
@@ -380,7 +379,7 @@ class TestProfiles(unittest.TestCase):
         self.assertEqual(1, profiles.revision("production"))
 
     def test_add_and_edit_persist_validated_tls_transport(self) -> None:
-        ca_certificates = CA_FIXTURE.read_text(encoding="utf-8")
+        ca_certificates = synthetic_pki().ca
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
 
@@ -512,7 +511,7 @@ class TestProfiles(unittest.TestCase):
             self.assertEqual({}, store.values)
 
     def test_custom_ca_requires_tls_and_valid_pem(self) -> None:
-        ca_certificates = CA_FIXTURE.read_text(encoding="utf-8")
+        ca_certificates = synthetic_pki().ca
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
             for arguments, message in (

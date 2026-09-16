@@ -6,7 +6,7 @@ from jsonschema import Draft202012Validator, FormatChecker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile.schema.json"
-CA_FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "kafka-ca.pem"
+from tests.pki import synthetic_pki
 
 
 class TestProfileSchema(unittest.TestCase):
@@ -91,7 +91,7 @@ class TestProfileSchema(unittest.TestCase):
         system_trust["kafka"]["transport"] = "tls"
         custom_trust = _profile_configuration()
         custom_trust["kafka"]["transport"] = "tls"
-        custom_trust["kafka"]["tls"] = {"caCertificates": CA_FIXTURE.read_text(encoding="utf-8")}
+        custom_trust["kafka"]["tls"] = {"caCertificates": synthetic_pki().ca}
 
         self.assertTrue(self._validator().is_valid(system_trust))
         self.assertTrue(self._validator().is_valid(custom_trust))
@@ -121,7 +121,7 @@ class TestProfileSchema(unittest.TestCase):
             },
             {
                 "type": "mtls",
-                "clientCertificate": CA_FIXTURE.read_text(encoding="utf-8"),
+                "clientCertificate": synthetic_pki().client_certificate,
                 "privateKeyRef": key_reference,
             },
         ):

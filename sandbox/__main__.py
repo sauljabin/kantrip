@@ -33,16 +33,22 @@ STATE_FILE = STATE_ROOT / "credentials.env"
 CA_FILE = STATE_ROOT / "ca.crt"
 
 SECRET_FIELDS = (
-    "KEYCLOAK_ADMIN_USERNAME",
-    "KEYCLOAK_ADMIN_PASSWORD",
-    "KAFKA_OAUTH_CLIENT_ID",
-    "KAFKA_OAUTH_CLIENT_SECRET",
-    "APICURIO_CLIENT_ID",
-    "APICURIO_CLIENT_SECRET",
-    "SCHEMA_REGISTRY_OAUTH_CLIENT_ID",
-    "SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET",
-    "SCHEMA_REGISTRY_BASIC_USERNAME",
-    "SCHEMA_REGISTRY_BASIC_PASSWORD",
+    "KANTRIP_SANDBOX_KEYCLOAK_ADMIN_USERNAME",
+    "KANTRIP_SANDBOX_KEYCLOAK_ADMIN_PASSWORD",
+    "KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID",
+    "KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET",
+    "KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME",
+    "KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD",
+    "KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME",
+    "KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD",
+    "KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME",
+    "KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD",
+    "KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
+    "KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
+    "KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID",
+    "KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET",
+    "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME",
+    "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD",
 )
 
 
@@ -78,6 +84,8 @@ def up() -> None:
         _apply_manifest("20-kafka.yaml", versions)
         _apply_manifest("21-kafka-users.yaml", versions)
         _wait_for_kafka()
+        _apply_manifest("23-auth-kafka.yaml", versions)
+        _wait_for_deployment("auth-kafka", timeout="5m")
         _apply_manifest("22-apicurio-topics.yaml", versions)
         _wait_for_apicurio_topics()
         _apply_manifest("30-registries.yaml", versions)
@@ -132,7 +140,11 @@ def oauth_session(service: str) -> None:
     """Obtain a short-lived token and write a private HTTPie bearer session."""
     try:
         credentials = load_credentials(STATE_FILE)
-        client_prefix = "APICURIO" if service == "apicurio" else "SCHEMA_REGISTRY_OAUTH"
+        client_prefix = (
+            "KANTRIP_SANDBOX_APICURIO"
+            if service == "apicurio"
+            else "KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH"
+        )
         token = _request_access_token(
             credentials[f"{client_prefix}_CLIENT_ID"],
             credentials[f"{client_prefix}_CLIENT_SECRET"],
@@ -173,19 +185,16 @@ def load_credentials(path: Path) -> dict[str, str]:
 def load_or_create_credentials(path: Path) -> dict[str, str]:
     """Reuse credentials or create a complete private set atomically."""
     if path.exists():
-        return load_credentials(path)
-    credentials = {
-        "KEYCLOAK_ADMIN_USERNAME": "sandbox-admin",
-        "KEYCLOAK_ADMIN_PASSWORD": _password(),
-        "KAFKA_OAUTH_CLIENT_ID": "kantrip-kafka",
-        "KAFKA_OAUTH_CLIENT_SECRET": _password(),
-        "APICURIO_CLIENT_ID": "kantrip-apicurio",
-        "APICURIO_CLIENT_SECRET": _password(),
-        "SCHEMA_REGISTRY_OAUTH_CLIENT_ID": "kantrip-schema-registry",
-        "SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET": _password(),
-        "SCHEMA_REGISTRY_BASIC_USERNAME": "sandbox-schema",
-        "SCHEMA_REGISTRY_BASIC_PASSWORD": _password(),
-    }
+        credentials = _read_assignment_file(path)
+        generated = _new_credentials()
+        missing = set(SECRET_FIELDS).difference(credentials)
+        if not missing:
+            return credentials
+        credentials.update({key: generated[key] for key in missing})
+        content = "".join(f"{key}={shlex.quote(value)}\n" for key, value in credentials.items())
+        _write_private_text(path, content)
+        return credentials
+    credentials = _new_credentials()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.parent.chmod(0o700)
     content = "".join(f"{key}={shlex.quote(value)}\n" for key, value in credentials.items())
@@ -196,6 +205,28 @@ def load_or_create_credentials(path: Path) -> dict[str, str]:
     finally:
         descriptor.close()
     return credentials
+
+
+def _new_credentials() -> dict[str, str]:
+    """Create a complete set of fresh sandbox credential inputs."""
+    return {
+        "KANTRIP_SANDBOX_KEYCLOAK_ADMIN_USERNAME": "sandbox-admin",
+        "KANTRIP_SANDBOX_KEYCLOAK_ADMIN_PASSWORD": _password(),
+        "KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID": "kantrip-kafka",
+        "KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET": _password(),
+        "KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME": "kantrip-plain",
+        "KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD": _password(),
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME": "kantrip-scram-256",
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD": _password(),
+        "KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME": "kantrip-no-acl",
+        "KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD": _password(),
+        "KANTRIP_SANDBOX_APICURIO_CLIENT_ID": "kantrip-apicurio",
+        "KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET": _password(),
+        "KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID": "kantrip-schema-registry",
+        "KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET": _password(),
+        "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME": "sandbox-schema",
+        "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD": _password(),
+    }
 
 
 def cluster_exists() -> bool:
@@ -254,35 +285,37 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
         "sslRequired": "external",
         "clients": [
             _keycloak_client(
-                credentials["KAFKA_OAUTH_CLIENT_ID"], credentials["KAFKA_OAUTH_CLIENT_SECRET"]
+                credentials["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID"],
+                credentials["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET"],
             ),
             _keycloak_client(
-                credentials["APICURIO_CLIENT_ID"], credentials["APICURIO_CLIENT_SECRET"]
+                credentials["KANTRIP_SANDBOX_APICURIO_CLIENT_ID"],
+                credentials["KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET"],
             ),
             _keycloak_client(
-                credentials["SCHEMA_REGISTRY_OAUTH_CLIENT_ID"],
-                credentials["SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET"],
+                credentials["KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID"],
+                credentials["KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET"],
             ),
         ],
     }
     password_line = (
-        f"{credentials['SCHEMA_REGISTRY_BASIC_USERNAME']}: "
-        f"{credentials['SCHEMA_REGISTRY_BASIC_PASSWORD']},developer\n"
+        f"{credentials['KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME']}: "
+        f"{credentials['KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD']},developer\n"
     )
     documents = (
         _secret(
             "keycloak-admin",
             {
-                "username": credentials["KEYCLOAK_ADMIN_USERNAME"],
-                "password": credentials["KEYCLOAK_ADMIN_PASSWORD"],
+                "username": credentials["KANTRIP_SANDBOX_KEYCLOAK_ADMIN_USERNAME"],
+                "password": credentials["KANTRIP_SANDBOX_KEYCLOAK_ADMIN_PASSWORD"],
             },
         ),
         _secret("keycloak-realm", {"realm.json": json.dumps(realm, indent=2)}),
         _secret(
             "registry-clients",
             {
-                "apicurio-client-id": credentials["APICURIO_CLIENT_ID"],
-                "apicurio-client-secret": credentials["APICURIO_CLIENT_SECRET"],
+                "apicurio-client-id": credentials["KANTRIP_SANDBOX_APICURIO_CLIENT_ID"],
+                "apicurio-client-secret": credentials["KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET"],
             },
         ),
         _secret(
@@ -296,6 +329,17 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
                     '  debug="true";\n'
                     "};\n"
                 ),
+            },
+        ),
+        _secret(
+            "auth-kafka-users",
+            {
+                "plain-username": credentials["KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME"],
+                "plain-password": credentials["KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD"],
+                "scram-256-username": credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME"],
+                "scram-256-password": credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD"],
+                "no-acl-username": credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME"],
+                "no-acl-password": credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"],
             },
         ),
     )
@@ -383,18 +427,18 @@ def _wait_for_registries() -> None:
 def _export_credentials(credentials: Mapping[str, str]) -> None:
     _write_private_bytes(CA_FILE, _secret_value("sandbox-root-ca", "ca.crt"))
     generated = {
-        "KAFKA_SCRAM_USERNAME": "kantrip-scram",
-        "KAFKA_SCRAM_PASSWORD": _secret_value("kantrip-scram", "password").decode(),
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME": "kantrip-scram",
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD": _secret_value("kantrip-scram", "password").decode(),
     }
     for key, secret_key, filename in (
-        ("KAFKA_MTLS_CERTIFICATE", "user.crt", "user.crt"),
-        ("KAFKA_MTLS_KEY", "user.key", "user.key"),
-        ("KAFKA_MTLS_KEYSTORE", "user.p12", "user.p12"),
+        ("KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE", "user.crt", "user.crt"),
+        ("KANTRIP_SANDBOX_KAFKA_MTLS_KEY", "user.key", "user.key"),
+        ("KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE", "user.p12", "user.p12"),
     ):
         target = STATE_ROOT / filename
         _write_private_bytes(target, _secret_value("kantrip-mtls", secret_key))
         generated[key] = str(target)
-    generated["KAFKA_MTLS_KEYSTORE_PASSWORD"] = _secret_value(
+    generated["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE_PASSWORD"] = _secret_value(
         "kantrip-mtls", "user.password"
     ).decode()
     combined = {**credentials, **generated, "KANTRIP_SANDBOX_CA": str(CA_FILE)}
@@ -412,15 +456,37 @@ def _write_client_properties(values: Mapping[str, str]) -> None:
             "security.protocol=SASL_SSL\n"
             "sasl.mechanism=SCRAM-SHA-512\n"
             "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
-            f'username="{values["KAFKA_SCRAM_USERNAME"]}" '
-            f'password="{values["KAFKA_SCRAM_PASSWORD"]}";\n' + common_tls
+            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"]}" '
+            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"]}";\n' + common_tls
+        ),
+        "kafka-plain.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=PLAIN\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required "
+            f'username="{values["KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME"]}" '
+            f'password="{values["KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD"]}";\n' + common_tls
+        ),
+        "kafka-scram-256.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=SCRAM-SHA-256\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME"]}" '
+            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD"]}";\n' + common_tls
+        ),
+        "kafka-no-acl.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=PLAIN\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required "
+            f'username="{values["KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME"]}" '
+            f'password="{values["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"]}";\n' + common_tls
         ),
         "kafka-mtls.properties": (
             "security.protocol=SSL\n"
             + common_tls
             + "ssl.keystore.type=PKCS12\n"
-            + f'ssl.keystore.location={values["KAFKA_MTLS_KEYSTORE"]}\n'
-            + f'ssl.keystore.password={values["KAFKA_MTLS_KEYSTORE_PASSWORD"]}\n'
+            + f'ssl.keystore.location={values["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE"]}\n'
+            + "ssl.keystore.password="
+            + f'{values["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE_PASSWORD"]}\n'
         ),
         "kafka-oauth.properties": (
             "security.protocol=SASL_SSL\n"
@@ -430,9 +496,9 @@ def _write_client_properties(values: Mapping[str, str]) -> None:
             "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule "
             f'required ssl.truststore.type="PEM" ssl.truststore.location="{ca}";\n'
             "sasl.oauthbearer.client.credentials.client.id="
-            f'{values["KAFKA_OAUTH_CLIENT_ID"]}\n'
+            f'{values["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID"]}\n'
             "sasl.oauthbearer.client.credentials.client.secret="
-            f'{values["KAFKA_OAUTH_CLIENT_SECRET"]}\n'
+            f'{values["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET"]}\n'
             "sasl.oauthbearer.token.endpoint.url="
             "https://localhost:8443/realms/kantrip/protocol/openid-connect/token\n" + common_tls
         ),
@@ -442,14 +508,17 @@ def _write_client_properties(values: Mapping[str, str]) -> None:
     _write_httpie_session(
         STATE_ROOT / "apicurio-basic.json",
         auth_type="basic",
-        raw_auth=f'{values["APICURIO_CLIENT_ID"]}:{values["APICURIO_CLIENT_SECRET"]}',
+        raw_auth=(
+            f'{values["KANTRIP_SANDBOX_APICURIO_CLIENT_ID"]}:'
+            f'{values["KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET"]}'
+        ),
     )
     _write_httpie_session(
         STATE_ROOT / "schema-registry-basic.json",
         auth_type="basic",
         raw_auth=(
-            f'{values["SCHEMA_REGISTRY_BASIC_USERNAME"]}:'
-            f'{values["SCHEMA_REGISTRY_BASIC_PASSWORD"]}'
+            f'{values["KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME"]}:'
+            f'{values["KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD"]}'
         ),
     )
 

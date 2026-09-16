@@ -13,6 +13,8 @@ from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 from kantrip.secret_store import SecretStoreError, SecretStoreInfo, secret_reference
 
+PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+
 
 class TestDoctor(unittest.TestCase):
     def setUp(self) -> None:
@@ -50,6 +52,13 @@ class TestDoctor(unittest.TestCase):
         self.assertTrue(any("Apache Kafka CLI: all 7" in message for message in messages))
         self.assertTrue(any("Schema Registry console: all 6" in message for message in messages))
         self.assertTrue(any("Registry profiles: 1 profile" in message for message in messages))
+        self.assertTrue(
+            any(
+                "Profile 'local' compatible installed clients: kcat, Kaskade, "
+                "Apache/Confluent Java CLI" in message
+                for message in messages
+            )
+        )
         verbose_messages = [
             check.message
             for _, checks in report.sections(verbose=True)
@@ -278,7 +287,7 @@ class TestDoctor(unittest.TestCase):
                 "SHELL": "/tools/zsh",
             }
             with patch("kantrip.runtime.time.time", return_value=1000):
-                runtime = create_session_runtime(environment)
+                runtime = create_session_runtime(PROFILE_ID, 1, environment)
             runtime_path = runtime.path
             runtime._closed = True
             os.close(runtime._lock_descriptor)

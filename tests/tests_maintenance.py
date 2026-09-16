@@ -15,6 +15,8 @@ from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 from kantrip.secret_store import SecretStoreError, secret_reference
 
+PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+
 
 class TestMaintenance(unittest.TestCase):
     def test_missing_database_and_runtime_are_not_created(self) -> None:
@@ -42,7 +44,7 @@ class TestMaintenance(unittest.TestCase):
             }
             add_profile("local", database)
             with patch("kantrip.runtime.time.time", return_value=1000):
-                runtime = create_session_runtime(environment)
+                runtime = create_session_runtime(PROFILE_ID, 1, environment)
             runtime_path = runtime.path
             runtime._closed = True
             os.close(runtime._lock_descriptor)

@@ -25,14 +25,15 @@ from kantrip.kafka import (
     validate_client_identity,
 )
 from kantrip.secret_store import SecretNotFoundError, secret_reference
+from tests.pki import synthetic_pki, temporary_pki_files
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CA_FIXTURE = PROJECT_ROOT / "tests" / "fixtures" / "kafka-ca.pem"
 
 
 class TestKafkaConnection(unittest.TestCase):
     def test_reads_and_validates_a_bounded_pem_ca_bundle(self) -> None:
-        contents = read_ca_bundle(CA_FIXTURE)
+        with temporary_pki_files(ca=synthetic_pki().ca) as paths:
+            contents = read_ca_bundle(paths["ca"])
 
         self.assertTrue(contents.startswith("-----BEGIN CERTIFICATE-----\n"))
         self.assertTrue(contents.endswith("-----END CERTIFICATE-----\n"))
@@ -62,7 +63,7 @@ class TestKafkaConnection(unittest.TestCase):
         self.assertEqual(KafkaConnection(("broker.invalid:9092",), "tls"), tls)
 
     def test_renders_tls_verification_for_java_and_librdkafka(self) -> None:
-        ca = read_ca_bundle(CA_FIXTURE)
+        ca = synthetic_pki().ca
         connection = KafkaConnection(("broker.invalid:9093",), "tls", ca)
         ca_path = Path("/private/session/kafka-ca.pem")
 
@@ -84,7 +85,7 @@ class TestKafkaConnection(unittest.TestCase):
         connection = KafkaConnection(
             ("broker.invalid:9093",),
             "tls",
-            read_ca_bundle(CA_FIXTURE),
+            synthetic_pki().ca,
         )
 
         with self.assertRaisesRegex(KafkaProfileError, "private session file"):
@@ -217,7 +218,7 @@ def _authenticated_profile(auth_type: str) -> dict:
     if auth_type == "mtls":
         auth = {
             "type": "mtls",
-            "clientCertificate": CA_FIXTURE.read_text(encoding="utf-8"),
+            "clientCertificate": synthetic_pki().client_certificate,
             "privateKeyRef": secret_reference(profile_id, "kafka/tls/private-key"),
         }
     else:

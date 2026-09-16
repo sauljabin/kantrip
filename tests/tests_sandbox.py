@@ -49,9 +49,24 @@ class TestSandbox(unittest.TestCase):
         self.assertTrue(mappings)
         self.assertTrue(all(mapping["listenAddress"] == "127.0.0.1" for mapping in mappings))
         self.assertEqual(
-            {9092, 9093, 9094, 9095, 9096, 8081, 8082, 8083, 8084, 8085, 8443},
+            {9092, 9093, 9094, 9095, 9096, 9097, 9098, 8081, 8082, 8083, 8084, 8085, 8443},
             {mapping["hostPort"] for mapping in mappings},
         )
+
+    def test_auxiliary_kafka_covers_plain_scram_256_and_no_acl_ping(self) -> None:
+        deployment = resource("23-auth-kafka.yaml", "Deployment", "auth-kafka")
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        script = container["args"][0]
+
+        self.assertIn("SASL_SSL", script)
+        self.assertIn("PLAIN", script)
+        self.assertIn("SCRAM-SHA-256", script)
+        self.assertIn("StandardAuthorizer", script)
+        self.assertIn("allow.everyone.if.no.acl.found=false", script)
+        super_users = next(line for line in script.splitlines() if line.startswith("super.users="))
+        self.assertIn("User:$PLAIN_USERNAME", super_users)
+        self.assertIn("User:$SCRAM_USERNAME", super_users)
+        self.assertNotIn("NO_ACL", super_users)
 
     def test_one_kafka_cluster_exposes_the_supported_listener_matrix(self) -> None:
         kafka = resource("20-kafka.yaml", "Kafka", "kantrip")
@@ -188,6 +203,7 @@ class TestSandbox(unittest.TestCase):
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
             self.assertEqual(first, load_credentials(path))
             for key, value in first.items():
+                self.assertTrue(key.startswith("KANTRIP_SANDBOX_"), key)
                 if key.endswith(("PASSWORD", "SECRET")):
                     self.assertGreaterEqual(len(value), 32)
 

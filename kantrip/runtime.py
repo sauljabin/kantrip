@@ -22,7 +22,17 @@ SESSION_DIRECTORY_PATTERN = re.compile(r"session-([0-9a-f]{32})\Z")
 MARKER_FILENAME = "session.json"
 LOCK_FILENAME = "session.lock"
 _MARKER_LIMIT = 4096
-_MARKER_KEYS = frozenset({"sessionId", "ownerUid", "supervisorPid", "createdAt", "state"})
+_MARKER_KEYS = frozenset(
+    {
+        "sessionId",
+        "ownerUid",
+        "supervisorPid",
+        "createdAt",
+        "state",
+        "profileId",
+        "profileRevision",
+    }
+)
 _MARKER_STATES = frozenset({"preparing", "running"})
 _DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
@@ -49,6 +59,7 @@ class SessionScan:
     invalid: int = 0
     failed: int = 0
     truncated: bool = False
+    observations: tuple[SessionObservation, ...] = ()
 
     @property
     def has_errors(self) -> bool:
@@ -62,6 +73,19 @@ class _RuntimeLocation:
     private_parent: Path
 
 
+@dataclass(frozen=True)
+class SessionObservation:
+    """One validated session marker and its descriptor-proven state."""
+
+    session_id: str
+    profile_id: str
+    profile_revision: int
+    supervisor_pid: int
+    created_at: int
+    state: str
+    path: Path
+
+
 @dataclass
 class SessionRuntime:
     """One private session directory with held directory and lock descriptors."""
@@ -73,6 +97,8 @@ class SessionRuntime:
     _lock_descriptor: int
     _owner_uid: int
     _created_at: int
+    _profile_id: str
+    _profile_revision: int
     _closed: bool = False
 
     def mark_running(self) -> None:
@@ -84,6 +110,8 @@ class SessionRuntime:
                 self._owner_uid,
                 "running",
                 created_at=self._created_at,
+                profile_id=self._profile_id,
+                profile_revision=self._profile_revision,
             ),
         )
 
@@ -117,10 +145,13 @@ def resolve_runtime_root(environment: Mapping[str, str] | None = None) -> Path:
 
 
 def create_session_runtime(
+    profile_id: str,
+    profile_revision: int,
     environment: Mapping[str, str] | None = None,
 ) -> SessionRuntime:
     """Create and lock one private session runtime directory."""
     location = _runtime_location(environment)
+    _validate_profile_generation(profile_id, profile_revision)
     owner_uid = os.getuid()
     _ensure_private_directory(location.private_parent, owner_uid)
     _ensure_private_directory(location.root, owner_uid)
@@ -146,7 +177,14 @@ def create_session_runtime(
         created_at = int(time.time())
         _write_marker(
             session_descriptor,
-            _marker(session_id, owner_uid, "preparing", created_at=created_at),
+            _marker(
+                session_id,
+                owner_uid,
+                "preparing",
+                created_at=created_at,
+                profile_id=profile_id,
+                profile_revision=profile_revision,
+            ),
         )
         return SessionRuntime(
             session_id,
@@ -156,6 +194,8 @@ def create_session_runtime(
             lock_descriptor,
             owner_uid,
             created_at,
+            profile_id,
+            profile_revision,
         )
     except (OSError, ValueError) as error:
         if lock_descriptor is not None:
@@ -294,6 +334,8 @@ def _marker(
     state: str,
     *,
     created_at: int,
+    profile_id: str,
+    profile_revision: int,
 ) -> dict[str, Any]:
     return {
         "sessionId": session_id,
@@ -301,6 +343,8 @@ def _marker(
         "supervisorPid": os.getpid(),
         "createdAt": created_at,
         "state": state,
+        "profileId": profile_id,
+        "profileRevision": profile_revision,
     }
 
 
@@ -362,31 +406,43 @@ def _scan_open_root(
         "failed": 0,
     }
     truncated = False
+    observations: list[SessionObservation] = []
     with os.scandir(root_descriptor) as entries:
         for index, entry in enumerate(entries):
             if limit is not None and index >= limit:
                 truncated = True
                 break
-            outcome = _inspect_entry(
+            result = _inspect_entry(
+                root,
                 root_descriptor,
                 entry,
                 owner_uid,
                 remove=remove,
                 now=now,
             )
-            if outcome is not None:
-                counts[outcome] += 1
-    return SessionScan(root, True, **counts, truncated=truncated)
+            if isinstance(result, SessionObservation):
+                counts[result.state] += 1
+                observations.append(result)
+            elif result is not None:
+                counts[result] += 1
+    return SessionScan(
+        root,
+        True,
+        **counts,
+        truncated=truncated,
+        observations=tuple(observations),
+    )
 
 
 def _inspect_entry(
+    root: Path,
     root_descriptor: int,
     entry: os.DirEntry[str],
     owner_uid: int,
     *,
     remove: bool,
     now: float,
-) -> str | None:
+) -> str | SessionObservation | None:
     match = SESSION_DIRECTORY_PATTERN.fullmatch(entry.name)
     if match is None:
         return "invalid"
@@ -398,6 +454,7 @@ def _inspect_entry(
         return "invalid"
     try:
         return _inspect_open_session(
+            root,
             root_descriptor,
             entry.name,
             match.group(1),
@@ -411,6 +468,7 @@ def _inspect_entry(
 
 
 def _inspect_open_session(
+    root: Path,
     root_descriptor: int,
     name: str,
     session_id: str,
@@ -419,19 +477,28 @@ def _inspect_open_session(
     *,
     remove: bool,
     now: float,
-) -> str | None:
+) -> str | SessionObservation | None:
     lock_descriptor = _open_valid_lock(session_descriptor, owner_uid)
     if lock_descriptor is None:
         return _invalid_or_vanished(root_descriptor, name, session_descriptor)
     try:
+        marker = _read_valid_marker(session_descriptor, session_id, owner_uid)
+        if marker is None:
+            return _invalid_or_vanished(root_descriptor, name, session_descriptor)
+        try:
+            _validate_tree(session_descriptor, owner_uid)
+        except OSError:
+            return _invalid_or_vanished(root_descriptor, name, session_descriptor)
         if not _try_lock(lock_descriptor):
-            return "active"
+            return _observation(root, name, marker, "active")
         return _inspect_unlocked_session(
+            root,
             root_descriptor,
             name,
             session_id,
             session_descriptor,
             owner_uid,
+            marker,
             remove=remove,
             now=now,
         )
@@ -440,32 +507,45 @@ def _inspect_open_session(
 
 
 def _inspect_unlocked_session(
+    root: Path,
     root_descriptor: int,
     name: str,
     session_id: str,
     session_descriptor: int,
     owner_uid: int,
+    marker: Mapping[str, Any],
     *,
     remove: bool,
     now: float,
-) -> str | None:
-    marker = _read_valid_marker(session_descriptor, session_id, owner_uid)
-    if marker is None:
-        return _invalid_or_vanished(root_descriptor, name, session_descriptor)
-    try:
-        _validate_tree(session_descriptor, owner_uid)
-    except OSError:
-        return _invalid_or_vanished(root_descriptor, name, session_descriptor)
+) -> str | SessionObservation | None:
+    del session_id
     age = now - marker["createdAt"]
     if age < SESSION_STALE_SECONDS:
-        return "recent"
+        return _observation(root, name, marker, "recent")
     if not remove:
-        return "stale"
+        return _observation(root, name, marker, "stale")
     try:
         _delete_open_session(root_descriptor, name, session_descriptor, owner_uid)
     except OSError:
         return "failed"
     return "removed"
+
+
+def _observation(
+    root: Path,
+    name: str,
+    marker: Mapping[str, Any],
+    state: str,
+) -> SessionObservation:
+    return SessionObservation(
+        session_id=cast(str, marker["sessionId"]),
+        profile_id=cast(str, marker["profileId"]),
+        profile_revision=cast(int, marker["profileRevision"]),
+        supervisor_pid=cast(int, marker["supervisorPid"]),
+        created_at=cast(int, marker["createdAt"]),
+        state=state,
+        path=root / name,
+    )
 
 
 def _invalid_or_vanished(
@@ -546,7 +626,25 @@ def _valid_marker(marker: object, session_id: str, owner_uid: int) -> bool:
         and type(marker.get("createdAt")) is int
         and marker["createdAt"] >= 0
         and marker.get("state") in _MARKER_STATES
+        and _valid_profile_generation(marker.get("profileId"), marker.get("profileRevision"))
     )
+
+
+def _validate_profile_generation(profile_id: str, profile_revision: int) -> None:
+    if not _valid_profile_generation(profile_id, profile_revision):
+        raise SessionRuntimeError("profile generation is invalid")
+
+
+def _valid_profile_generation(profile_id: object, profile_revision: object) -> bool:
+    if not isinstance(profile_id, str) or type(profile_revision) is not int:
+        return False
+    try:
+        import uuid
+
+        parsed = uuid.UUID(profile_id)
+    except ValueError:
+        return False
+    return str(parsed) == profile_id and profile_revision > 0
 
 
 def _open_valid_lock(session_descriptor: int, owner_uid: int) -> int | None:
@@ -653,6 +751,7 @@ def _discard_incomplete_session(root_descriptor: int, name: str, session_descrip
 __all__ = [
     "AUTOMATIC_SCAN_LIMIT",
     "SESSION_STALE_SECONDS",
+    "SessionObservation",
     "SessionRuntime",
     "SessionRuntimeError",
     "SessionScan",

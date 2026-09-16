@@ -50,7 +50,13 @@ class TestProfileOutput(unittest.TestCase):
 
         self.assertEqual("production", observation["name"])
         self.assertEqual(4, observation["revision"])
-        self.assertEqual({"type": "scram-sha-512"}, observation["kafka"]["auth"])
+        self.assertEqual(
+            {
+                "type": "scram-sha-512",
+                "credentials": {"kafka/password": "unavailable"},
+            },
+            observation["kafka"]["auth"],
+        )
         self.assertEqual({"trust": "custom"}, observation["kafka"]["tls"])
         self.assertNotIn("passwordRef", serialized)
         self.assertNotIn("properties", serialized)

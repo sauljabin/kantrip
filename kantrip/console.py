@@ -139,6 +139,7 @@ def create_profile_description(observation: Mapping[str, Any]) -> Group:
                 ("Transport", _mapping_value(kafka, "transport")),
                 ("TLS trust", _tls_trust(kafka)),
                 ("Authentication", _auth_type(kafka)),
+                ("Credentials", _credential_states(kafka)),
             ),
         ),
         _details_section("Registry", _registry_details(registry)),
@@ -186,6 +187,14 @@ def _mapping_value(value: object, key: str) -> object:
 def _auth_type(kafka: object) -> object:
     auth = kafka.get("auth", {}) if isinstance(kafka, Mapping) else {}
     return _mapping_value(auth, "type")
+
+
+def _credential_states(kafka: object) -> object:
+    auth = kafka.get("auth", {}) if isinstance(kafka, Mapping) else {}
+    credentials = auth.get("credentials", {}) if isinstance(auth, Mapping) else {}
+    if not isinstance(credentials, Mapping) or not credentials:
+        return "-"
+    return ", ".join(f"{field}: {state}" for field, state in sorted(credentials.items()))
 
 
 def _tls_trust(kafka: object) -> object:

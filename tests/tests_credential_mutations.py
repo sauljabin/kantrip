@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import unittest
 
@@ -68,7 +69,9 @@ class TestCredentialMutations(unittest.TestCase):
                 profile_name="local",
                 profile_id=PROFILE_ID,
                 expected_revision=1,
-                document=references["kafka/password"],
+                document=json.dumps(
+                    {"kafka": {"auth": {"passwordRef": references["kafka/password"]}}}
+                ),
             )
 
         result = commit_secret_replacements(self.connection, store, PROFILE_ID, staged, switch)
@@ -76,13 +79,17 @@ class TestCredentialMutations(unittest.TestCase):
         row = self.connection.execute(
             "SELECT revision, document FROM profiles WHERE id = ?", (PROFILE_ID,)
         ).fetchone()
-        self.assertEqual((2, staged[0].reference), tuple(row))
+        self.assertEqual(2, row["revision"])
+        self.assertEqual(
+            staged[0].reference,
+            json.loads(row["document"])["kafka"]["auth"]["passwordRef"],
+        )
         self.assertNotIn(old_reference, store.values)
         self.assertEqual("new-secret", store.values[staged[0].reference])
         self.assertEqual((), pending_secret_cleanup(self.connection))
         self.assertEqual((1, 1, 0), (result.pending, result.removed, result.failed))
 
-    def test_failed_profile_switch_cleans_staged_value_and_preserves_profile(self) -> None:
+    def test_failed_profile_switch_retains_recoverable_staging_and_profile(self) -> None:
         store = _Store(self.connection)
         staged = stage_secret_replacements(
             self.connection,
@@ -102,8 +109,11 @@ class TestCredentialMutations(unittest.TestCase):
             "SELECT revision, document FROM profiles WHERE id = ?", (PROFILE_ID,)
         ).fetchone()
         self.assertEqual((1, "{}"), tuple(row))
-        self.assertNotIn(staged[0].reference, store.values)
-        self.assertEqual((), pending_secret_cleanup(self.connection))
+        self.assertEqual("synthetic-token", store.values[staged[0].reference])
+        self.assertEqual(
+            staged[0].reference,
+            pending_secret_cleanup(self.connection)[0].secret_reference,
+        )
 
     def test_profile_switch_cannot_retire_its_new_active_reference(self) -> None:
         store = _Store(self.connection)
@@ -124,10 +134,13 @@ class TestCredentialMutations(unittest.TestCase):
                 retire_references=(staged[0].reference,),
             )
 
-        self.assertNotIn(staged[0].reference, store.values)
-        self.assertEqual((), pending_secret_cleanup(self.connection))
+        self.assertEqual("synthetic-secret", store.values[staged[0].reference])
+        self.assertEqual(
+            staged[0].reference,
+            pending_secret_cleanup(self.connection)[0].secret_reference,
+        )
 
-    def test_concurrent_revision_change_rejects_switch_and_cleans_staging(self) -> None:
+    def test_concurrent_revision_change_rejects_switch_and_retains_staging(self) -> None:
         store = _Store(self.connection)
         staged = stage_secret_replacements(
             self.connection,
@@ -156,8 +169,11 @@ class TestCredentialMutations(unittest.TestCase):
             "SELECT revision, document FROM profiles WHERE id = ?", (PROFILE_ID,)
         ).fetchone()
         self.assertEqual((2, "{}"), tuple(row))
-        self.assertNotIn(staged[0].reference, store.values)
-        self.assertEqual((), pending_secret_cleanup(self.connection))
+        self.assertEqual("synthetic-secret", store.values[staged[0].reference])
+        self.assertEqual(
+            staged[0].reference,
+            pending_secret_cleanup(self.connection)[0].secret_reference,
+        )
 
     def test_failed_superseded_deletion_remains_retryable(self) -> None:
         store = _Store(self.connection)
@@ -182,7 +198,10 @@ class TestCredentialMutations(unittest.TestCase):
             staged,
             lambda references: self.connection.execute(
                 "UPDATE profiles SET revision = revision + 1, document = ? WHERE id = ?",
-                (references["registry/token"], PROFILE_ID),
+                (
+                    json.dumps({"registry": {"auth": {"tokenRef": references["registry/token"]}}}),
+                    PROFILE_ID,
+                ),
             ),
         )
 
@@ -190,7 +209,7 @@ class TestCredentialMutations(unittest.TestCase):
         self.assertEqual(old_reference, pending_secret_cleanup(self.connection)[0].secret_reference)
         self.assertEqual("new-token", store.values[staged[0].reference])
 
-    def test_partial_store_failure_cleans_every_staged_reference(self) -> None:
+    def test_partial_store_failure_retains_every_staged_intent(self) -> None:
         store = _Store(self.connection, fail_set_after=1)
 
         with self.assertRaises(CredentialMutationError):
@@ -204,8 +223,10 @@ class TestCredentialMutations(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual({}, store.values)
-        self.assertEqual((), pending_secret_cleanup(self.connection))
+        records = pending_secret_cleanup(self.connection)
+        self.assertEqual(2, len(records))
+        self.assertEqual(1, len(store.values))
+        self.assertTrue(set(store.values).issubset({record.secret_reference for record in records}))
 
     def test_profile_removal_commits_before_exact_cleanup(self) -> None:
         store = _Store(self.connection)

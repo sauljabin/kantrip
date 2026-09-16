@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from kantrip._files import write_exclusive_text
@@ -103,6 +104,41 @@ class AdapterError(ValueError):
     """Raised when command arguments conflict with a selected profile."""
 
 
+@dataclass(frozen=True)
+class AdapterCapability:
+    """One shared execution decision for a supported adapter family."""
+
+    adapter: str
+    executables: frozenset[str]
+    kafka_authentication: frozenset[str]
+    registry_providers: frozenset[str]
+    pem_version_gate: bool = False
+
+
+_KAFKA_AUTHENTICATION = frozenset({"none", "plain", "scram-sha-256", "scram-sha-512", "mtls"})
+ADAPTER_CAPABILITIES = (
+    AdapterCapability(
+        "Apache/Confluent Java CLI",
+        KAFKA_EXECUTABLES,
+        _KAFKA_AUTHENTICATION,
+        frozenset({CONFLUENT_PROVIDER}),
+        pem_version_gate=True,
+    ),
+    AdapterCapability(
+        "kcat",
+        KCAT_EXECUTABLES,
+        _KAFKA_AUTHENTICATION,
+        frozenset({CONFLUENT_PROVIDER}),
+    ),
+    AdapterCapability(
+        "Kaskade",
+        KASKADE_EXECUTABLES,
+        _KAFKA_AUTHENTICATION,
+        frozenset({"confluent", "apicurio"}),
+    ),
+)
+
+
 _CLIENT_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.\d+)?")
 _JAVA_PEM_VERSION_TIMEOUT_SECONDS = 5
 
@@ -138,6 +174,29 @@ def require_java_pem_support(
             f"{Path(executable).name} {rendered_version} does not support PEM trust stores; "
             "custom CA profiles require Apache Kafka 2.7+ or Confluent Platform 6.1+"
         )
+
+
+def require_adapter_capability(
+    executable: str,
+    *,
+    auth_type: str,
+    custom_pem: bool,
+    environment: Mapping[str, str],
+) -> None:
+    """Apply the same mechanism and installed-version decision to direct clients."""
+    name = Path(executable).name
+    capability = next(
+        (item for item in ADAPTER_CAPABILITIES if name in item.executables),
+        None,
+    )
+    if capability is None:
+        return
+    if auth_type not in capability.kafka_authentication:
+        raise AdapterError(
+            f"{capability.adapter} does not support Kafka authentication '{auth_type}'"
+        )
+    if custom_pem and capability.pem_version_gate:
+        require_java_pem_support(executable, environment=environment)
 
 
 def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
@@ -248,6 +307,7 @@ def create_subshell_shims(
     *,
     bootstrap_servers: str,
     java_config_path: Path,
+    kcat_config_path: Path,
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     environment: Mapping[str, str],
@@ -304,7 +364,7 @@ def create_subshell_shims(
     for name, executable in kcat_executables.items():
         _write_executable(
             directory / name,
-            _render_kcat_shim(name, executable, registry),
+            _render_kcat_shim(name, executable, kcat_config_path, registry),
         )
     return directory
 
@@ -479,6 +539,7 @@ done
     if capability_error is not None:
         capability_guard = f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
     return f"""#!/bin/sh
+unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
 {registry_guard}{capability_guard}{property_guard}for argument in "$@"; do
   case "$argument" in
     {rejected_patterns})
@@ -512,6 +573,7 @@ def _render_kaskade_shim(
 ) -> str:
     registry_guard = _render_registry_shim_guard("kaskade", registry)
     return f"""#!/bin/sh
+unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
 case "${{1-}}" in
   admin|consumer)
     command="$1"
@@ -553,11 +615,13 @@ esac
 def _render_kcat_shim(
     name: str,
     executable: str,
+    config_path: Path,
     registry: RegistryConnection | None,
 ) -> str:
     registry_guard = _render_registry_shim_guard(name, registry, confluent_only=True)
     registry_url = shlex.quote(registry.url if registry is not None else "")
     return f"""#!/bin/sh
+export KCAT_CONFIG={shlex.quote(str(config_path))}
 schema_deserializer=
 previous_argument=
 for argument in "$@"; do
@@ -603,6 +667,7 @@ def _write_executable(path: Path, contents: str) -> None:
 
 
 __all__ = [
+    "ADAPTER_CAPABILITIES",
     "ADAPTER_EXECUTABLES",
     "KAFKA_ACLS_EXECUTABLES",
     "KAFKA_BROKER_API_VERSIONS_EXECUTABLES",
@@ -618,7 +683,9 @@ __all__ = [
     "SCHEMA_REGISTRY_CONSUMER_EXECUTABLES",
     "SCHEMA_REGISTRY_EXECUTABLES",
     "SCHEMA_REGISTRY_PRODUCER_EXECUTABLES",
+    "AdapterCapability",
     "AdapterError",
     "create_subshell_shims",
     "prepare_command",
+    "require_adapter_capability",
 ]

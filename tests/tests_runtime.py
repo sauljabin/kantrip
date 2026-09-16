@@ -21,6 +21,8 @@ from kantrip.runtime import (
     scan_sessions,
 )
 
+PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+
 
 class TestSessionRuntime(unittest.TestCase):
     def setUp(self) -> None:
@@ -31,14 +33,22 @@ class TestSessionRuntime(unittest.TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
 
     def test_creates_private_locked_session_and_removes_it_normally(self) -> None:
-        runtime = create_session_runtime(self.environment)
+        runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         marker = json.loads((runtime.path / MARKER_FILENAME).read_text(encoding="utf-8"))
 
         self.assertEqual(0o700, stat.S_IMODE(runtime.path.stat().st_mode))
         self.assertEqual(0o600, stat.S_IMODE((runtime.path / LOCK_FILENAME).stat().st_mode))
         self.assertEqual(0o600, stat.S_IMODE((runtime.path / MARKER_FILENAME).stat().st_mode))
         self.assertEqual(
-            {"createdAt", "ownerUid", "sessionId", "state", "supervisorPid"},
+            {
+                "createdAt",
+                "ownerUid",
+                "profileId",
+                "profileRevision",
+                "sessionId",
+                "state",
+                "supervisorPid",
+            },
             set(marker),
         )
         self.assertEqual("preparing", marker["state"])
@@ -83,7 +93,7 @@ class TestSessionRuntime(unittest.TestCase):
 
     def test_classifies_recent_and_stale_sessions_by_lock_and_age(self) -> None:
         with patch("kantrip.runtime.time.time", return_value=1000):
-            runtime = create_session_runtime(self.environment)
+            runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         path = runtime.path
         _abandon(runtime)
 
@@ -104,7 +114,7 @@ class TestSessionRuntime(unittest.TestCase):
 
     def test_pid_does_not_make_an_unlocked_old_session_active(self) -> None:
         with patch("kantrip.runtime.time.time", return_value=1000):
-            runtime = create_session_runtime(self.environment)
+            runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         _abandon(runtime)
 
         report = scan_sessions(
@@ -117,7 +127,7 @@ class TestSessionRuntime(unittest.TestCase):
 
     def test_rejects_symlinks_without_removing_the_session(self) -> None:
         with patch("kantrip.runtime.time.time", return_value=1000):
-            runtime = create_session_runtime(self.environment)
+            runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         path = runtime.path
         outside = self.runtime_base / "outside"
         outside.write_text("keep", encoding="utf-8")
@@ -135,7 +145,7 @@ class TestSessionRuntime(unittest.TestCase):
         self.assertEqual("keep", outside.read_text(encoding="utf-8"))
 
     def test_rejects_malformed_and_unexpected_entries(self) -> None:
-        runtime = create_session_runtime(self.environment)
+        runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         path = runtime.path
         _abandon(runtime)
         (path / MARKER_FILENAME).write_text("not json", encoding="utf-8")
@@ -148,7 +158,7 @@ class TestSessionRuntime(unittest.TestCase):
 
     def test_rejects_a_marker_whose_id_does_not_match_its_directory(self) -> None:
         with patch("kantrip.runtime.time.time", return_value=1000):
-            runtime = create_session_runtime(self.environment)
+            runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         path = runtime.path
         marker_path = path / MARKER_FILENAME
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
@@ -170,7 +180,7 @@ class TestSessionRuntime(unittest.TestCase):
         runtimes = []
         with patch("kantrip.runtime.time.time", return_value=1000):
             for _ in range(2):
-                runtimes.append(create_session_runtime(self.environment))
+                runtimes.append(create_session_runtime(PROFILE_ID, 1, self.environment))
         for runtime in runtimes:
             _abandon(runtime)
 
@@ -194,7 +204,7 @@ class TestSessionRuntime(unittest.TestCase):
 
     def test_concurrent_cleanup_removes_a_stale_session_once(self) -> None:
         with patch("kantrip.runtime.time.time", return_value=1000):
-            runtime = create_session_runtime(self.environment)
+            runtime = create_session_runtime(PROFILE_ID, 1, self.environment)
         _abandon(runtime)
 
         def cleanup() -> object:
@@ -214,7 +224,7 @@ class TestSessionRuntime(unittest.TestCase):
         script = (
             "import os; "
             "from kantrip.runtime import create_session_runtime; "
-            f"runtime = create_session_runtime({self.environment!r}); "
+            f"runtime = create_session_runtime({PROFILE_ID!r}, 1, {self.environment!r}); "
             "os._exit(0)"
         )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import os
 import sys
 from collections.abc import Callable
@@ -25,8 +26,13 @@ from kantrip.console import (
     create_structured_syntax,
     show_progress,
 )
-from kantrip.doctor import run_doctor
-from kantrip.kafka import KafkaProfileError, read_ca_bundle
+from kantrip.doctor import DoctorReport, run_doctor
+from kantrip.kafka import (
+    KafkaProfileError,
+    read_ca_bundle,
+    read_client_certificate,
+    read_private_key,
+)
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, ping_profile
 from kantrip.profile_output import (
@@ -37,17 +43,39 @@ from kantrip.profile_output import (
     list_observation,
 )
 from kantrip.profiles import (
+    KafkaAuthInput,
     ProfileStoreError,
     add_profile,
     edit_profile,
     load_profiles,
     remove_profile,
+    resolve_profile_snapshot,
 )
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
 CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
 OUTPUT_FORMATS = ("human", "json", "yaml")
+
+
+class _ProfileClickException(click.ClickException):
+    """Render a safe profile error with its public mutation exit status."""
+
+
+class _CommittedProfileClickException(_ProfileClickException):
+    exit_code = 3
+
+
+class _UnknownProfileClickException(_ProfileClickException):
+    exit_code = 4
+
+
+def _profile_click_exception(error: ProfileStoreError) -> _ProfileClickException:
+    exception_type = {
+        3: _CommittedProfileClickException,
+        4: _UnknownProfileClickException,
+    }.get(error.exit_code, _ProfileClickException)
+    return exception_type(str(error))
 
 
 def _configure_consoles(context: click.Context, *, no_color: bool) -> None:
@@ -172,6 +200,309 @@ def _read_ca_file(
         raise click.BadParameter(str(error), param=parameter) from error
 
 
+def _read_client_identity(
+    certificate_path: Path,
+    key_path: Path,
+) -> tuple[str, str, str | None]:
+    try:
+        certificate = read_client_certificate(certificate_path)
+        key = read_private_key(key_path)
+        return certificate, key, None
+    except KafkaProfileError as first_error:
+        password = _secret_prompt("Kafka private-key password")
+        try:
+            certificate = read_client_certificate(certificate_path)
+            key = read_private_key(key_path, password=password)
+        except KafkaProfileError as error:
+            raise click.ClickException(str(error)) from error
+        if not password:
+            raise click.ClickException(str(first_error))
+        return certificate, key, password
+
+
+def _password_prompt() -> str:
+    value = _secret_prompt("Kafka password")
+    if not value:
+        raise click.ClickException("Kafka password must not be empty")
+    return value
+
+
+def _secret_prompt(label: str) -> str:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open("/dev/tty", os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+    except OSError as error:
+        raise click.ClickException(
+            f"{label} requires a controlling terminal; rerun interactively"
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    try:
+        return getpass.getpass(f"{label}: ")
+    except (EOFError, KeyboardInterrupt) as error:
+        raise click.ClickException(f"{label} collection was canceled") from error
+
+
+def _auth_input(
+    auth_type: str,
+    username: str | None,
+    certificate_path: Path | None,
+    key_path: Path | None,
+    *,
+    password_required: bool,
+    replace_fields: tuple[str, ...] = (),
+) -> KafkaAuthInput:
+    if len(set(replace_fields)) != len(replace_fields):
+        raise click.UsageError("--replace-secret fields must be unique")
+    allowed = {
+        "kafka/password",
+        "kafka/tls/private-key",
+        "kafka/tls/private-key-password",
+    }
+    unknown = sorted(set(replace_fields) - allowed)
+    if unknown:
+        raise click.UsageError(f"unsupported credential field: {unknown[0]}")
+    if auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
+        return _password_auth_input(
+            auth_type,
+            username,
+            certificate_path,
+            key_path,
+            password_required=password_required,
+            replace_fields=replace_fields,
+        )
+    if auth_type == "mtls":
+        return _mtls_auth_input(
+            certificate_path,
+            key_path,
+            replace_fields=replace_fields,
+        )
+    if replace_fields or username or certificate_path is not None or key_path is not None:
+        raise click.UsageError("Kafka auth none cannot include credential options")
+    return KafkaAuthInput("none")
+
+
+def _password_auth_input(
+    auth_type: str,
+    username: str | None,
+    certificate_path: Path | None,
+    key_path: Path | None,
+    *,
+    password_required: bool,
+    replace_fields: tuple[str, ...],
+) -> KafkaAuthInput:
+    invalid = set(replace_fields) - {"kafka/password"}
+    if invalid or certificate_path is not None or key_path is not None:
+        raise click.UsageError("Kafka password authentication cannot replace an mTLS field")
+    password = _password_prompt() if password_required or replace_fields else None
+    return KafkaAuthInput(auth_type, username=username, password=password)
+
+
+def _mtls_auth_input(
+    certificate_path: Path | None,
+    key_path: Path | None,
+    *,
+    replace_fields: tuple[str, ...],
+) -> KafkaAuthInput:
+    if "kafka/password" in replace_fields:
+        raise click.UsageError("Kafka mTLS authentication has no password field")
+    replacing_key = "kafka/tls/private-key" in replace_fields
+    replacing_key_password = "kafka/tls/private-key-password" in replace_fields
+    if replacing_key_password and not replacing_key:
+        raise click.UsageError(
+            "Kafka private-key password replacement requires replacing the private key"
+        )
+    if replacing_key and key_path is None:
+        key_path = cast(
+            Path,
+            click.prompt("Kafka private-key file", type=click.Path(path_type=Path)),
+        )
+    if replacing_key and certificate_path is None:
+        certificate_path = cast(
+            Path,
+            click.prompt("Kafka client-certificate file", type=click.Path(path_type=Path)),
+        )
+    if (certificate_path is None) != (key_path is None):
+        raise click.UsageError("mTLS certificate and key files must be supplied together")
+    if certificate_path is None or key_path is None:
+        return KafkaAuthInput("mtls")
+    certificate, key, password = _read_client_identity(certificate_path, key_path)
+    return KafkaAuthInput(
+        "mtls",
+        client_certificate=certificate,
+        private_key=key,
+        private_key_password=password,
+    )
+
+
+def _interactive_profile_edits(profile: dict[str, Any]) -> dict[str, Any]:
+    """Collect explicit public-field and secret actions without exposing values."""
+    edits: dict[str, Any] = {
+        "labels": {},
+        "remove_labels": (),
+    }
+    removed_labels: list[str] = []
+    while True:
+        field = click.prompt(
+            "Field to edit",
+            type=click.Choice(
+                (
+                    "bootstrap-servers",
+                    "description",
+                    "labels",
+                    "transport",
+                    "authentication",
+                    "registry",
+                    "done",
+                )
+            ),
+            default="done",
+        )
+        if field == "done":
+            break
+        if field == "authentication":
+            edits["auth"] = _interactive_auth_input(profile["kafka"]["auth"])
+        elif field == "registry":
+            _collect_interactive_registry(profile, edits)
+        else:
+            _collect_interactive_public_field(profile, edits, removed_labels, field)
+    return edits
+
+
+def _collect_interactive_public_field(
+    profile: dict[str, Any],
+    edits: dict[str, Any],
+    removed_labels: list[str],
+    field: str,
+) -> None:
+    if field == "bootstrap-servers":
+        current = ",".join(profile["kafka"]["bootstrapServers"])
+        value = click.prompt("Kafka bootstrap servers", default=current)
+        edits["bootstrap_servers"] = _split_bootstrap_servers(
+            click.get_current_context(), cast(click.Parameter, None), value
+        )
+    elif field == "description":
+        action = _field_action("Description")
+        if action == "replace":
+            edits["description"] = click.prompt("Description")
+        elif action == "remove":
+            edits["clear_description"] = True
+    elif field == "labels":
+        action = _field_action("Label")
+        if action != "keep":
+            key = click.prompt("Label key")
+            if action == "replace":
+                edits["labels"][key] = click.prompt("Label value")
+            else:
+                removed_labels.append(key)
+                edits["remove_labels"] = tuple(removed_labels)
+    else:
+        edits["transport"] = click.prompt(
+            "Kafka transport",
+            type=click.Choice(("plaintext", "tls")),
+            default=profile["kafka"]["transport"],
+        )
+
+
+def _collect_interactive_registry(profile: dict[str, Any], edits: dict[str, Any]) -> None:
+    registry = profile.get("registry")
+    action = _field_action("Registry")
+    if action == "remove":
+        edits["remove_registry"] = True
+    elif action == "replace":
+        current_provider = (
+            registry.get("provider", "confluent") if isinstance(registry, dict) else "confluent"
+        )
+        provider = click.prompt(
+            "Registry provider",
+            type=click.Choice(("confluent", "apicurio")),
+            default=current_provider,
+        )
+        edits["registry_provider"] = provider
+        edits["registry_url"] = click.prompt("Registry URL")
+
+
+def _field_action(label: str) -> str:
+    return click.prompt(
+        f"{label} action",
+        type=click.Choice(("keep", "replace", "remove")),
+        default="keep",
+    )
+
+
+def _interactive_auth_input(current_auth: dict[str, Any]) -> KafkaAuthInput:
+    current_type = str(current_auth["type"])
+    selected = click.prompt(
+        "Kafka authentication",
+        type=click.Choice(("none", "plain", "scram-sha-256", "scram-sha-512", "mtls")),
+        default=current_type,
+    )
+    if selected == "none":
+        return KafkaAuthInput("none")
+    if selected in {"plain", "scram-sha-256", "scram-sha-512"}:
+        password_family = current_type in {"plain", "scram-sha-256", "scram-sha-512"}
+        username = click.prompt(
+            "Kafka username",
+            default=current_auth.get("username") if password_family else None,
+        )
+        action = "replace"
+        if password_family:
+            action = click.prompt(
+                "Kafka password action",
+                type=click.Choice(("keep", "replace", "remove")),
+                default="keep",
+            )
+        if action == "remove":
+            raise click.UsageError(
+                "Kafka password is required; choose auth none or mTLS to remove it"
+            )
+        return _auth_input(
+            selected,
+            username,
+            None,
+            None,
+            password_required=action == "replace",
+            replace_fields=("kafka/password",) if action == "replace" else (),
+        )
+    action = "replace"
+    if current_type == "mtls":
+        action = click.prompt(
+            "Kafka client identity action",
+            type=click.Choice(("keep", "replace", "remove")),
+            default="keep",
+        )
+    if action == "remove":
+        raise click.UsageError(
+            "Kafka client identity is required; choose auth none or password authentication "
+            "to remove it"
+        )
+    if action == "keep":
+        return KafkaAuthInput("mtls")
+    certificate = cast(
+        Path,
+        click.prompt(
+            "Kafka client-certificate file",
+            type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+        ),
+    )
+    key = cast(
+        Path,
+        click.prompt(
+            "Kafka private-key file",
+            type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+        ),
+    )
+    return _auth_input(
+        "mtls",
+        None,
+        certificate,
+        key,
+        password_required=False,
+        replace_fields=("kafka/tls/private-key",),
+    )
+
+
 @cli.command("add")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
@@ -209,6 +540,27 @@ def _read_ca_file(
     help="Copy a PEM CA bundle for Kafka TLS verification.",
 )
 @cloup.option(
+    "--auth",
+    "auth_type",
+    type=cloup.Choice(("none", "plain", "scram-sha-256", "scram-sha-512", "mtls")),
+    default="none",
+    show_default=True,
+    help="Kafka authentication mechanism.",
+)
+@cloup.option("--username", help="Kafka SASL username.")
+@cloup.option(
+    "--client-certificate-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    metavar="PATH",
+    help="Copy a public PEM Kafka client certificate chain.",
+)
+@cloup.option(
+    "--client-key-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    metavar="PATH",
+    help="Read a PEM Kafka client private key into the credential store.",
+)
+@cloup.option(
     "--registry-provider",
     type=cloup.Choice(("confluent", "apicurio")),
     help="Registry provider; defaults to confluent when --registry-url is supplied.",
@@ -224,11 +576,22 @@ def add_configured_profile(
     labels: dict[str, str],
     transport: str,
     ca_file: str | None,
+    auth_type: str,
+    username: str | None,
+    client_certificate_file: Path | None,
+    client_key_file: Path | None,
     registry_provider: str | None,
     registry_url: str | None,
 ) -> None:
     """Add a profile."""
     try:
+        auth = _auth_input(
+            auth_type,
+            username,
+            client_certificate_file,
+            client_key_file,
+            password_required=auth_type in {"plain", "scram-sha-256", "scram-sha-512"},
+        )
         profiles = add_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
@@ -236,11 +599,12 @@ def add_configured_profile(
             labels=labels,
             transport=transport,
             ca_certificates=ca_file,
+            auth=auth,
             registry_provider=registry_provider,
             registry_url=registry_url,
         )
     except ProfileStoreError as error:
-        raise click.ClickException(str(error)) from error
+        raise _profile_click_exception(error) from error
     click.echo(f"Added profile '{profile_name}' to {profiles.path}")
 
 
@@ -289,6 +653,32 @@ def add_configured_profile(
     help="Use the client's default trust store for Kafka TLS.",
 )
 @cloup.option(
+    "--auth",
+    "auth_type",
+    type=cloup.Choice(("none", "plain", "scram-sha-256", "scram-sha-512", "mtls")),
+    help="Replace the Kafka authentication mechanism.",
+)
+@cloup.option("--username", help="Replace the Kafka SASL username.")
+@cloup.option(
+    "--client-certificate-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    metavar="PATH",
+    help="Replace the public PEM Kafka client certificate chain.",
+)
+@cloup.option(
+    "--client-key-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    metavar="PATH",
+    help="Replace the PEM Kafka client private key in the credential store.",
+)
+@cloup.option(
+    "--replace-secret",
+    "replace_secrets",
+    multiple=True,
+    metavar="FIELD",
+    help="Replace one supported Kafka credential field; repeat as needed.",
+)
+@cloup.option(
     "--registry-provider",
     type=cloup.Choice(("confluent", "apicurio")),
     help="Replace the Registry provider.",
@@ -305,12 +695,78 @@ def edit_configured_profile(
     transport: str | None,
     ca_file: str | None,
     default_trust: bool,
+    auth_type: str | None,
+    username: str | None,
+    client_certificate_file: Path | None,
+    client_key_file: Path | None,
+    replace_secrets: tuple[str, ...],
     registry_provider: str | None,
     registry_url: str | None,
     remove_registry: bool,
 ) -> None:
     """Edit explicit fields of an existing profile."""
     try:
+        current = load_profiles(missing_ok=True)
+        current_profile = current.profile(profile_name)
+        expected_revision = current.revision(profile_name)
+        current_auth = current_profile["kafka"]["auth"]
+        scripted_edit = any(
+            (
+                bootstrap_servers is not None,
+                description is not None,
+                clear_description,
+                bool(labels),
+                bool(remove_labels),
+                transport is not None,
+                ca_file is not None,
+                default_trust,
+                auth_type is not None,
+                username is not None,
+                client_certificate_file is not None,
+                client_key_file is not None,
+                bool(replace_secrets),
+                registry_provider is not None,
+                registry_url is not None,
+                remove_registry,
+            )
+        )
+        auth: KafkaAuthInput | None = None
+        if not scripted_edit:
+            interactive = _interactive_profile_edits(current_profile)
+            bootstrap_servers = interactive.get("bootstrap_servers")
+            description = interactive.get("description")
+            clear_description = interactive.get("clear_description", False)
+            labels = interactive.get("labels", {})
+            remove_labels = interactive.get("remove_labels", ())
+            transport = interactive.get("transport")
+            auth = interactive.get("auth")
+            registry_provider = interactive.get("registry_provider")
+            registry_url = interactive.get("registry_url")
+            remove_registry = interactive.get("remove_registry", False)
+        else:
+            selected_auth = auth_type or str(current_auth["type"])
+            auth_requested = any(
+                (
+                    auth_type is not None,
+                    username is not None,
+                    client_certificate_file is not None,
+                    client_key_file is not None,
+                    bool(replace_secrets),
+                )
+            )
+            if auth_requested:
+                password_types = {"plain", "scram-sha-256", "scram-sha-512"}
+                auth = _auth_input(
+                    selected_auth,
+                    username,
+                    client_certificate_file,
+                    client_key_file,
+                    password_required=(
+                        selected_auth in password_types
+                        and current_auth.get("type") not in password_types
+                    ),
+                    replace_fields=replace_secrets,
+                )
         profiles = edit_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
@@ -321,24 +777,38 @@ def edit_configured_profile(
             transport=transport,
             ca_certificates=ca_file,
             default_trust=default_trust,
+            auth=auth,
             registry_provider=registry_provider,
             registry_url=registry_url,
             remove_registry=remove_registry,
+            expected_profile_id=str(current_profile["id"]),
+            expected_revision=expected_revision,
         )
     except ProfileStoreError as error:
-        raise click.ClickException(str(error)) from error
+        raise _profile_click_exception(error) from error
     click.echo(f"Updated profile '{profile_name}' in {profiles.path}")
 
 
 @cli.command("remove")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
-def remove_configured_profile(profile_name: str) -> None:
+@cloup.option("--force", is_flag=True, help="Remove without an interactive confirmation.")
+def remove_configured_profile(profile_name: str, force: bool) -> None:
     """Remove a profile."""
     try:
-        profiles = remove_profile(profile_name)
+        current = load_profiles(missing_ok=True)
+        profile = current.profile(profile_name)
+        revision = current.revision(profile_name)
+        if not force and not click.confirm(f"Remove profile '{profile_name}'?", default=False):
+            click.echo("Removal canceled; profile was not changed.")
+            return
+        profiles = remove_profile(
+            profile_name,
+            expected_profile_id=str(profile["id"]),
+            expected_revision=revision,
+        )
     except ProfileStoreError as error:
-        raise click.ClickException(str(error)) from error
+        raise _profile_click_exception(error) from error
     click.echo(f"Removed profile '{profile_name}' from {profiles.path}")
 
 
@@ -419,6 +889,7 @@ def current_profile() -> None:
 
 @cli.command("doctor")
 @local_no_color
+@cloup.argument("profile_name", metavar="PROFILE", required=False)
 @cloup.option(
     "--repair",
     is_flag=True,
@@ -429,25 +900,63 @@ def current_profile() -> None:
     is_flag=True,
     help="Show every diagnostic, including resolved paths and profile IDs.",
 )
+@cloup.option(
+    "--sessions",
+    is_flag=True,
+    help="Show validated sessions captured for PROFILE.",
+)
 @cloup.pass_context
-def doctor(context: cloup.Context, repair: bool, verbose: bool) -> None:
+def doctor(
+    context: cloup.Context,
+    profile_name: str | None,
+    repair: bool,
+    verbose: bool,
+    sessions: bool,
+) -> None:
     """Inspect Kantrip, optionally applying deterministic local repairs."""
+    _validate_doctor_options(profile_name, repair=repair, sessions=sessions)
     console = console_from_context(context)
-    repair_healthy = True
-    if repair:
-        repair_report = run_repair()
-        repair_healthy = repair_report.healthy
-        console.print(Text("Kantrip Repair", style="heading"))
-        for action in repair_report.actions:
-            console.print(
-                Padding(
-                    create_status_text(console, action.status, action.message),
-                    (0, 0, 0, 2),
-                    expand=False,
-                )
+    repair_healthy = _run_and_render_repair(console) if repair else True
+    report = (
+        run_doctor(profile_name=profile_name, include_sessions=sessions)
+        if profile_name is not None or sessions
+        else run_doctor()
+    )
+    _render_doctor_report(console, report, verbose=verbose)
+    if not repair_healthy or not report.healthy:
+        raise click.exceptions.Exit(1)
+
+
+def _validate_doctor_options(
+    profile_name: str | None,
+    *,
+    repair: bool,
+    sessions: bool,
+) -> None:
+    if sessions and profile_name is None:
+        raise click.UsageError("--sessions requires PROFILE")
+    if repair and profile_name is not None:
+        raise click.UsageError("PROFILE cannot be combined with --repair")
+    if repair and sessions:
+        raise click.UsageError("--sessions cannot be combined with --repair")
+
+
+def _run_and_render_repair(console: Console) -> bool:
+    repair_report = run_repair()
+    console.print(Text("Kantrip Repair", style="heading"))
+    for action in repair_report.actions:
+        console.print(
+            Padding(
+                create_status_text(console, action.status, action.message),
+                (0, 0, 0, 2),
+                expand=False,
             )
-        console.print()
-    report = run_doctor()
+        )
+    console.print()
+    return repair_report.healthy
+
+
+def _render_doctor_report(console: Console, report: DoctorReport, *, verbose: bool) -> None:
     console.print(Text("Kantrip Doctor", style="heading"))
     for section, checks in report.sections(verbose=verbose):
         console.print()
@@ -480,8 +989,6 @@ def doctor(context: cloup.Context, repair: bool, verbose: bool) -> None:
         summary_status = "success"
         summary = "Healthy"
     console.print(create_status_text(console, summary_status, summary))
-    if not repair_healthy or not report.healthy:
-        raise click.exceptions.Exit(1)
 
 
 def _doctor_summary(label: str, errors: int, warnings: int) -> str:
@@ -503,18 +1010,22 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
     show_default=True,
     help="Maximum time in seconds for the connectivity check.",
 )
-@cloup.option("--quiet", is_flag=True, help="Return only the connectivity exit status.")
+@cloup.option("-q", "--quiet", is_flag=True, help="Return only the connectivity exit status.")
 @cloup.pass_context
 def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool) -> None:
     """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
     try:
-        profile = load_profiles(missing_ok=True).profile(profile_name)
+        snapshot = resolve_profile_snapshot(profile_name)
         progress = (
             nullcontext() if quiet else show_progress(console, f"Checking profile '{profile_name}'")
         )
         with progress:
-            result = ping_profile(profile, timeout=timeout)
+            result = ping_profile(
+                snapshot.document,
+                timeout=timeout,
+                kafka=snapshot.kafka,
+            )
     except ProfileStoreError as error:
         if not quiet:
             error_console = error_console_from_context(context)
@@ -538,12 +1049,11 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
         create_status_text(
             console,
             "success",
-            f"Connected to Kafka ({result.broker_count} broker"
-            f"{'s' if result.broker_count != 1 else ''})",
+            f"Kafka transport: {result.kafka_transport}; "
+            f"authentication: {result.kafka_authentication}",
         )
     )
     if result.registry is not None:
-        resource = "artifact" if result.registry.provider == "apicurio" else "subject"
         product = (
             "Apicurio Registry"
             if result.registry.provider == "apicurio"
@@ -553,8 +1063,7 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
             create_status_text(
                 console,
                 "success",
-                f"Connected to {product} ({result.registry.count} {resource}"
-                f"{'s' if result.registry.count != 1 else ''})",
+                f"{product} transport: {result.registry.transport}",
             )
         )
 
@@ -567,8 +1076,14 @@ def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
     """Run a command or interactive subshell with PROFILE."""
     try:
         ensure_session_available()
-        profile = load_profiles(missing_ok=True).profile(profile_name)
-        exit_code = run_profile_session(profile_name, profile, command)
+        snapshot = resolve_profile_snapshot(profile_name)
+        exit_code = run_profile_session(
+            profile_name,
+            snapshot.document,
+            command,
+            profile_revision=snapshot.revision,
+            resolved_kafka=snapshot.kafka,
+        )
     except (ProfileStoreError, SessionError) as error:
         raise click.ClickException(str(error)) from error
     raise click.exceptions.Exit(exit_code)

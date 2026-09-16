@@ -14,9 +14,9 @@ from kantrip.cli import cli
 from kantrip.console import create_console
 from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult
-from kantrip.profiles import add_profile, load_profiles
-
-CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
+from kantrip.profiles import ProfileStoreError, add_profile, load_profiles
+from kantrip.secret_store import SecretNotFoundError
+from tests.pki import synthetic_pki, temporary_pki_files
 
 
 class TestCli(unittest.TestCase):
@@ -132,7 +132,7 @@ class TestCli(unittest.TestCase):
             )
             profile = load_profiles(database_path).profile("development")
             listed = self.runner.invoke(cli, ["list"], env=environment)
-            removed = self.runner.invoke(cli, ["remove", "development"], env=environment)
+            removed = self.runner.invoke(cli, ["remove", "development", "--force"], env=environment)
             empty = self.runner.invoke(cli, ["list"], env=environment)
 
         self.assertEqual(0, added.exit_code, added.output)
@@ -160,20 +160,21 @@ class TestCli(unittest.TestCase):
             database_path = Path(directory) / "profiles.db"
             environment = {"KANTRIP_DATABASE": str(database_path)}
 
-            added = self.runner.invoke(
-                cli,
-                [
-                    "add",
-                    "production",
-                    "--bootstrap-servers",
-                    "broker.example.com:9093",
-                    "--transport",
-                    "tls",
-                    "--ca-file",
-                    str(CA_FIXTURE),
-                ],
-                env=environment,
-            )
+            with temporary_pki_files(ca=synthetic_pki().ca) as paths:
+                added = self.runner.invoke(
+                    cli,
+                    [
+                        "add",
+                        "production",
+                        "--bootstrap-servers",
+                        "broker.example.com:9093",
+                        "--transport",
+                        "tls",
+                        "--ca-file",
+                        str(paths["ca"]),
+                    ],
+                    env=environment,
+                )
             secure = load_profiles(database_path).profile("production")
             default_trust = self.runner.invoke(
                 cli,
@@ -350,11 +351,108 @@ class TestCli(unittest.TestCase):
             result = self.runner.invoke(
                 cli,
                 ["edit", "local"],
+                input="\n",
                 env={"KANTRIP_DATABASE": str(database_path)},
             )
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("no profile changes were requested", result.output)
+
+    def test_no_options_edit_opens_field_editor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _add_test_profile(database_path)
+            result = self.runner.invoke(
+                cli,
+                ["edit", "local"],
+                input="description\nreplace\nEdited interactively\ndone\n",
+                env={"KANTRIP_DATABASE": str(database_path)},
+            )
+            profiles = load_profiles(database_path)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("Edited interactively", profiles.profile("local")["description"])
+        self.assertEqual(2, profiles.revision("local"))
+
+    def test_add_and_rotate_password_auth_without_echoing_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            store = _MemorySecretStore()
+            with (
+                patch("kantrip.profiles.load_secret_store", return_value=store),
+                patch(
+                    "kantrip.cli._secret_prompt",
+                    side_effect=("synthetic-password-one", "synthetic-password-two"),
+                ),
+            ):
+                added = self.runner.invoke(
+                    cli,
+                    [
+                        "add",
+                        "secure",
+                        "--transport",
+                        "tls",
+                        "--auth",
+                        "plain",
+                        "--username",
+                        "application",
+                    ],
+                    env=environment,
+                )
+                first = load_profiles(database_path).profile("secure")["kafka"]["auth"]
+                edited = self.runner.invoke(
+                    cli,
+                    ["edit", "secure", "--replace-secret", "kafka/password"],
+                    env=environment,
+                )
+                second = load_profiles(database_path).profile("secure")["kafka"]["auth"]
+
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual(0, edited.exit_code, edited.output)
+        self.assertEqual("plain", second["type"])
+        self.assertNotEqual(first["passwordRef"], second["passwordRef"])
+        self.assertEqual("synthetic-password-two", store.values[second["passwordRef"]])
+        self.assertNotIn(first["passwordRef"], store.values)
+        self.assertNotIn("synthetic-password-one", added.output + edited.output)
+        self.assertNotIn("synthetic-password-two", added.output + edited.output)
+
+    def test_required_secret_without_controlling_terminal_fails_with_guidance(self) -> None:
+        with patch("kantrip.cli.os.open", side_effect=OSError("no tty")):
+            result = self.runner.invoke(
+                cli,
+                [
+                    "add",
+                    "secure",
+                    "--transport",
+                    "tls",
+                    "--auth",
+                    "plain",
+                    "--username",
+                    "application",
+                ],
+                env={"KANTRIP_DATABASE": "profiles.db"},
+            )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("requires a controlling terminal", result.output)
+
+    def test_remove_confirmation_preserves_captured_profile_when_declined(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _add_test_profile(database_path)
+            result = self.runner.invoke(
+                cli,
+                ["remove", "local"],
+                input="n\n",
+                env={"KANTRIP_DATABASE": str(database_path)},
+            )
+
+            profile = load_profiles(database_path).profile("local")
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Removal canceled", result.output)
+        self.assertEqual(["localhost:9092"], profile["kafka"]["bootstrapServers"])
 
     def test_add_rejects_empty_comma_separated_bootstrap_server(self) -> None:
         result = self.runner.invoke(
@@ -363,6 +461,22 @@ class TestCli(unittest.TestCase):
 
         self.assertNotEqual(0, result.exit_code)
         self.assertIn("comma-separated list of host:port addresses", result.output)
+
+    def test_mutation_errors_preserve_committed_and_unknown_exit_statuses(self) -> None:
+        for exit_code in (3, 4):
+            with (
+                self.subTest(exit_code=exit_code),
+                patch(
+                    "kantrip.cli.add_profile",
+                    side_effect=ProfileStoreError(
+                        "synthetic mutation outcome", exit_code=exit_code
+                    ),
+                ),
+            ):
+                result = self.runner.invoke(cli, ["add", "outcome"])
+
+            self.assertEqual(exit_code, result.exit_code, result.output)
+            self.assertIn("synthetic mutation outcome", result.output)
 
     def test_list_is_empty_when_database_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -489,7 +603,7 @@ class TestCli(unittest.TestCase):
             environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
-                return_value=PingResult(broker_count=2),
+                return_value=PingResult("plaintext reachable", "not configured", "reachability"),
             ) as ping:
                 result = self.runner.invoke(
                     cli,
@@ -499,8 +613,11 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn("[running] Checking profile 'local'", result.output)
-        self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
-        ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5)
+        self.assertIn(
+            "[passed] Kafka transport: plaintext reachable; authentication: not configured",
+            result.output,
+        )
+        ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5, kafka=unittest.mock.ANY)
 
     def test_ping_reports_confluent_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
@@ -510,8 +627,10 @@ class TestCli(unittest.TestCase):
             with patch(
                 "kantrip.cli.ping_profile",
                 return_value=PingResult(
-                    broker_count=2,
-                    registry=RegistryPingResult(provider="confluent", count=3),
+                    "plaintext reachable",
+                    "not configured",
+                    "reachability",
+                    RegistryPingResult("confluent", "plaintext reachable"),
                 ),
             ):
                 result = self.runner.invoke(
@@ -522,8 +641,11 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn("[running] Checking profile 'local'", result.output)
-        self.assertIn("[passed] Connected to Kafka (2 brokers)", result.output)
-        self.assertIn("[passed] Connected to Confluent Schema Registry (3 subjects)", result.output)
+        self.assertIn("Kafka transport: plaintext reachable", result.output)
+        self.assertIn(
+            "[passed] Confluent Schema Registry transport: plaintext reachable",
+            result.output,
+        )
 
     def test_ping_reports_apicurio_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
@@ -533,8 +655,10 @@ class TestCli(unittest.TestCase):
             with patch(
                 "kantrip.cli.ping_profile",
                 return_value=PingResult(
-                    broker_count=1,
-                    registry=RegistryPingResult(provider="apicurio", count=2),
+                    "plaintext reachable",
+                    "not configured",
+                    "reachability",
+                    RegistryPingResult("apicurio", "plaintext reachable"),
                 ),
             ):
                 result = self.runner.invoke(
@@ -544,7 +668,7 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("[passed] Connected to Apicurio Registry (2 artifacts)", result.output)
+        self.assertIn("[passed] Apicurio Registry transport: plaintext reachable", result.output)
 
     def test_add_apicurio_requires_and_persists_its_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -634,7 +758,7 @@ class TestCli(unittest.TestCase):
             environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
             with patch(
                 "kantrip.cli.ping_profile",
-                return_value=PingResult(broker_count=1),
+                return_value=PingResult("plaintext reachable", "not configured", "reachability"),
             ):
                 result = self.runner.invoke(
                     cli,
@@ -734,6 +858,23 @@ def _add_test_profile(path: Path, *, registry: bool = False) -> None:
         description="Local development",
         registry_url="http://localhost:8081" if registry else None,
     )
+
+
+class _MemorySecretStore:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def get(self, reference: str) -> str:
+        try:
+            return self.values[reference]
+        except KeyError as error:
+            raise SecretNotFoundError("synthetic missing secret") from error
+
+    def set(self, reference: str, value: str) -> None:
+        self.values[reference] = value
+
+    def delete(self, reference: str) -> None:
+        self.values.pop(reference, None)
 
 
 if __name__ == "__main__":

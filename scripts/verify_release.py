@@ -48,9 +48,13 @@ SDIST_REQUIRED = {
     "kantrip/reconciliation.py",
     "kantrip/secret_store.py",
     "pyproject.toml",
+    "sandbox/kubernetes/23-auth-kafka.yaml",
     "schemas/profile.schema.json",
-    "tests/fixtures/kafka-ca.pem",
+    "scripts/auth_smoke.py",
+    "tests/pki.py",
+    "tests/tests_pki.py",
 }
+_FORBIDDEN_TEST_CREDENTIAL_SUFFIXES = (".crt", ".key", ".p12", ".pem", ".pfx")
 
 
 def one_artifact(dist: Path, pattern: str) -> Path:
@@ -92,6 +96,22 @@ def verify_sdist(sdist: Path, version: str) -> None:
     missing = {path for path in SDIST_REQUIRED if f"{expected_root}{path}" not in names}
     if missing:
         raise ValueError(f"source distribution is missing: {', '.join(sorted(missing))}")
+    test_names = {
+        name.removeprefix(expected_root)
+        for name in names
+        if name.startswith(f"{expected_root}tests/")
+    }
+    forbidden = sorted(
+        name
+        for name in test_names
+        if name.startswith("tests/fixtures/")
+        or name.lower().endswith(_FORBIDDEN_TEST_CREDENTIAL_SUFFIXES)
+    )
+    if forbidden:
+        raise ValueError(
+            "source distribution contains committed test credential material: "
+            + ", ".join(forbidden)
+        )
 
 
 def main() -> None:
