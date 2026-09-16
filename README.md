@@ -62,12 +62,13 @@ connectivity checks remain roadmap work.
 
 ## Roadmap
 
-The [MVP roadmap](MVP.md) orders the remaining work into five cohesive PRs,
+The [MVP roadmap](MVP.md) orders the remaining work into seven cohesive PRs,
 with technical decisions, CLI changes, acceptance criteria, and a manual
 first-release QA checklist. It covers authenticated execution and diagnostics,
 secure Registry/OAuth connections, external input formats, additional clients,
-and release verification. Development contracts may change destructively before
-the first release; no compatibility with earlier development commits is promised.
+readability refactoring, a GitHub Pages site, and final documentation cleanup.
+Development contracts may change destructively before the first release; no
+compatibility with earlier development commits is promised.
 
 ## Quick start
 

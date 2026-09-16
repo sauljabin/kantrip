@@ -1,7 +1,9 @@
 # Threat Model
 
-This document covers the implemented profile store, shared credential/rendering
-foundation, supervised plaintext/TLS execution, and current diagnostics.
+This developer security analysis follows the boundaries and decisions in
+[Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
+credential/rendering foundation, supervised plaintext/TLS execution, and current
+diagnostics.
 Authenticated sessions, secure Registry/OAuth connections, input parsers, and
 profile-scoped diagnostics remain unimplemented; their required controls and
 acceptance evidence live in [MVP.md](MVP.md). Do not treat schema acceptance as
@@ -218,7 +220,7 @@ Controls:
 Residual risk: current execution also retains exported parent variables beyond
 its owned connection-variable set, including any exported sandbox credentials.
 Supported shell startup can change connection variables after initial injection;
-see [current environment behavior](USAGE.md#precedence-and-inherited-sandbox-variables).
+see [current environment behavior](USAGE.md#environment-precedence).
 The roadmap adds the missing scrubbing and precedence contract.
 The selected child, its descendants, shell startup files,
 debuggers running as the same user, and sufficiently privileged processes can

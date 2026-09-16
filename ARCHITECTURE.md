@@ -1,7 +1,7 @@
 # Architecture
 
-This document describes the implemented architecture. Shared credential and
-renderer foundations do not imply authenticated CLI execution. Remaining
+This developer reference records the implemented architecture and its technical
+decisions. Shared credential and renderer foundations do not imply authenticated CLI execution. Remaining
 implementation decisions and first-release gates belong to [MVP.md](MVP.md).
 The diagrams illustrate component boundaries; the capability limits in this
 text and [Compatibility](COMPATIBILITY.md) govern current behavior.
@@ -43,6 +43,34 @@ input or prompted credential editor. Kantrip has no separate `import`, `secret`,
 inspection are observations rather than round-trip profile documents; they omit
 secret values and internal credential references. The exact planned CLI
 contract remains centralized in [MVP.md](MVP.md).
+
+## Current capability boundaries
+
+The bundled [profile schema](schemas/profile.schema.json) and
+[synthetic document](examples/profile.json) define internal validated storage,
+not a file-import interface. Profile documents omit application versions;
+SQLite has a separate schema version. Keep these internal capabilities separate
+from the executable user contract in `COMPATIBILITY.md`.
+
+| Capability | Internal model / rendering | Executable CLI |
+| --- | --- | --- |
+| Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and metadata ping |
+| PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | No authenticated input options; sessions and ping reject before launch |
+| Kafka OAuth | Unimplemented | Unsupported |
+| Registry | One explicit provider, HTTP without authentication | Provider-aware clients and resource ping only |
+| External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
+
+Each stored Registry declares `provider: confluent` with
+`schema.registry.url`, or `provider: apicurio` with `apicurio.registry.url`.
+The CLI selects and persists Confluent when a Registry URL is supplied without
+an explicit provider. Native Apicurio uses `/apis/registry/v3`; its
+`/apis/ccompat/v7` API requires a Confluent profile. Registry TLS and
+authentication are currently schema-invalid. No arbitrary Java or librdkafka
+property maps are accepted; only typed connection fields reach renderers.
+Registry property namespaces follow the official
+[Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
+and [Apicurio](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-kafka-client-serdes.html)
+serializer/deserializer contracts.
 
 ## Data flow
 

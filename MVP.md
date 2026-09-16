@@ -1,7 +1,7 @@
 # First-release MVP roadmap
 
 This is the implementation handoff for the remaining first-release work, audited
-against commit `70f2d42`. Read PRs 1–5 in order. Each numbered PR is one delivery
+against commit `70f2d42`. Read PRs 1–7 in order. Each numbered PR is one delivery
 unit; its subsections are tasks within that PR, not additional PRs. All commands
 and contracts below are **targets**, unless explicitly identified as current.
 
@@ -51,11 +51,15 @@ and affected documentation land together. Move its runnable manual checks to
 | 2 | Independent secure Registry and OAuth connections | Registry TLS/basic/token/mTLS, Kafka and Registry OAuth, provider probes, capability enforcement | PR 1 |
 | 3 | Complete profile creation from external files | Java/librdkafka/Confluent properties, Strimzi Secrets, all supported auth types, matching sandbox exports | PRs 1–2 |
 | 4 | Additional native clients | `kcl` and `kafkactl`, direct commands and three shells | PRs 1–3 |
-| 5 | Verified first-release candidate | Remaining integration fixtures/matrix, full documentation reconciliation, manual release QA | PRs 1–4 |
+| 5 | Readable, verified CLI implementation | Focused refactoring and design patterns, remaining integration fixtures/matrix, CLI documentation reconciliation and manual QA | PRs 1–4 |
+| 6 | Public product landing page ([issue #8](https://github.com/sauljabin/kantrip/issues/8)) | Static terminal-themed site, accessible content, PR artifact validation, main-only GitHub Pages deployment | PR 5 |
+| 7 | Durable documentation and final release handoff | Preserve technical decisions, align security and agent instructions, remove this roadmap and obsolete references, verify final artifacts | PRs 1–6 |
 
 Keep schema, lifecycle, rendering, diagnostics, and adapter changes together for
 one mechanism. Do not split a PR merely by file type, authentication mechanism,
-or documentation. PR 5 closes cross-cutting gaps; earlier PRs must already pass
+or documentation. PR 5 closes cross-cutting code and integration gaps; PR 6
+keeps site delivery independently reviewable; PR 7 closes documentation and
+packaging after every feature is implemented. Earlier PRs must already pass
 their own acceptance tests and update current-feature documentation.
 
 Implementation navigation (extend these tests; do not duplicate whole suites):
@@ -66,7 +70,9 @@ Implementation navigation (extend these tests; do not duplicate whole suites):
 | 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/tests_registry.py`, `tests/tests_schemas.py`, `tests/tests_credential_mutations.py`, `tests/tests_redaction.py`, client integration fixtures |
 | 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/tests_sandbox.py` |
 | 4 | Adapter/rendering/capability seams from PRs 1–2, `shells.py`, `doctor.py`; session, shell, smoke, and PTY contract tests |
-| 5 | Platform integration evidence, `scripts/verify_release.py`, `scripts/smoke.py`, docs, examples, packaging/workflow checks |
+| 5 | Lifecycle/resolution/adapter/rendering seams from PRs 1–4; platform integration evidence, `scripts/verify_release.py`, `scripts/smoke.py`, docs, examples, packaging/workflow checks |
+| 6 | New `site/` static sources and focused site build/validation script; `.github/workflows/`, existing artwork, `README.md`, `DEVELOPMENT.md` |
+| 7 | All root guides and their anchors, schemas/examples, site links, `pyproject.toml` sdist includes, `scripts/verify_release.py` required files, templates/workflows |
 
 ## PR 1 — Complete Kafka execution, lifecycle, and local diagnostics
 
@@ -477,8 +483,9 @@ Replace all fixture-path readers in `tests_cli.py`, `tests_kafka.py`,
 The configuration-only TLS scenario in `MANUAL_TESTING.md` must generate its
 public CA in the manual temporary root or use the sandbox's generated CA for
 live checks; no instruction may require a deleted repository fixture. Keep
-sandbox workflows independent from imports of test helpers. Extend packaging
-verification to reject committed test certificate/key artifacts and validate
+sandbox workflows independent from imports of test helpers. Remove the deleted
+fixture from `scripts/verify_release.py` required source-distribution files and
+update affected packaging assertions. Extend packaging verification to reject committed test certificate/key artifacts and validate
 that the source distribution's tests run without `tests/fixtures/`.
 No CLI change; this is part of PR 1's security test infrastructure, not a new PR.
 
@@ -793,9 +800,57 @@ config files remain unchanged; no secrets in process arguments; no external
 keyring writes. Include client-native metadata/produce/consume commands proven
 by the pinned `--help` in manual QA before marking the PR complete.
 
-## PR 5 — Release verification and documentation closure
+## PR 5 — Readability, design patterns, and CLI release verification
 
-### 5.1 Integration evidence and release gates
+### 5.1 Refactor the completed features for readability
+
+**Outcome:** make the implementation delivered by PRs 1–4 easy to follow and
+safe to change before release. Refactor those concrete flows together in this
+PR; do not introduce a separate cleanup PR for each module or mechanism.
+
+**Architecture:**
+
+- Separate CLI input/prompt collection, domain validation, side effects, and
+  output presentation. The CLI creates typed requests; lifecycle services own
+  mutations; resolvers create one immutable execution snapshot; renderers
+  translate it; adapters select native command/config mappings. Keep errors
+  and redaction independent from Rich and shell text.
+- Reuse the narrow `SecretStore` protocol and explicit adapter/strategy
+  boundaries where supported clients or providers differ. Share capability
+  checks and normalization, while retaining distinct Java, librdkafka, and
+  provider property mappings. Prefer composition and focused functions; add a
+  class only for a real responsibility. Avoid speculative factories, generic
+  plugin discovery, and inheritance that hides behavior.
+- Keep transaction and resource lifetimes visible. A caller must be able to
+  identify who owns the maintenance lock, expected profile generation,
+  credential journal stages, database commit, and post-commit cleanup. Do not
+  move I/O into constructors or conceal lock acquisition in unrelated helpers.
+  Preserve the cross-store recovery and exit-status contract from section 1.5.
+- Consolidate duplicated connection-option rejection, child environment policy,
+  capability decisions, and diagnostic classification at their shared seams.
+  Keep shell-specific quoting and client-specific argument grammars separate.
+  Keep secret-bearing values out of reprs, diagnostics, and test snapshots.
+- Use clear domain names, small focused functions, and explicit typed results
+  for success, unsupported capabilities, and mutation outcomes. Remove dead
+  branches, obsolete helpers, and duplicate documentation left by earlier PRs.
+  Keep Ruff `C901` at or below 10 without new suppressions. Do not reduce the
+  count by merely hiding branches behind opaque dispatch or boolean switches.
+
+**CLI delta:** none beyond the already implemented PRs 1–4. Preserve their
+commands, flags, validation, exit statuses, structured output, and connection
+precedence. This refactor does not add compatibility with earlier development
+commits. Any discovered functional defect needs an explicit regression case and
+an explained correction in the same PR.
+
+**Acceptance:** review representative add/edit/remove, import, authenticated
+exec, and ping paths end to end. Run existing behavior tests, especially
+mutation fault/race recovery, secret redaction, profile snapshot attribution,
+environment precedence, and direct/shell override rejection. Add tests only
+for uncovered behavior or discovered defects, not to mirror helper structure.
+Update architecture decisions and module diagrams in the same PR. Record
+which duplication or responsibility problem each substantial refactor resolves.
+
+### 5.2 Integration evidence and release gates
 
 Run and record supported Linux/macOS and Python 3.10–3.14 checks; use actual
 macOS Keychain and Linux Secret Service for store integration. Offline tests
@@ -833,12 +888,24 @@ uv run --locked python -m scripts.smoke
 Complete the manual QA below against the built wheel, record candidate commit,
 OS, client/server/library versions, expected/actual result, and sanitized
 failure evidence. Automated gates and smoke do not replace human QA, and human
-QA does not replace them. Do not publish or tag as part of roadmap implementation.
+QA does not replace them. Do not tag or publish a package/release as part of
+roadmap implementation. PR 6 separately specifies the website deployment.
 
-### 5.2 Synchronize all documentation with the implemented result
+### 5.3 Reconcile CLI documentation by audience
 
-Update affected docs in every PR, then audit the whole repository in this final
-PR. Replace obsolete claims rather than accumulating “old/new” sections.
+Update affected docs in every PR, then audit the CLI documentation in PR 5.
+PR 6 adds the site and PR 7 performs the final repository-wide closure. Replace
+obsolete claims rather than accumulating “old/new” sections.
+
+**Ownership:** end users read `USAGE.md` and `COMPATIBILITY.md`; developers read
+`DEVELOPMENT.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, and `MANUAL_TESTING.md`;
+AI agents use `AGENT.md`, `RELEASE_CHECKLIST.md`, and this temporary `MVP.md`.
+End-user guides contain installed `kantrip` commands and current support only:
+no sandbox, `uv run`, development workflows, internal-only capabilities, or
+future flags. Repository setup and laboratory commands belong in developer
+guides. Keep technical decisions and rationale in architecture, actionable
+engineering conventions in agent instructions, and release orchestration in
+the agent checklist.
 
 | Artifact | Required final review |
 | --- | --- |
@@ -852,16 +919,169 @@ PR. Replace obsolete claims rather than accumulating “old/new” sections.
 | `RELEASE_CHECKLIST.md` | Link manual first-release gate and compatibility evidence; distinguish first release from upgrades of published versions |
 | `schemas/`, `examples/` | Implemented schema only, synthetic examples covering secure profiles and supported input formats; no secrets or live references |
 | `scripts/`, `sandbox/`, `.github/`, `pyproject.toml` | Help, fixtures, smoke, release packaging inclusion, workflow/template references and version pins match the final contract |
-| `MVP.md` | Delete completed PRs, retain only genuinely unfinished work; preserve manual QA by moving it before removal |
+| `MVP.md` | Until PR 7, remove completed items only after transferring decisions and manual QA; in PR 7 delete the file and its references after the closure criteria pass |
 
-Compatibility must distinguish schema acceptance from CLI creation, session
-execution, ping, and import. Document Java PEM gates, actual linked librdkafka
+User compatibility must distinguish executable CLI creation, session execution,
+ping, and import support. Keep schema-only acceptance and renderer internals in
+architecture. Document Java PEM gates, actual linked librdkafka
 and Registry libraries, kcat's Avro-only Registry decoding, Kaskade's native
 Apicurio support, unsupported provider/mechanism combinations, and file formats
 that are output-only. Do not label JSON/YAML `describe` as an import/export
 format. Include plaintext, verified TLS, PLAIN, both SCRAM mechanisms, mTLS,
 OAuth/OAUTHBEARER, Registry basic/fixed bearer, Java/librdkafka properties,
 Confluent-generated properties, and Strimzi Secret JSON/YAML explicitly.
+
+## PR 6 — Publish the terminal-themed GitHub Pages site
+
+**Scope:** implement [issue #8](https://github.com/sauljabin/kantrip/issues/8) as
+one PR containing the site, artifact validation, workflow, and contributor
+instructions. Site claims must reflect PR 5's verified behavior.
+
+**Content:** reuse the repository banner/artwork; show the slogan, concise
+product description, version-independent installation command, and a short
+`kantrip add` / `kantrip exec` example. Summarize supported clients and actual
+credential/security guarantees, including relevant limits. Link to Usage,
+Compatibility, releases, issues, and source. Do not duplicate the full usage
+manual or link users to the temporary roadmap. Match README claims and the
+available installation channel; do not advertise an unpublished stable package.
+
+**Architecture:**
+
+- Keep source in `site/`: static HTML, CSS, local artwork, and minimal optional
+  JavaScript. Essential content/navigation works without JavaScript. Use
+  semantic HTML, visible keyboard focus, sufficient contrast, responsive
+  layout, light/dark support, and reduced-motion preferences. No required
+  frontend framework, analytics, cookies, external fonts, or runtime requests
+  to third-party services.
+- Add a focused `scripts.site` workflow with developer commands
+  `uv run --locked python -m scripts.site build --output PATH` and
+  `uv run --locked python -m scripts.site validate --path PATH`. Build into a
+  new or empty output directory and refuse unsafe paths rather than deleting
+  arbitrary contents. Copy an explicit allowlist of public site files and
+  selected artwork; never publish the repository root, `.state`, credentials,
+  build caches, private fixtures, or symlinks. Validate the assembled artifact,
+  required content, local links/assets, and project URL prefix `/kantrip/`.
+- Build and validate on pull requests with read-only repository permissions,
+  no deployment credentials, and no `pull_request_target` execution of PR
+  code. Make successful site validation a required CI gate. Deploy only on a
+  push to `main`, after that commit's validation succeeds, using the same
+  validated Pages artifact and the standard configure/upload/deploy actions.
+  Pin reviewed action versions and follow the
+  [GitHub custom Pages workflow](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
+- Give only the deploy job `pages: write` and `id-token: write`, use the
+  `github-pages` environment restricted to `main`, and serialize deployment.
+  Document the repository's Actions-based Pages setting and environment setup
+  in `DEVELOPMENT.md`. Check live output after merge; an uploaded artifact alone
+  does not satisfy the issue's published-site requirement.
+
+**CLI delta:** no change to installed `kantrip` commands or arguments. The two
+new `scripts.site` commands are developer tooling and belong only in developer
+and agent instructions. No website secrets or new runtime service dependency.
+
+**Acceptance:** a PR workflow builds/validates without a deploy job running;
+main deployment publishes the validated artifact; links/assets work under the
+project prefix; essential content works with JavaScript disabled. Inspect the
+artifact allowlist and confirm no tracking, remote fonts, or private material.
+Record the deployed URL and commit. Close issue #8 only when its published-site
+acceptance is satisfied, not when this planning roadmap lands.
+
+**Manual QA to move into `MANUAL_TESTING.md`:**
+
+- [ ] Build into a fresh temporary directory and validate it:
+
+  ```bash
+  site_qa_root="$(mktemp -d "${TMPDIR:-/tmp}/kantrip-site.XXXXXX")"
+  uv run --locked python -m scripts.site build --output "$site_qa_root/kantrip"
+  uv run --locked python -m scripts.site validate --path "$site_qa_root/kantrip"
+  python3 -m http.server 8000 --bind 127.0.0.1 --directory "$site_qa_root"
+  ```
+
+  Open `http://127.0.0.1:8000/kantrip/`. Expect the banner, install/example text,
+  working local assets and all destination links. Stop the server after QA.
+- [ ] Use a narrow mobile viewport and a wide desktop viewport; zoom to 200%,
+  navigate by keyboard only, and inspect accessible names/headings. Expect
+  usable navigation, visible focus, readable text, and no clipped controls.
+- [ ] Disable JavaScript, select light/dark appearance, and enable reduced
+  motion. Expect essential content and navigation in every combination, with
+  decorative animation removed or reduced as requested.
+- [ ] Inspect the browser network panel and storage: no analytics, cookies,
+  external fonts, or third-party runtime assets. Verify PR CI has no deployment,
+  then verify the main deployment URL and repeat the link/content checks live.
+
+## PR 7 — Preserve technical knowledge and remove the roadmap
+
+**Outcome:** leave a self-contained repository for developers, users, and future
+agents, with no temporary planning document or contradictory security claims.
+This PR depends on all preceding work, including the site's acceptance. Do not
+delete `MVP.md` now or use deletion to hide incomplete release obligations.
+
+### 7.1 Transfer decisions and align the threat model
+
+Inventory every remaining roadmap section, property mapping, acceptance rule,
+manual check, and known limitation. For each, record its durable destination in
+the PR description and verify the text arrived before removal:
+
+| Knowledge | Durable destination |
+| --- | --- |
+| Product boundary, module responsibilities, chosen patterns and rationale | `ARCHITECTURE.md`; concise enforceable rules and links in `AGENT.md` |
+| Mutation state machine, UUID/revision checks, lock ownership, reader snapshots, recovery and durability/backup limits | `ARCHITECTURE.md`; actionable mutation invariants in `AGENT.md` |
+| Credential ownership, independent trust, OAuth refresh, provider probes, capability gates, input normalization and native property mappings | `ARCHITECTURE.md`; required implementation constraints in `AGENT.md` |
+| Current commands/options, mutation outcome statuses, child environment and user-visible failure guidance | `USAGE.md`; tested support and version limits in `COMPATIBILITY.md` |
+| Security objectives, trust boundaries, implemented mitigations, attack/failure cases, residual risks and evidence | `THREAT_MODEL.md`, aligned with the final architecture; disclosure policy in `SECURITY.md` |
+| Laboratory setup, generated temporary PKI, integration and site workflows | `DEVELOPMENT.md`; runnable human scenarios in `MANUAL_TESTING.md` |
+| All first-release manual QA and site QA | `MANUAL_TESTING.md`, preserving setup, exact commands, expected results and evidence requirements |
+| Candidate/platform evidence, required checks and publication orchestration | `RELEASE_CHECKLIST.md`; link to human QA instead of duplicating it |
+
+Preserve both the decision and why it was chosen, including rejected alternatives
+where needed to explain a constraint. `ARCHITECTURE.md` owns detailed technical
+knowledge; `AGENT.md` owns concise instructions and links sufficient to find it.
+Do not replace this file with another copy of the roadmap or an archive required
+to understand the product. Keep unrelated deferred ideas as issues only if
+explicitly deferred; unresolved MVP acceptance requirements block this PR.
+
+Reconcile the threat model against the actual final code and architecture:
+add/edit/remove and journal recovery, OS-store and filesystem trust, session and
+process lifetime, imported files, environment precedence, TLS/OAuth/Registry
+boundaries, probe proof limits, secret redaction, backups, and site deployment
+permissions. Separate proven controls from platform assumptions and residual
+risk. Do not claim distributed ACID, universal power-loss recovery, secure
+erasure, or credential protection from a compromised account/OS. Link each
+security-sensitive invariant to its maintained verification workflow or test
+coverage; close any missing coverage before declaring the MVP finished.
+
+### 7.2 Delete obsolete content and verify the final repository
+
+- Delete `MVP.md` only after PRs 1–6 are accepted and the transfer above is
+  complete. Remove its entry from `pyproject.toml` source-distribution includes
+  and `scripts/verify_release.py` required files; update affected packaging tests.
+- Clean `AGENT.md`: replace future-work pointers, obsolete restrictions, repeated
+  architecture prose, and temporary instructions with current conventions and
+  durable links. Retain the documentation ownership rule and release safety
+  boundaries. No instruction may require a deleted planning document.
+- Review README, all root guides, diagrams, schemas/examples, site, scripts,
+  workflows, and templates for obsolete names, promises, roadmap links/anchors,
+  and duplicated decisions. Remove the README roadmap section. Keep
+  `RELEASE_CHECKLIST.md` as the single filename; update its first-release gate to
+  the completed manual guide and remove temporary planning references.
+- Verify every local link and anchor resolves, user guides contain neither
+  sandbox nor `uv run` instructions, and no tracked artifact still requires
+  `MVP.md`. Run `rg -n 'MVP\.md' --glob '!.git/**'`; expect no remaining references
+  after this document itself is deleted. Validate the site artifact again.
+- Run the four required gates from PR 5 against the final tree. Inspect the
+  wheel and source distribution: the removed roadmap is absent, all durable
+  guides and required tests remain included, and source-distribution validation
+  succeeds. Review candidate CI and manual/integration evidence after cleanup;
+  repeat affected checks if any commands, assets, or behavior changed.
+
+**CLI delta:** none. Changes are documentation, links, and packaging inventory;
+no migration or compatibility layer for this deleted development document.
+
+**Acceptance:** a new agent can implement maintenance or prepare a release using
+`AGENT.md`, architecture, the developer guides, and `RELEASE_CHECKLIST.md`, with
+no dependency on this roadmap or conversation. Every technical decision and
+manual release obligation has a durable home, the threat model matches the
+implemented system, and final required verification passes. Package publication
+and tagging still require the separate release authorization.
 
 ## Connection-property normalization reference
 

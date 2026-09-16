@@ -3,6 +3,20 @@
 This guide describes the development environment and repository workflows. Run
 user-facing exploratory checks from [Manual Testing](MANUAL_TESTING.md).
 
+## Documentation audiences
+
+- End users: [Usage](USAGE.md) and [Compatibility](COMPATIBILITY.md). Show installed
+  `kantrip` commands and current support; keep sandbox and `uv run` instructions
+  in developer documentation.
+- Developers: this guide, [Architecture](ARCHITECTURE.md),
+  [Threat Model](THREAT_MODEL.md), and [Manual Testing](MANUAL_TESTING.md).
+- AI agents: [Agent Instructions](AGENT.md),
+  [Release Checklist](RELEASE_CHECKLIST.md), and the temporary [MVP roadmap](MVP.md).
+
+Architecture owns technical decisions and their rationale; agent instructions
+own implementation conventions. Record each decision when its implementation
+lands, keep the threat model aligned, and link to the canonical explanation.
+
 ## Setup
 
 Install uv:

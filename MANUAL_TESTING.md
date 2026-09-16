@@ -53,10 +53,20 @@ or complete client configs to verify this. Do not source credentials inside
 
 Current `exec` gives its documented Kafka/config/session values precedence over
 exported values and removes inactive Registry URL/config variables. Other
-exported sandbox credentials are still inherited. Interactive startup files can
-also change connection variables after the initial injection. See
-[the exact current precedence limits](USAGE.md#precedence-and-inherited-sandbox-variables);
+exported sandbox credentials are still inherited, including
+`KAFKA_SCRAM_PASSWORD`, `KAFKA_OAUTH_CLIENT_SECRET`, `APICURIO_CLIENT_SECRET`,
+`SCHEMA_REGISTRY_BASIC_PASSWORD`, and `KEYCLOAK_ADMIN_PASSWORD`. Assignment to an
+already exported name preserves its export attribute; a new assignment is not
+exported unless `set -a` is active. Interactive startup files can also change
+connection variables after the initial injection. Avoid changing connection
+variables in those startup files during these checks. See
+[the exact current precedence limits](USAGE.md#environment-precedence);
 the stronger contract and regression checks belong to MVP PR 1.
+
+The laboratory exports PKCS12 mTLS properties for external clients. This does
+not imply that Kantrip can import PKCS12 or execute every authentication mode
+available in the laboratory. Check the current compatibility matrix before
+selecting a Kantrip scenario.
 
 ### Check current direct-child precedence without a broker
 
