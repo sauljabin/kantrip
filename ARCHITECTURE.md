@@ -252,9 +252,12 @@ When control returns to Kantrip, it restores signal handlers, terminal
 attributes, and foreground ownership. A supervisor SIGKILL, host failure, or
 power loss can prevent restoration and leave the runtime session for recovery.
 
-The child receives only Kantrip session metadata and adapter-specific
-connection variables. Conflicting inherited Kafka and Registry values are
-removed from the child environment; the caller's environment is unchanged.
+The child inherits the parent environment with Kantrip's documented
+Kafka/config/session variables overwritten and both providers' Registry
+URL/config variables cleared before the selected pair is set. Other exported
+values, including sandbox credential variables, are currently retained. The
+caller environment is unchanged. Shell startup restores shims/PATH, not all
+connection variables; comprehensive precedence is pending in the roadmap.
 
 ### Runtime identity and liveness
 

@@ -74,7 +74,9 @@ before launch instead of degrading the profile.
 Every registry connection uses an `http://` URL. Kantrip rejects missing,
 encrypted, authenticated, provider-incompatible, and caller-supplied Registry
 settings before starting the affected client mode. Bash, Zsh, and Fish sessions
-apply the same checks through temporary adapters.
+apply the same checks through temporary adapters. This does not scrub every
+inherited credential variable or restore all connection settings after shell
+startup; see [environment precedence](USAGE.md#precedence-and-inherited-sandbox-variables).
 
 ## Kafka transport and authentication
 

@@ -47,7 +47,7 @@ and affected documentation land together. Move its runnable manual checks to
 
 | PR | Outcome | Includes | Depends on |
 | --- | --- | --- | --- |
-| 1 | Usable authenticated Kafka profiles | Lifecycle CLI, credential observations, existing adapters, Kafka ping, profile doctor and session attribution | Current foundation |
+| 1 | Usable authenticated Kafka profiles | Lifecycle/transaction guarantees, environment precedence, temporary PKI, existing adapters, Kafka ping, profile doctor and sessions | Current foundation |
 | 2 | Independent secure Registry and OAuth connections | Registry TLS/basic/token/mTLS, Kafka and Registry OAuth, provider probes, capability enforcement | PR 1 |
 | 3 | Complete profile creation from external files | Java/librdkafka/Confluent properties, Strimzi Secrets, all supported auth types, matching sandbox exports | PRs 1–2 |
 | 4 | Additional native clients | `kcl` and `kafkactl`, direct commands and three shells | PRs 1–3 |
@@ -62,7 +62,7 @@ Implementation navigation (extend these tests; do not duplicate whole suites):
 
 | PR | Main existing code and test seams |
 | --- | --- |
-| 1 | `cli.py`, `profiles.py`, `profile_output.py`, `kafka.py`, `session.py`, `runtime.py`, `doctor.py`, `ping.py`, `adapters.py`; `tests/tests_cli.py`, `tests/tests_profiles.py`, `tests/tests_profile_output.py`, `tests/tests_kafka.py`, `tests/tests_session.py`, `tests/tests_runtime.py`, `tests/tests_doctor.py`, `tests/tests_ping.py`, `tests/tests_shells.py` |
+| 1 | `cli.py`, `profiles.py`, `credential_mutations.py`, `reconciliation.py`, `profile_output.py`, `kafka.py`, `session.py`, `runtime.py`, `doctor.py`, `ping.py`, `adapters.py`; `tests/tests_cli.py`, `tests/tests_profiles.py`, `tests/tests_profile_output.py`, `tests/tests_kafka.py`, `tests/tests_session.py`, `tests/tests_runtime.py`, `tests/tests_doctor.py`, `tests/tests_ping.py`, `tests/tests_shells.py` |
 | 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/tests_registry.py`, `tests/tests_schemas.py`, `tests/tests_credential_mutations.py`, `tests/tests_redaction.py`, client integration fixtures |
 | 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/tests_sandbox.py` |
 | 4 | Adapter/rendering/capability seams from PRs 1–2, `shells.py`, `doctor.py`; session, shell, smoke, and PTY contract tests |
@@ -80,8 +80,9 @@ options. `edit` without options fails, `remove` has no confirmation, and
 through `kafka.py` and `profiles.py`, and reuse `credential_mutations.py` and
 `reconciliation.py`. Read the profile ID/revision before prompting; collect
 input outside the maintenance lock; commit with that expected generation.
-Cancellation, keyring failure, or a concurrent edit must preserve the old usable
-profile. Reuse the existing immutable-reference staging; do not build another
+Cancellation, keyring failure, or a concurrent edit before commit must preserve
+the old usable profile. After commit, report the persisted outcome separately
+from cleanup; follow the failure contract in section 1.5. Reuse the existing immutable-reference staging; do not build another
 secret store or transaction mechanism.
 
 **CLI delta:**
@@ -265,6 +266,223 @@ expired/mismatched certificates, empty and missing database. Ordinary doctor
 must create no database, lock file, runtime directory, or credential and must
 perform no network request. Test read-only behavior before pending migrations.
 
+### 1.5 Close the mutation integrity and durability contract
+
+**Plan assessment:** immutable references, revision checks, journaling, private
+SQLite, and exact cleanup are the correct foundation. They do not constitute a
+single atomic transaction across SQLite and the OS credential store. The MVP
+must promise atomic profile visibility plus recoverable credential side effects,
+with the following mandatory invariants and failure evidence. This is a review
+of the finished MVP's guarantees, not a claim that current code satisfies them.
+
+**Common mutation protocol:**
+
+1. Read identity/revision and collect confirmation, files, and no-echo input
+   outside the maintenance lock. Validate syntax, schema, credential ownership,
+   and certificate/key correspondence before persistent side effects. Do not
+   contact Kafka/Registry to decide whether a local profile can be saved.
+2. Acquire the same bounded maintenance lock used by every mutation and repair.
+   Reload and compare both UUID and revision, not just name/revision. For `add`,
+   recheck name uniqueness under the lock. For `remove`, bind confirmation to
+   the captured UUID/revision even when no credentials exist. A concurrently
+   removed/recreated same-name profile must never inherit an earlier approval.
+3. Hold this lock across durable staging intent, exact credential writes,
+   profile commit, and post-commit reconciliation. No interactive questions
+   while holding it. Repair must never interpret another live mutation's staged
+   entries as abandoned. Keep SQLite write transactions short; do not keep a
+   SQLite transaction open while talking to the OS store.
+4. Journal every new immutable reference durably **before** `store.set`.
+   Validate backend success and read back the exact staged value before it can
+   become active; failed readback keeps the old profile and cleanup intent.
+   Readback detects a failed write, not physical power-loss durability. If a
+   backend writes and then raises, the existing durable intent still owns that
+   uncertain side effect. Never blindly retry under a different reference.
+5. In one SQLite transaction, install the complete validated profile (Kafka and
+   Registry together), advance revision once, remove staging cleanup records
+   for its new active references, and journal all superseded references. For
+   removal, delete the exact generation and journal all its references in that
+   same transaction. Never delete old secrets before this commit.
+6. Reconcile only after the durable outcome is known. Before each deletion,
+   validate the journal and all live profile reference ownership under the same
+   lock and prove the target is not referenced by any current profile. A live
+   reference in the deletion journal is an integrity error: retain it, delete
+   nothing for that conflicting record, and report the inconsistency. If the
+   database cannot be validated, do not perform credential cleanup. Missing
+   orphan entries count as already deleted; backend-unavailable errors do not.
+7. Remove each cleanup record only after its exact deletion is confirmed.
+   A crash after deletion but before journal removal is safe to retry. Cleanup
+   failure after commit must never roll back the profile or delete its new
+   credentials. Preserve pending work for `doctor --repair`.
+
+Do not infer rollback solely because an exception was thrown. If commit or
+subsequent filesystem/output work fails, reopen and inspect committed identity,
+revision, references, and journal under the lock. If the outcome cannot be
+established, retain recovery evidence and perform no speculative credential
+compensation. A broken stdout pipe after commit also does not undo a mutation.
+Every error message must distinguish the persisted outcome from cleanup status.
+
+**Mutation CLI result contract (new public exit statuses):**
+
+| Exit | `add`, `edit`, `remove` outcome | Safe next step |
+| --- | --- | --- |
+| `0` | Requested profile change committed and its credential cleanup completed | Continue |
+| `1` | Requested profile change definitely not committed; staged cleanup may remain journaled | Inspect cause, repair if indicated, then explicitly retry |
+| `2` | CLI usage error | Correct arguments |
+| `3` | Requested profile change committed, but cleanup or post-commit verification failed | Inspect `describe`/`list` and `doctor`; repair, do not repeat mutation blindly |
+| `4` | Commit outcome could not be established | Stop automatic retries; diagnose storage and inspect state before acting |
+
+Cancellation before commit leaves the profile unchanged; cancellation or a
+signal after commit cannot promise that. Forced termination may return a shell
+signal status instead of the table above. Do not promise exactly-once CLI
+invocation across process death or add persistent operation history merely to
+simulate it. Unrelated older cleanup debt is reported separately from the
+requested mutation's outcome. `ping` retains its own `0`/`1` contract.
+
+**Concurrency with secret readers:** a revision field alone does not prevent
+`exec` from reading old references while `edit`/`remove` deletes their values.
+For `exec` and authenticated `ping`, hold the maintenance lock while loading one
+validated generation and resolving all of its required secrets into memory;
+then release it before rendering, networking, or the child lifetime. Never
+combine Kafka from one generation with Registry from another. Concurrent
+rotation/removal either precedes this snapshot or follows it; no partially
+resolved child may start. Do not retain the lock for a long-running session.
+Read-only observations can use re-read/revision checks with bounded retry and
+report a concurrent change; they must not create a lock file just to inspect.
+
+A running session already has its own credentials. Local rotation/removal does
+not revoke copies in that child or tokens at the remote service. Remote
+revocation can end a session independently. New sessions use the new generation
+or fail after removal. Do not retain historical keyring entries just to support
+already materialized sessions, and do not promise their continued remote access.
+
+**Durability boundary:** keep the existing WAL/FULL policy and verify it for
+*every* writable connection, including migration, reconciliation, and initial
+creation. Check effective `journal_mode`/`synchronous`, not only successful
+execution of a PRAGMA. Enable and verify SQLite `fullfsync` on supported macOS
+builds. Ensure newly created database/backup names and private parent directory
+entries are synchronized before acknowledging durable creation, using supported
+filesystem operations. An I/O error must preserve the outcome distinction above.
+Document local-filesystem support; network/cloud-synchronized databases and
+concurrently writable restored/copied databases are outside the guarantee.
+[SQLite WAL](https://www.sqlite.org/wal.html) and
+[synchronization settings](https://www.sqlite.org/pragma.html#pragma_synchronous)
+explain the local storage and synchronization assumptions.
+
+The OS credential store remains a separate durability boundary. Verify successful
+writes across a fresh process and supported-store restart where practical;
+never advertise distributed ACID or absolute power-loss protection. Database
+backups contain references, not credentials, and cannot restore secrets retired
+since the backup. Do not document automatic cleanup of an independently restored
+old journal as safe: arbitrary out-of-band rollback cannot be reliably detected.
+A full profile/credential backup/restore feature is out of scope;
+document this limit before the first release. After database/keyring loss,
+report missing references and use explicit secret replacement; never substitute
+inherited environment credentials or delete a profile to hide the inconsistency.
+
+**Required automated failure matrix:** extend credential mutation,
+reconciliation, profile, CLI, and session tests with controlled failpoints and
+real subprocess termination. After each restart assert profile identity/revision,
+complete reference resolution or unchanged absence, exact journal contents,
+absence of deleted live references, private permissions, and no secret output.
+
+| Cut / race | Required result |
+| --- | --- |
+| Before durable staging intent | No credential write and no profile change |
+| After intent, before first write | Old profile / absent add; exact recoverable intent |
+| Store writes then raises; second of several writes fails | Old profile / absent add; every possible new value remains tracked |
+| Before profile commit, including validation/CAS failure | Previous complete profile; staged values removable; no old value retired |
+| Immediately after commit / lost acknowledgement | Entire new profile or exact removal; active values preserved; obsolete values journaled |
+| During cleanup / after delete before journal commit | Committed state preserved; retry idempotent |
+| Two adds, edit/edit, edit/remove, remove/recreate/confirm | One serial valid outcome; no lost update or deletion of a different UUID |
+| Repair versus staging; exec/ping versus rotation/removal | No live staged/active value deleted; one coherent resolved reader snapshot |
+| Syntactically valid but live-reference cleanup record | Integrity error without credential deletion |
+| Disk full, permission loss, lock timeout, keyring lock/loss, commit I/O error | Truthful unchanged/committed/unknown result, bounded safe failure, recoverable evidence |
+
+Mocked exceptions and SIGKILL tests cover process-failure paths; they do not
+simulate hardware power loss. PR 5 records the actual OS/backend durability
+checks and remaining storage assumptions. PR 2 repeats the matrix with combined
+Kafka/Registry changes; PR 3 proves failed imports cannot leave partial profiles.
+
+### 1.6 Give the selected profile precedence over inherited connection state
+
+**Gap:** current `exec` overwrites its documented Kafka/session variables and
+clears the four Registry URL/config variables. It otherwise copies the parent
+environment, including sandbox passwords and OAuth secrets. Startup scripts can
+also replace `KCAT_CONFIG` or other connection variables after launch; current
+shell preparation restores shims/PATH, not the complete owned environment.
+
+**Decision:** create one documented environment policy shared by direct launch,
+interactive startup, and adapter shims. Start from the caller's environment,
+remove reserved Kafka/Registry/client connection namespaces and known sandbox
+credential names, then inject only the selected snapshot's public values and
+private config paths. Scrub `KAFKA_*`, `SCHEMA_REGISTRY_*`, `APICURIO_*`, and
+`KANTRIP_SANDBOX_*`; keep unrelated application variables unless an adapter has
+a documented conflict. Do not use ambient secrets to fill missing keyring data.
+Preserve Kantrip storage/runtime selectors; active-session nesting checks still
+run before any environment rewriting. PR 4 adds `KCL_*`/`KAFKA_CTL_*` handling.
+
+For Java adapters, neutralize inherited connection/security injection through
+`KAFKA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and `_JAVA_OPTIONS` before
+the native launcher runs. Any supported JVM tuning must be explicitly
+allowlisted and unable to replace profile trust/authentication. Version-gated
+OAuth launcher requirements (such as an allowed token-endpoint URL) must be
+generated from the profile, not depend on the user's sourced environment.
+
+After Bash/Zsh/Fish startup completes, restore the owned non-secret environment
+and remove conflicting inherited connection variables. Adapter shims reassert
+their exact private config paths and sanitized connection environment before
+each supported client invocation. Never write secrets into startup scripts.
+This prevents accidental configuration drift; hostile startup code and a user
+intentionally changing a custom application's environment remain inside the
+trusted-child boundary, not something Kantrip can sandbox.
+
+**Sandbox/documentation delta:** rename generated source variables to the
+`KANTRIP_SANDBOX_*` namespace and update every producer/consumer together:
+`KAFKA_SCRAM_*` becomes `KANTRIP_SANDBOX_KAFKA_SCRAM_*`, and apply the same prefix
+to existing `KAFKA_OAUTH_*`, `KAFKA_MTLS_*`, `KEYCLOAK_ADMIN_*`, `APICURIO_CLIENT_*`,
+and `SCHEMA_REGISTRY_*` sandbox fields. Keep the existing
+`KANTRIP_SANDBOX_CA`. No old-name aliases. These variables are laboratory inputs,
+not Kantrip's child API; strip the entire namespace from supervised children.
+Use plain shell assignments without automatic export when sourcing the file;
+only public arguments that a manual command needs should be expanded by the
+parent shell. Do not source the file inside `kantrip exec`.
+
+**Acceptance:** load a synthetic credentials file before launch, once as local
+shell variables and once with `set -a`; run direct commands and Bash/Zsh/Fish.
+Assert profile values win, source passwords/tokens/admin credentials are absent
+from children, unrelated application variables survive, caller variables remain
+unchanged, and opposite-provider values disappear. Repeat with startup scripts
+that export conflicting config paths, and with inherited JVM connection
+options. Check only boolean assertions/names, never dump the environment.
+
+### 1.7 Replace the committed certificate fixture with temporary PKI
+
+Remove `tests/fixtures/kafka-ca.pem` and the now-empty `tests/fixtures/`
+directory in this PR. Generate synthetic CA/key/certificate material with the
+existing `cryptography` dependency through a focused helper in `tests/`, or
+load material generated into a test-owned temporary directory. Do not move the
+same PEM blob into a Python constant, download certificates, use the system
+trust store, or create files at module import time.
+
+Give tests a controlled clock/validity interval and explicit expired,
+not-yet-valid, wrong-host, wrong-CA, encrypted-key, and mismatched-key variants.
+Create keys in memory; materialize only the files required by path-based tests
+in `TemporaryDirectory`, directories 0700/files 0600, with unconditional cleanup.
+Use shared setup/helpers to avoid repeated expensive key generation while
+keeping test state independent. Compare validated semantics, not random serials
+or exact newly generated PEM bytes across runs.
+
+Replace all fixture-path readers in `tests_cli.py`, `tests_kafka.py`,
+`tests_ping.py`, `tests_profiles.py`, `tests_schemas.py`, and `tests_session.py`.
+The configuration-only TLS scenario in `MANUAL_TESTING.md` must generate its
+public CA in the manual temporary root or use the sandbox's generated CA for
+live checks; no instruction may require a deleted repository fixture. Keep
+sandbox workflows independent from imports of test helpers. Extend packaging
+verification to reject committed test certificate/key artifacts and validate
+that the source distribution's tests run without `tests/fixtures/`.
+No CLI change; this is part of PR 1's security test infrastructure, not a new PR.
+
+
 ## PR 2 — Secure Registry connections and native OAuth
 
 ### 2.1 Registry model, lifecycle, and renderers
@@ -370,7 +588,11 @@ token type/expiry, redact OAuth errors, and discard the token after the check.
 Test basic and form-based client authentication only as supported by the chosen
 native clients/provider; do not silently retry different credential methods.
 
-**Acceptance for 2.1–2.2:** independent Kafka/Registry identities and CAs,
+**Acceptance for 2.1–2.2:** apply section 1.5's failure matrix to simultaneous
+Kafka/Registry creation, rotation, and removal, including an unavailable store
+halfway through staging either owner's credentials. A profile must never contain
+a new Kafka identity with an unintended old/partial Registry identity.
+Also verify independent Kafka/Registry identities and CAs,
 credential rotation/recovery/removal, wrong endpoint trust, invalid secret,
 expired fixed token, and no leakage from wrapped HTTP errors. Keep a real Java
 and librdkafka session alive across token expiry and demonstrate successful
@@ -526,7 +748,9 @@ and independent OAuth endpoint trust. Retain PKCS12 only as a clearly negative
 import fixture if still useful for external-client tests. All generated values
 stay under ignored mode-0700 `sandbox/.state`, files mode 0600.
 
-**Acceptance:** file and stdin forms, every supported auth source, escaped
+**Acceptance:** reuse section 1.5's mutation failure matrix after normalization;
+import is never a separate transaction path. Verify file and stdin forms,
+every supported auth source, escaped
 credentials/continuations, source-relative paths, missing terminal for a prompt,
 manual/source conflicts, duplicate name/keys, malformed/oversized input,
 unknown security keys, and source-file preservation. Verify credentials land
@@ -583,7 +807,10 @@ minimum and representative current versions.
 Fill any remaining infrastructure gaps: PLAIN/SCRAM-SHA-256, authorizer-enabled
 Kafka with no-ACL principals, no-role and wrong-credential Registry identities,
 Registry TLS-only/mTLS, token expiry/revocation, and encrypted/realistic PEM
-keys. These fixtures must be ready before their corresponding manual checks.
+keys. Include the transaction fault/race matrix and source-environment precedence
+checks from PR 1; record process-crash evidence separately from OS/store restart
+and power-loss assumptions. These fixtures must be ready before their
+corresponding manual checks.
 Do not accept “not installed” as a pass for a required compatibility cell.
 Record optional unsupported cells explicitly.
 
@@ -616,10 +843,10 @@ PR. Replace obsolete claims rather than accumulating “old/new” sections.
 | Artifact | Required final review |
 | --- | --- |
 | `README.md` | Actual first-release capabilities, onboarding, current examples and concise limitations |
-| `USAGE.md` | Complete help/option contract, no-echo interactions, imports, independent trust, scoped doctor/sessions, ping proof/exit status, exact child environment |
+| `USAGE.md` | Mutation outcome/exit-status contract, environment precedence, complete help/option contract, no-echo interactions, imports, independent trust, scoped doctor/sessions, ping proof/exit status, exact child environment |
 | `COMPATIBILITY.md` | Separate CLI/version, Kafka protocol/auth, Registry provider/auth, input-format, and generated-format matrices; supported/unsupported/conditional cells with evidence and minimum tested version |
 | `ARCHITECTURE.md`, `images/*.svg` | Actual resolvers, mutation flow, capability checks, native refresh, session revision attribution, probe state and input pipeline |
-| `THREAT_MODEL.md`, `SECURITY.md` | Implemented controls versus residual risk; token request/redirect handling, imported documents, keyring limits, no-ACL/no-role proof limits |
+| `THREAT_MODEL.md`, `SECURITY.md` | Atomic profile visibility versus cross-store recovery, durability/backup limits, implemented controls versus residual risk; token request/redirect handling, imported documents, keyring limits, no-ACL/no-role proof limits |
 | `AGENT.md`, `DEVELOPMENT.md` | Durable final contracts, first-release boundary, fixture/integration workflows, supported platforms and dependencies |
 | `MANUAL_TESTING.md` | Move completed runnable QA scenarios here, remove superseded expectations, keep setup/actions/results and release checklist entry point |
 | `RELEASE_CHECKLIST.md` | Link manual first-release gate and compatibility evidence; distinguish first release from upgrades of published versions |
@@ -817,7 +1044,7 @@ with a non-secret value from the pinned fixture's setup instructions.
 
   ```bash
   kantrip edit qa-scram --registry-provider confluent \
-    --registry-url https://localhost:8082 --registry-auth basic \
+    --registry-url https://localhost:8083 --registry-auth basic \
     --registry-username REGISTRY_BASIC_USER \
     --registry-ca-file sandbox/.state/ca.crt
   kantrip ping qa-scram
@@ -948,7 +1175,95 @@ with a non-secret value from the pinned fixture's setup instructions.
   bootstrap/config/auth overrides, including `kcat -F /tmp/other.conf` and
   Java `--bootstrap-server other.example.com:9092`; they must be rejected.
 
-### QA 10 — Store failures, repair, cleanup, and release sign-off
+### QA 10 — Sourced environment and shell startup precedence
+
+- [ ] After PR 1's namespace change, deliberately export a synthetic sandbox
+  secret plus conflicting public connection values in a disposable subshell.
+  This tests the hazardous `set -a` case without exposing real credentials:
+
+  ```bash
+  (
+    set -a
+    KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD=synthetic-release-qa
+    KAFKA_BOOTSTRAP_SERVERS=unselected.invalid:19092
+    KCAT_CONFIG=/synthetic/unselected.conf
+    SCHEMA_REGISTRY_URL=http://unselected.invalid
+    set +a
+    kantrip exec qa-plain -- python -c '
+  import os
+  assert os.environ["KAFKA_BOOTSTRAP_SERVERS"] == "localhost:9092"
+  assert os.environ["KCAT_CONFIG"] != "/synthetic/unselected.conf"
+  assert "SCHEMA_REGISTRY_URL" not in os.environ
+  assert not any(name.startswith("KANTRIP_SANDBOX_") for name in os.environ)
+  print("Profile precedence and sandbox scrubbing verified")'
+    test "$KAFKA_BOOTSTRAP_SERVERS" = unselected.invalid:19092
+    test "$KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD" = synthetic-release-qa
+  )
+  ```
+
+  Expect the selected child config, no inherited sandbox values, and unchanged
+  parent values. Repeat after `. sandbox/.state/credentials.env`, with and
+  without automatic export, checking only presence/names and public config
+  values. Never print the resulting environment. Run the equivalent checks in
+  each interactive shell from QA 9 with disposable startup files that export a
+  conflicting `KCAT_CONFIG`; both the initial prompt environment and supported
+  adapters must use the selected profile. An intentionally configured custom
+  child remains responsible for its own behavior.
+
+### QA 11 — Mutation outcome, confirmation races, and persistence
+
+- [ ] In Terminal A create a disposable profile and leave its remove
+  confirmation pending:
+
+  ```bash
+  kantrip add qa-remove-race -b localhost:9092
+  kantrip describe qa-remove-race
+  kantrip remove qa-remove-race
+  ```
+
+  In Terminal B, using the same QA database, change that profile:
+
+  ```bash
+  kantrip edit qa-remove-race -d 'Changed after confirmation started'
+  ```
+
+  Confirm in A. Expect rejection with exit `1`; the newer revision remains.
+  Repeat, but in B remove with `--force` and recreate the same name before
+  confirming in A. The recreated UUID must survive A's outdated confirmation.
+  `--force` skips the question, not identity validation or safe cleanup.
+
+- [ ] Verify add/edit/reopen/remove from fresh CLI processes:
+
+  ```bash
+  kantrip add qa-persist -b localhost:9092
+  kantrip describe qa-persist -o json
+  kantrip edit qa-persist -d 'Persisted revision'
+  kantrip describe qa-persist -o json
+  kantrip remove qa-persist --force
+  kantrip list -o json
+  kantrip doctor --repair
+  kantrip doctor --repair
+  ```
+
+  Expect one stable UUID, one revision increment, successful removal, and
+  idempotent repair. Repeat with a disposable secret-bearing profile, restarting
+  the approved OS store through its documented local workflow before a fresh
+  `describe`/`ping`; the stored credential must remain available after unlock.
+  Run only against laboratory accounts, not a production keychain/session.
+
+- [ ] Review the PR 1 fault-injection report and reproduce its documented
+  subprocess-crash cases in the isolated fixture. Inspect through `describe`,
+  `list`, and `doctor` after each restart. A committed change with cleanup debt
+  must report exit `3` and remain committed; an indeterminate commit reports `4`
+  and must not trigger automatic retry or speculative deletion. Failures before
+  commit preserve the old profile/absent add, with any staged entries journaled.
+  Verify a live-reference journal conflict causes no credential deletion. Record
+  the actual injected cut, exit status, and observed generation without secrets.
+  Do not corrupt a real keychain or database to simulate this case. Document
+  separately that process-crash tests do not establish power-loss guarantees.
+
+
+### QA 12 — Store failures, repair, cleanup, and release sign-off
 
 - [ ] Lock the disposable OS credential store through its native UI; run
   `kantrip describe qa-scram`, `kantrip doctor qa-scram`, and

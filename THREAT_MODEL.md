@@ -215,7 +215,12 @@ Controls:
 - Keep Registry credentials out of Kafka configuration unless a verified client
   requires one combined file.
 
-Residual risk: the selected child, its descendants, shell startup files,
+Residual risk: current execution also retains exported parent variables beyond
+its owned connection-variable set, including any exported sandbox credentials.
+Supported shell startup can change connection variables after initial injection;
+see [current environment behavior](USAGE.md#precedence-and-inherited-sandbox-variables).
+The roadmap adds the missing scrubbing and precedence contract.
+The selected child, its descendants, shell startup files,
 debuggers running as the same user, and sufficiently privileged processes can
 read the supplied material. Kantrip deliberately trusts this boundary and is
 not a sandbox.

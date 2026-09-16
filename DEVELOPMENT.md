@@ -161,7 +161,10 @@ uv run --locked python -m sandbox down
 
 Generated credentials, CA material, and Java client property files are private
 and ignored below `sandbox/.state`. The lifecycle command does not print their
-values. `down` removes the cluster but retains this private state so another
+values. The generated assignment file is a laboratory input, not Kantrip's
+child environment contract; manual checks source it without blanket `set -a`.
+See [manual environment setup](MANUAL_TESTING.md#source-sandbox-variables-without-blanket-export)
+for current inheritance limits. `down` removes the cluster but retains this private state so another
 `up` can reuse the same credentials; remove that exact directory to rotate the
 local laboratory credentials.
 
