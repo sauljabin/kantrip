@@ -1,4 +1,10 @@
-# Command compatibility
+# Compatibility
+
+Use this guide to choose clients, connection methods, and file formats supported
+by the current Kantrip commands. See [Usage](USAGE.md) for command examples and
+configuration instructions.
+
+## Client commands
 
 Kantrip recognizes commands by executable basename. [Apache Kafka's Unix binary
 archives](https://kafka.apache.org/quickstart/) name their command scripts with a
@@ -44,13 +50,13 @@ outside the supported lifecycle.
 | `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. Explicit Kafka, config-file, and registry connection options are rejected. |
 
 “Profile-aware” means Kantrip maps the selected profile into the command. The
-Confluent console clients and kcat require `provider: confluent`. This includes
+Confluent console clients and kcat require `--registry-provider confluent`. This includes
 Apicurio's `/apis/ccompat/v7` endpoint, which uses Confluent framing. Native
 Apicurio `/apis/registry/v3` profiles work only with Kaskade registry
 deserializers and use Apicurio's default `contentId` framing.
 
 Every listed Kafka adapter currently supports plaintext or verified TLS
-transport with `auth.type: none`. TLS uses each client's default trust store
+transport without client authentication. TLS uses each client's default trust store
 unless a validated custom PEM CA is copied from the profile into each private
 session. The
 librdkafka adapters (`kcat`, `kafkacat`, and Kaskade) support that PEM directly.
@@ -59,15 +65,61 @@ require [Apache Kafka 2.7+](https://kafka.apache.org/27/security/encryption-and-
 or Confluent Platform 6.1+, where native PEM trust stores became available;
 Kantrip checks the installed client version and fails before the Kafka operation
 when support cannot be verified. Kafka 2.6 and Confluent Platform 6.0 remain
-supported with default client trust. The shared connection layer can validate,
-resolve, and render PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS, but these
-mechanisms are not enabled for the listed adapters or `ping` yet; both fail
-before launch instead of degrading the profile.
+supported with default client trust. SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
+mTLS, and OAuth are unsupported by the listed adapters and `ping`. Unsupported
+authentication is rejected before the requested operation.
 
 Every registry connection uses an `http://` URL. Kantrip rejects missing,
 encrypted, authenticated, provider-incompatible, and caller-supplied Registry
 settings before starting the affected client mode. Bash, Zsh, and Fish sessions
-apply the same checks through temporary adapters.
+apply the same checks through temporary adapters. This does not scrub every
+inherited credential variable or restore all connection settings after shell
+startup; see [environment precedence](USAGE.md#environment-precedence).
+
+## Kafka transport and authentication
+
+| Mode | `add` / `edit` | `exec` and client commands | `ping` |
+| --- | --- | --- | --- |
+| Plaintext, no authentication | Supported | Supported | Kafka metadata request |
+| Verified TLS, no client authentication | Supported | Supported; Java custom CA needs Kafka 2.7 / Confluent 6.1 or newer | Supported with system/custom CA |
+| SASL/PLAIN over TLS | Unsupported | Unsupported | Unsupported |
+| SCRAM-SHA-256 over TLS | Unsupported | Unsupported | Unsupported |
+| SCRAM-SHA-512 over TLS | Unsupported | Unsupported | Unsupported |
+| mTLS | Unsupported | Unsupported | Unsupported |
+| OAuth / OAUTHBEARER | Unsupported | Unsupported | Unsupported |
+| SASL without TLS / disabled TLS verification | Unsupported | Unsupported | Unsupported |
+
+## Registry protocols and providers
+
+| Provider / mode | Current support |
+| --- | --- |
+| Confluent-compatible HTTP, no auth | Confluent consoles, kcat Avro, Kaskade, and ping |
+| Native Apicurio HTTP, no auth | Kaskade Registry deserializers and ping |
+| HTTPS, basic, fixed bearer, OAuth, or Registry mTLS | Unsupported; no authenticated Registry profile execution |
+| Kafka credential inheritance / URL credentials | Rejected |
+
+Current Registry ping requests `/subjects` or `/search/artifacts`; these may
+require resource permissions. Kafka ping requests metadata. None is a general
+resource-authorization test or a guaranteed permission-independent probe.
+`doctor` is currently global, with `--verbose` and `--repair`; profile scope and
+session attribution are not implemented. `kcl` and `kafkactl` have no automatic
+adapter, even though an arbitrary executable can run as a supervised child.
+
+## File formats
+
+| Format | Current accepted input | Current generated output / role |
+| --- | --- | --- |
+| JSON / YAML observations | No profile import or round-trip export | `list` / `describe` safe observations |
+| Public PEM CA | `--ca-file`, Kafka TLS only | Validated public profile material; session-owned CA file |
+| Client PEM certificate / private key | Unsupported | No client identity output from supported sessions |
+| Java Kafka `.properties` | No file import | Private Java client session configuration |
+| librdkafka / kcat properties | No file import yet | Private librdkafka configuration selected through `KCAT_CONFIG` and documented file variables |
+| Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |
+| Strimzi generated Secret JSON / YAML | No file or stdin import | No Kubernetes resource output |
+| Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |
+| Registry properties | No file import | Private HTTP endpoint configuration only |
+| kcl TOML / kafkactl YAML | Unsupported | No generated adapter config yet |
+| JKS / PKCS12 | Unsupported for Kantrip input | No automatic conversion |
 
 ## Installing supported commands
 

@@ -24,6 +24,28 @@
   expose secret retrieval or a round-trip profile export. Update current user
   documentation only when the corresponding behavior lands.
 
+## Documentation Ownership
+
+| Audience | Documents | Responsibility |
+| --- | --- | --- |
+| End users | `USAGE.md`, `COMPATIBILITY.md` | Installed `kantrip` commands, supported clients/protocols/formats, actionable limits and environment behavior |
+| Developers | `DEVELOPMENT.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `MANUAL_TESTING.md` | Contributor workflows, technical decisions and rationale, security analysis, reproducible human QA |
+| AI agents | `AGENT.md`, `RELEASE_CHECKLIST.md`, `MVP.md` | Durable engineering instructions, release execution gates, temporary implementation handoff |
+
+- Keep sandbox instructions, `uv run`, repository workflows, internal-only
+  capabilities, and future CLI contracts out of end-user guides. Document only
+  behavior users can exercise with the installed version.
+- Make `ARCHITECTURE.md` the canonical record of technical decisions, rationale,
+  invariants, failure boundaries, and limits. Keep actionable conventions here
+  and link to architecture instead of duplicating its full explanations. Align
+  `THREAT_MODEL.md` with implemented controls and explicit residual risks.
+- Keep each manual scenario's setup, commands, and expected results in
+  `MANUAL_TESTING.md`; keep release orchestration in `RELEASE_CHECKLIST.md`.
+- `MVP.md` is temporary. During its final cleanup PR, transfer all remaining
+  decisions and QA to their durable owners before deleting it. Remove every
+  obsolete reference, including packaging requirements, and leave this file
+  sufficient to guide future agents together with `ARCHITECTURE.md`.
+
 ## Profiles and Sessions
 
 - Keep Kantrip scoped to profile storage, secret resolution, temporary client
@@ -35,9 +57,12 @@
   schema changes. Release-bundled profile schemas are authoritative; profile
   documents omit application versions. The SQLite schema uses a separate
   internal version.
-- Treat the environment documented in `USAGE.md` as public API. Add variables
-  compatibly; renames or semantic breaks require release and migration guidance.
-  Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
+- Treat the environment documented in `USAGE.md` as the current contract.
+  Before the first release, replace obsolete CLI, environment, profile, and
+  runtime contracts directly without aliases or development-state compatibility.
+  Reject incompatible state with explicit reset guidance; never silently delete
+  user data. Compatibility and migration guarantees begin with published
+  releases. Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
   Kantrip-owned profile/session metadata.
 - Store profiles in the private SQLite database resolved through
   `KANTRIP_DATABASE`, `XDG_DATA_HOME`, then the user's default data directory.
@@ -140,8 +165,11 @@
 - Adapters must reject connection arguments that override the selected profile.
 - `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata.
   It checks `/subjects` for Confluent-compatible registries and
-  `/search/artifacts` for native Apicurio. All checks use a bounded timeout and
-  do not depend on an installed external Kafka CLI.
+  `/search/artifacts` for native Apicurio. These current resource checks can
+  depend on authorization; do not present them as authentication-only probes.
+  The replacement probe contract and its required evidence are in `MVP.md`.
+  All current checks use a bounded timeout and do not depend on an installed
+  external Kafka CLI.
 
 ## Sensitive Values and Output
 

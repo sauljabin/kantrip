@@ -3,6 +3,20 @@
 This guide describes the development environment and repository workflows. Run
 user-facing exploratory checks from [Manual Testing](MANUAL_TESTING.md).
 
+## Documentation audiences
+
+- End users: [Usage](USAGE.md) and [Compatibility](COMPATIBILITY.md). Show installed
+  `kantrip` commands and current support; keep sandbox and `uv run` instructions
+  in developer documentation.
+- Developers: this guide, [Architecture](ARCHITECTURE.md),
+  [Threat Model](THREAT_MODEL.md), and [Manual Testing](MANUAL_TESTING.md).
+- AI agents: [Agent Instructions](AGENT.md),
+  [Release Checklist](RELEASE_CHECKLIST.md), and the temporary [MVP roadmap](MVP.md).
+
+Architecture owns technical decisions and their rationale; agent instructions
+own implementation conventions. Record each decision when its implementation
+lands, keep the threat model aligned, and link to the canonical explanation.
+
 ## Setup
 
 Install uv:
@@ -73,7 +87,13 @@ Keep the profile schema in `schemas/`, synthetic examples in `examples/`, and
 private-data-free fixtures with their tests.
 
 When an application variable changes, update `USAGE.md`, architecture guidance,
-and tests together.
+and tests together. Before the first release, obsolete contracts may be replaced
+without backward compatibility with development commits. Reject incompatible
+state explicitly; do not add aliases or silently reset user data.
+
+Implement the sequential PRs in [MVP.md](MVP.md), including their acceptance
+criteria and affected documentation. Its manual first-release QA is a separate
+human release gate; the offline suite and sandbox smoke remain required.
 
 ## Database migrations
 
@@ -155,7 +175,10 @@ uv run --locked python -m sandbox down
 
 Generated credentials, CA material, and Java client property files are private
 and ignored below `sandbox/.state`. The lifecycle command does not print their
-values. `down` removes the cluster but retains this private state so another
+values. The generated assignment file is a laboratory input, not Kantrip's
+child environment contract; manual checks source it without blanket `set -a`.
+See [manual environment setup](MANUAL_TESTING.md#source-sandbox-variables-without-blanket-export)
+for current inheritance limits. `down` removes the cluster but retains this private state so another
 `up` can reuse the same credentials; remove that exact directory to rotate the
 local laboratory credentials.
 

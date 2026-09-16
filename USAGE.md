@@ -12,17 +12,17 @@ kantrip ping local
 kantrip exec local -- kcat -L
 ```
 
-Planned capabilities are tracked separately in the [MVP roadmap](MVP.md).
+See [Compatibility](COMPATIBILITY.md) for supported clients, authentication
+methods, and file formats.
 
 Kantrip is not a persistent process manager, a global context selector, or a
 replacement for Kafka clients. Its responsibility ends at storing profiles,
 resolving the connection material supported by the installed release,
 generating the correct temporary configuration, and supervising active
 execution. This pre-release CLI currently creates and executes plaintext and
-server-authenticated TLS profiles with `auth.type: none`. The connection core
-already validates and renders PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS,
-while authenticated input commands, adapters, and `ping` remain tracked in the
-MVP roadmap. Authenticated profiles fail before a child or network client starts.
+server-authenticated TLS profiles without client authentication. SASL/PLAIN,
+SCRAM, mTLS, and OAuth are not supported by the current commands. Unsupported
+authentication fails before a child or network client starts.
 
 ## Local diagnostics
 
@@ -69,6 +69,10 @@ external CLI and defaults to a five-second timeout, configurable with
 `--timeout SECONDS`. Colored terminals animate checks; plain output uses
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
+
+These current probes can depend on resource permissions. A failure can be an
+authorization rejection even when the service is reachable. Success does not
+prove topic, group, schema, or administrative access.
 
 For scripts that need only the exit status, suppress all output with:
 
@@ -507,10 +511,8 @@ registry URL. Kantrip sets no Kaskade-specific environment variable.
 
 ## Profile storage
 
-The [profile schema](https://github.com/sauljabin/kantrip/blob/main/schemas/profile.schema.json)
-validates every profile stored in Kantrip's private SQLite database; see the
-[synthetic profile document](https://github.com/sauljabin/kantrip/blob/main/examples/profile.json).
-Use Kantrip commands to modify the database instead of editing it directly.
+Kantrip stores profiles in a private local database. Use `add`, `edit`, and
+`remove` to change profiles instead of editing the database directly.
 
 Database lookup order is:
 
@@ -518,70 +520,27 @@ Database lookup order is:
 2. `$XDG_DATA_HOME/kantrip/profiles.db`.
 3. `~/.local/share/kantrip/profiles.db`.
 
-The database directory is private to the current user (`0700`), the database is
-`0600`, and writes use SQLite transactions. A missing database is created by
-the first mutation; read-only commands do not create it.
+The database directory is private to the current user (`0700`), and the database
+is `0600`. The first `add` creates a missing database; read-only commands do not
+create it. Kantrip rejects unsafe permissions, corrupt contents, and unsupported
+database versions. Keep existing data until you have followed the reported
+recovery guidance; Kantrip does not silently reset it.
 
-Profiles support plaintext or server-authenticated TLS Kafka connections and
-one optional registry connection. TLS uses each client's default trust store
-unless a custom PEM CA supplied through `--ca-file` is validated and copied
-into the profile.
-Java adapters version-gate custom PEM trust stores at Kafka 2.7 or Confluent
-Platform 6.1; librdkafka adapters consume the same profile without that Java
-version constraint.
-The `provider` is explicit in every stored profile. When `--registry-url` is
-supplied without `--registry-provider`, `kantrip add` and `kantrip edit` select
-and persist Confluent:
+A profile supports one optional Registry connection. Supplying `--registry-url`
+without `--registry-provider` selects Confluent. To use Apicurio's
+Confluent-compatible API with Confluent console clients, kcat Avro, or Kaskade:
 
-```json
-{
-  "registry": {
-    "provider": "confluent",
-    "schema.registry.url": "http://localhost:8081"
-  }
-}
+```bash
+kantrip add compatible \
+  --bootstrap-servers kafka.example.com:9092 \
+  --registry-provider confluent \
+  --registry-url http://registry.example.com:8080/apis/ccompat/v7
 ```
 
-For native Apicurio:
-
-```json
-{
-  "registry": {
-    "provider": "apicurio",
-    "apicurio.registry.url": "http://localhost:8082/apis/registry/v3"
-  }
-}
-```
-
-The two providers are mutually exclusive, and `provider` is required in stored
-profiles. Kafka PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS shapes are valid
-only over TLS and contain references instead of secret values; Registry TLS and
-authentication remain schema-invalid. Profile documents accept no arbitrary
-Java or librdkafka property maps; Kantrip renders only its typed connection
-fields. Registry property names follow the official
-[Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
-and [Apicurio](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-kafka-client-serdes.html)
-serializer and deserializer configuration.
-
-Apicurio's Confluent-compatible API is not native Apicurio mode. Configure its
-`ccompat` endpoint as Confluent to use Confluent console clients, kcat Avro, or
-Kaskade with Confluent framing:
-
-```json
-{
-  "registry": {
-    "provider": "confluent",
-    "schema.registry.url": "http://localhost:8082/apis/ccompat/v7"
-  }
-}
-```
-
-Create two profiles with the same Kafka connection when both native and
-Confluent-compatible Apicurio endpoints are needed.
-
-Profile documents have no application-version field; each release's bundled
-profile schema is authoritative. The SQLite schema has a separate internal
-version and unsupported database versions fail closed.
+For native Apicurio with Kaskade, use `--registry-provider apicurio` and the
+`/apis/registry/v3` endpoint. Create two profiles with the same Kafka connection
+when both APIs are needed. See [Compatibility](COMPATIBILITY.md) for the client
+and format requirements of each API.
 
 ## Application environment from `kantrip exec`
 
@@ -589,6 +548,26 @@ Kantrip exposes settings only to supervised children. Kafka has no
 cross-language environment standard, so applications must opt into the generic
 `KAFKA_*` values below; `KANTRIP_*` is reserved for session metadata. Adapters
 may instead pass generated client files directly.
+
+### Environment precedence
+
+For a direct child, Kantrip copies the exported parent environment, overwrites
+its documented Kafka/config/session variables with the selected profile, then
+removes both providers' Registry URL/config variables and sets only the chosen
+provider's pair. Without a Registry, neither pair is present. The parent shell
+remains unchanged.
+
+Other exported variables are still inherited, including credentials that
+Kantrip does not manage. They do not supply missing profile credentials, but a
+custom child can independently read them. Export only values the child needs;
+Kantrip does not guarantee precedence over every application's own environment
+settings.
+
+Supported interactive shells run user startup files after receiving the initial
+child environment. Kantrip restores its temporary adapter commands and `PATH`,
+but does not restore every connection variable changed by `.bashrc`, `.zshrc`,
+or Fish configuration. Avoid replacing the variables below, including
+`KCAT_CONFIG`, in those startup files.
 
 ### Kafka variables
 

@@ -12,6 +12,15 @@ latest stable release unless the project explicitly announces otherwise.
 | `main` pre-release development | Best effort |
 | Stable releases | None published yet |
 
+## Scope of current support
+
+Use [Compatibility](COMPATIBILITY.md) to distinguish stored schema support from
+executable authentication and file-input support. The remaining security work
+and first-release verification requirements are tracked in [MVP.md](MVP.md).
+Current metadata/resource-list ping checks can depend on remote permissions;
+they do not establish general authorization or permission-independent identity
+verification.
+
 ## Reporting a vulnerability
 
 Do not report suspected vulnerabilities in a public issue, discussion, pull

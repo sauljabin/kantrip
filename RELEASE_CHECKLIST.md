@@ -12,6 +12,32 @@ publishing and do not report readiness while required checks remain unverified.
 This checklist does not authorize tagging or publication. Use existing explicit
 release authorization, requesting it only if absent.
 
+## First Release — Additional Gate
+
+- [ ] Complete the [first-release manual QA](MVP.md#manual-qa--first-release-checklist),
+  or its implemented scenarios moved to [Manual Testing](MANUAL_TESTING.md),
+  against the candidate wheel on Linux and macOS. Record actual results;
+  automated tests and smoke do not replace the human checklist.
+- [ ] Confirm every required CLI/protocol/authentication/input-format cell in
+  [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
+  conditional and unsupported cells explicitly, including ping proof limits.
+- [ ] Complete the final roadmap cleanup: preserve technical decisions in
+  `ARCHITECTURE.md`, keep durable agent conventions in `AGENT.md`, align
+  `THREAT_MODEL.md`, and move all human QA into `MANUAL_TESTING.md`. Remove the
+  temporary roadmap and its links/packaging requirements only after all its
+  implementation and verification obligations are complete.
+- [ ] Check documentation audiences: `USAGE.md` and `COMPATIBILITY.md` contain
+  installed commands and current support, without sandbox, `uv run`, internal-only
+  capabilities, or future flags. Developer workflows and agent release steps
+  remain in their assigned guides.
+- [ ] Confirm the issue #8 site artifact passed PR validation, deployment ran
+  only from `main`, and the published site passed the manual accessibility,
+  content, asset, and link checks. Record the URL and deployed commit.
+- [ ] Establish the first published compatibility boundary. Earlier development
+  commits need no compatibility layer or upgrade path; test clean installation
+  and safe rejection of incompatible state. Shared prior-release comparison
+  checks are not applicable when no earlier release exists; record that reason.
+
 ## Shared Preparation — Every Release
 
 - [ ] Record the proposed version, candidate commit, previous release tag, and
@@ -28,7 +54,7 @@ release authorization, requesting it only if absent.
   backups, preservation of earlier backups, migration history, and
   `PRAGMA user_version` before publishing a schema change.
 - [ ] Verify lockfile consistency, code analysis, unit tests, and the shell
-  contract using the workflows in [Development](DEVELOPMENT.md#scripts).
+  contract using the workflows in [Development](DEVELOPMENT.md#development-scripts).
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,
   including the supported Python and Linux/macOS matrix and packaging jobs.
   Refresh evidence for changes made during release preparation.
@@ -68,7 +94,7 @@ release authorization, requesting it only if absent.
   losing unique instructions.
 - [ ] Review CLI, configuration, profile schema, adapters, shells, and security
   compatibility. Document breaking changes and actionable migration steps.
-- [ ] Run the documented [manual sandbox](DEVELOPMENT.md#manual-sandbox),
+- [ ] Run the documented [manual sandbox checks](MANUAL_TESTING.md),
   including the end-to-end adapter workflow with supported clients and shells.
 
 ## Minor Release — Focused Feature Review

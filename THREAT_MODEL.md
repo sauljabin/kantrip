@@ -1,8 +1,13 @@
-# MVP 1 Threat Model
+# Threat Model
 
-This document models Kantrip after MVP 1 is complete. It covers local profile
-storage, secret resolution, configuration rendering, supervised execution,
-imports, diagnostics, and direct connectivity checks on a developer workstation.
+This developer security analysis follows the boundaries and decisions in
+[Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
+credential/rendering foundation, supervised plaintext/TLS execution, and current
+diagnostics.
+Authenticated sessions, secure Registry/OAuth connections, input parsers, and
+profile-scoped diagnostics remain unimplemented; their required controls and
+acceptance evidence live in [MVP.md](MVP.md). Do not treat schema acceptance as
+an end-to-end security guarantee. See [Compatibility](COMPATIBILITY.md).
 
 Kantrip reduces accidental disclosure, profile confusion, unsafe connection
 overrides, and abandoned secret-bearing artifacts. It does not make an
@@ -18,8 +23,6 @@ Kantrip aims to preserve these properties:
   tracebacks, diagnostics, snapshots, and normal terminal output.
 - Only the selected child receives the minimum connection material required by
   its verified adapter.
-- Imported configuration cannot bypass the typed connection model or weaken TLS
-  verification silently.
 - Kafka and Registry identities remain independent.
 - Session-owned files have a bounded lifecycle and recover safely after a crash.
 - Database upgrades apply only known immutable migrations and cannot leave a
@@ -34,14 +37,11 @@ external client or remote service.
 ## Protected assets
 
 - Kafka PLAIN and SCRAM passwords.
-- OAuth client secrets and fixed Confluent-compatible Registry bearer tokens.
-- OAuth access tokens acquired and refreshed inside selected client processes.
 - mTLS private keys and private-key passwords.
-- Registry basic-auth credentials.
 - Profile-to-broker, Registry, certificate, and secret-reference associations.
 - Migration history, checksums, internal sequence, and private pre-migration
   backups.
-- Generated Java, librdkafka, Registry, TOML, YAML, and INI client files.
+- Generated Java, librdkafka, HTTP Registry, and INI client files.
 - Session environment variables, runtime paths, locks, markers, and shims.
 - The integrity of the executable and adapter selected for a profile.
 - Command arguments, shell history, diagnostics, errors, and terminal
@@ -65,15 +65,15 @@ Kantrip trusts:
 
 Kantrip treats as untrusted until validated:
 
-- Stored profile documents, imported files, stdin, paths, profile names, labels,
+- Stored profile documents, certificate files, paths, profile names, labels,
   and URLs.
 - Environment variables inherited from the caller.
 - Client arguments that may override a profile connection.
 - Executable lookup and shell aliases, functions, abbreviations, and `PATH`
   changes.
 - Session directories discovered after a previous abnormal termination.
-- Kafka brokers, Registry servers, and OAuth identity providers until TLS and
-  authentication checks succeed.
+- Kafka brokers until configured server TLS verification succeeds; plaintext
+  Kafka and HTTP Registry connections do not verify server identity.
 
 Remote authorization policy remains outside Kantrip. A valid identity can still
 be denied access by broker ACLs, Registry permissions, or identity-provider
@@ -91,13 +91,6 @@ expected fully qualified field. PLAIN and SCRAM passwords, mTLS private keys,
 and optional key passwords never enter the profile document; public client
 certificate chains do and are checked against the resolved key before use.
 
-### Import boundary
-
-Java properties, librdkafka properties, Confluent-generated properties, and
-Strimzi KafkaUser Secret documents are attacker-controlled input.
-Format-specific parsers normalize only allowlisted connection shapes; source
-files never become runtime configuration directly.
-
 ### Execution boundary
 
 Kantrip crosses from protected state into a trusted child when it creates the
@@ -106,10 +99,10 @@ child can read, copy, print, transmit, or retain the supplied values.
 
 ### Network boundary
 
-Kafka, Registry, and OAuth endpoints are external. Server identity depends on
-TLS certificate and hostname verification using the client's default trust
-store or the selected profile CA. Application authorization is evaluated by
-those remote services.
+Kafka and Registry endpoints are external. Current Kafka TLS server identity
+depends on certificate/hostname verification with default trust or the selected
+CA. Current HTTP Registry connections provide no transport confidentiality or
+server identity. Remote services evaluate application authorization.
 
 ### Recovery boundary
 
@@ -183,7 +176,7 @@ cryptographic trust anchor.
 
 Threats include credentials committed to profile documents, insecure keyring
 fallback, world-readable files, orphaned values after failed updates, and
-unintended copies of imported secrets.
+unintended copies of credential input.
 
 Controls:
 
@@ -198,7 +191,6 @@ Controls:
   exact superseded references afterward.
 - Write cleanup intent to a transactional non-secret database journal before a
   cross-store mutation can create an orphan.
-- Never modify, delete, or duplicate a user-owned import source.
 
 Residual risk: standard keyring APIs cannot enumerate arbitrary entries. If the
 reconciliation journal is destroyed, Kantrip cannot prove that no orphaned
@@ -213,7 +205,8 @@ processes.
 
 Controls:
 
-- Resolve secrets into one in-memory session model.
+- Keep shared secret resolution in memory; reject authenticated sessions until
+  their integration is complete.
 - Pass them only through a private generated file or a child-only environment
   variable documented by the selected client.
 - Execute children with argument arrays and never place secrets in arguments.
@@ -224,7 +217,12 @@ Controls:
 - Keep Registry credentials out of Kafka configuration unless a verified client
   requires one combined file.
 
-Residual risk: the selected child, its descendants, shell startup files,
+Residual risk: current execution also retains exported parent variables beyond
+its owned connection-variable set, including any exported sandbox credentials.
+Supported shell startup can change connection variables after initial injection;
+see [current environment behavior](USAGE.md#environment-precedence).
+The roadmap adds the missing scrubbing and precedence contract.
+The selected child, its descendants, shell startup files,
 debuggers running as the same user, and sufficiently privileged processes can
 read the supplied material. Kantrip deliberately trusts this boundary and is
 not a sandbox.
@@ -241,7 +239,8 @@ Controls:
   arrays rather than constructed shell commands.
 - Reject bootstrap, config-path, TLS, authentication, Registry, and other
   connection overrides covered by each adapter contract.
-- Check the client version and authentication capability before launch.
+- Version-gate Java custom PEM trust and reject currently unsupported
+  authenticated execution before launch.
 - Load normal interactive-shell startup files, then remove supported-client
   shadows and restore private shims at the front of `PATH`.
 - Reject nested Kantrip sessions.
@@ -251,57 +250,25 @@ malicious startup code can exfiltrate connection material. Shim restoration
 prevents accidental bypass; it cannot make hostile user-controlled shell code
 safe.
 
-### Unsafe imported configuration
-
-Threats include parser confusion, mixed Java and librdkafka dialects, malicious
-escaping, arbitrary JAAS modules, misspelled security properties, TLS-disabling
-settings, secret-bearing unknown keys, and topic-dependent behavior entering a
-global profile.
-
-Controls:
-
-- Parse Java properties, librdkafka properties, and Kubernetes Secret documents
-  with explicit format-aware logic.
-- Tokenize supported JAAS syntax instead of extracting secrets with regular
-  expressions.
-- Normalize only PLAIN, SCRAM, mTLS, and OAuth client-credentials shapes.
-- Ignore known non-connection and unknown non-security properties while
-  reporting names only.
-- Reject unknown security-like keys, mixed or ambiguous dialects, arbitrary
-  login modules, unverified callbacks, and disabled certificate or hostname
-  validation.
-- Extract supported secrets into the credential store before committing the
-  profile.
-- Reject implicit JKS or PKCS12 conversion and do not execute vendor CLIs with
-  secrets in argv.
-
-Residual risk: an allowlist can lag a new client release. The safe failure mode
-is loss of compatibility, not silent acceptance; users must wait for a tested
-mapping. A user-owned source file can remain as a separate plaintext copy after
-import; Kantrip does not own or erase it, so stdin is safer for generated files
-that contain credentials.
-
 ### Network interception and endpoint substitution
 
-Threats include plaintext credentials, malicious brokers or registries,
-hostname mismatch, replaced CA material, and interception of the OAuth token
-request.
+Threats include plaintext credentials, malicious endpoints, hostname mismatch,
+and replaced CA material.
 
 Controls:
 
-- Require TLS for every credential-bearing Kafka, Registry, or OAuth connection.
-  SASL without TLS is allowed only for documented loopback test infrastructure.
-- Keep certificate and hostname verification enabled for Kafka, Registry, and
-  token endpoints.
-- Reject client properties that disable those checks.
-- Keep the token endpoint and its CA separate from broker TLS configuration.
-- Use only documented Java, librdkafka, Confluent Schema Registry, and native
-  Apicurio connection properties.
-- Delegate OAuth token acquisition and refresh to verified native clients.
+- Require verified TLS for every authenticated Kafka profile in the schema;
+  there is no localhost exception.
+- Keep Kafka certificate and hostname verification enabled.
+- Copy validated public CA material into the profile instead of depending on an
+  externally mutable CA path during later sessions.
+- Reject authenticated sessions/ping and non-HTTP or credential-bearing Registry
+  configurations until their secure execution paths are implemented.
 
-Residual risk: Kantrip cannot protect against a malicious endpoint trusted by
-the selected CA, a compromised identity provider, bad remote authorization
-policy, or secrets copied by the client after connection.
+Residual risk: plaintext Kafka and HTTP Registry connections provide neither
+transport confidentiality nor server authentication. A trusted CA can still
+validate a malicious endpoint. Remote authorization and child handling of data
+remain outside Kantrip's control.
 
 ### Abandoned runtime artifacts and process escape
 
@@ -322,8 +289,8 @@ Controls:
 - Reject symlinks and use descriptor-relative or equivalently symlink-safe
   deletion.
 - Treat only validated, unlocked sessions older than five minutes as stale,
-  limit automatic cleanup to 256 entries, preview the complete state through
-  read-only `doctor`, and require `doctor --repair` for complete removal.
+  limit automatic cleanup and doctor scans to 256 entries, report truncation
+  through read-only `doctor`, and use `doctor --repair` for complete removal.
 
 Residual risk: a process that deliberately daemonizes or creates a new session
 can escape supervision and retain copied material. `SIGKILL`, host crashes, and
@@ -344,12 +311,13 @@ Controls:
 - Bound and redact underlying exception messages before diagnostic output.
 - Never print resolved child environments or generated file contents.
 - Make color optional and semantically irrelevant.
-- Map stable librdkafka and HTTP outcomes into configuration, transport, TLS,
-  authentication, and authorization stages.
-- Treat HTTP 401 as authentication failure and HTTP 403 as authenticated but
-  unauthorized only when the provider follows those semantics.
-- Describe a ping as proof of its bounded metadata or Registry request, not as a
-  general authorization test.
+- Bound and sanitize metadata/Registry request failures, and keep quiet ping
+  silent for handled outcomes.
+- Treat the current ping as evidence of its exact metadata or Registry request.
+  Resource ACLs/roles can reject it; success is not general authorization and a
+  rejection is not necessarily an authentication failure.
+- Do not claim per-credential diagnostics or permission-independent identity
+  verification before the roadmap's probe/observation work is implemented.
 
 Residual risk: upstream clients control their own stdout and stderr. A trusted
 child can print credentials or sensitive Kafka records, and Kantrip cannot
@@ -357,15 +325,16 @@ reliably redact arbitrary child output without corrupting it.
 
 ### Availability and resource exhaustion
 
-Threats include locked credential stores, hanging clients, unavailable identity
-providers, malformed import files, large private keys, many stale session
+Threats include locked credential stores, hanging clients, unavailable remote
+services, malformed certificate files, large private keys, many stale session
 directories, and a migration blocked by another writer or insufficient disk.
 
 Controls:
 
 - Bound network diagnostics, startup scans, shutdown grace periods, and parser
   inputs.
-- Validate realistic credential sizes against supported backends.
+- Bound PEM input sizes. Realistic backend-size integration evidence remains
+  a first-release verification requirement.
 - Fail before launch when required secrets, clients, or mappings are missing.
 - Scan only direct children of the validated runtime root automatically.
 - Bound maintenance lock acquisition and preserve every uniquely named private
@@ -384,8 +353,8 @@ can prevent operation.
   and prevent topic-specific behavior from leaking between applications.
 - Fail-closed capability checks favor confidentiality and integrity over broad
   client compatibility.
-- Native TLS, SASL, and OAuth implementations avoid a custom Kafka or token
-  protocol stack.
+- Native Kafka clients avoid a custom Kafka protocol stack; shared SASL/TLS
+  renderers do not themselves establish authenticated execution support.
 - Recoverable cross-store updates and lock-based crash cleanup address failure
   modes commonly omitted from local credential wrappers.
 - Ordered migration history and fail-closed checksum validation make schema
@@ -407,9 +376,6 @@ can prevent operation.
   reconciliation narrows but cannot eliminate every orphan scenario.
 - Security support is only as complete as the tested client/version matrix. A
   client upgrade can require a new mapping before Kantrip can safely launch it.
-- OAuth client secrets remain long-lived credentials. Native refresh limits
-  access-token handling but does not provide automatic secret rotation or
-  revocation.
 - Successful connectivity does not establish authorization beyond the exact
   probe performed.
 - Profile metadata such as broker names and Registry URLs remains in the local

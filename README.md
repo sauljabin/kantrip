@@ -62,14 +62,13 @@ connectivity checks remain roadmap work.
 
 ## Roadmap
 
-The MVP roadmap has three stages:
-
-1. Add properties and Strimzi input sources for authenticated Kafka profiles.
-2. Connect authenticated profiles to existing adapters and `ping`.
-3. Add secure Registry connections, OAuth, new adapters, and the full platform
-   security matrix.
-
-See the [MVP roadmap](MVP.md) for scope and non-goals.
+The [MVP roadmap](MVP.md) orders the remaining work into seven cohesive PRs,
+with technical decisions, CLI changes, acceptance criteria, and a manual
+first-release QA checklist. It covers authenticated execution and diagnostics,
+secure Registry/OAuth connections, external input formats, additional clients,
+readability refactoring, a GitHub Pages site, and final documentation cleanup.
+Development contracts may change destructively before the first release; no
+compatibility with earlier development commits is promised.
 
 ## Quick start
 
