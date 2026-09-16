@@ -178,7 +178,9 @@ and ignored below `sandbox/.state`. The lifecycle command does not print their
 values. The generated assignment file is a laboratory input, not Kantrip's
 child environment contract; manual checks source it without blanket `set -a`.
 See [manual environment setup](MANUAL_TESTING.md#source-sandbox-variables-without-blanket-export)
-for current inheritance limits. `down` removes the cluster but retains this private state so another
+for the precedence checks. Every generated source variable uses the
+`KANTRIP_SANDBOX_*` namespace, which supervised children scrub. `down` removes
+the cluster but retains this private state so another
 `up` can reuse the same credentials; remove that exact directory to rotate the
 local laboratory credentials.
 
@@ -189,6 +191,8 @@ The loopback-only endpoints are:
 - Kafka SCRAM-SHA-512 over TLS: `localhost:9094`
 - Kafka mTLS: `localhost:9095`
 - Kafka OAuth over TLS: `localhost:9096`
+- Kafka PLAIN over TLS (authorizer fixture): `localhost:9097`
+- Kafka SCRAM-SHA-256 over TLS (authorizer fixture): `localhost:9098`
 - Schema Registry baseline: `http://localhost:8081`
 - Apicurio baseline: `http://localhost:8082`
 - Schema Registry with HTTPS and Basic Auth: `https://localhost:8083`
@@ -201,9 +205,11 @@ executable. Schema Registry uses separate Basic and OAuth processes because its
 local JAAS property-file login and OAuth `AuthenticationHandler` are different
 server authentication paths; Apicurio accepts both mechanisms on one endpoint.
 These secure variants prepare authenticated Registry scenarios without claiming
-that those profile fields are already implemented. The Kafka cluster does not
-expose SASL/PLAIN: the name `plaintext` means no authentication and no
-encryption, while password authentication uses SCRAM-SHA-512 over TLS.
+that those profile fields are already implemented. The Strimzi cluster's
+`plaintext` listener means no authentication and no encryption. A separate
+disposable KRaft broker exposes PLAIN and SCRAM-SHA-256 over verified TLS with
+`StandardAuthorizer`; its no-ACL principal proves that `kantrip ping` does not
+depend on Kafka resource authorization.
 
 Kafka uses a disposable persistent volume, so broker data survives pod restarts
 but is removed with the Kind cluster. Both Apicurio instances use KafkaSQL with
@@ -226,6 +232,13 @@ Include the interactive shell adapters with:
 ```bash
 uv run --locked python -m scripts.smoke \
   --shell bash --shell zsh --shell fish
+```
+
+Run the authenticated lifecycle, direct producer/consumer/admin, all-shell,
+invalid-authorization, and no-ACL ping matrix with:
+
+```bash
+uv run --locked python -m scripts.auth_smoke
 ```
 
 The smoke workflow remains a pre-commit hook. It creates isolated temporary

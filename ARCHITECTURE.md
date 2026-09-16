@@ -1,8 +1,8 @@
 # Architecture
 
 This developer reference records the implemented architecture and its technical
-decisions. Shared credential and renderer foundations do not imply authenticated CLI execution. Remaining
-implementation decisions and first-release gates belong to [MVP.md](MVP.md).
+decisions. Remaining implementation decisions and first-release gates belong to
+[MVP.md](MVP.md).
 The diagrams illustrate component boundaries; the capability limits in this
 text and [Compatibility](COMPATIBILITY.md) govern current behavior.
 
@@ -15,14 +15,15 @@ the active execution.
 
 For each command or subshell, the user selects a profile. Kantrip then:
 
-1. Validates the profile and rejects currently unsupported authentication.
+1. Loads one UUID/revision generation and resolves its credentials under the mutation lock.
 2. Builds the plaintext or verified-TLS connection model.
 3. Renders the native connection properties required by the client.
 4. Supervises the client in a bounded session.
 5. Removes session-owned connection material.
 
-The shared secret resolver exists for authenticated profile validation and
-rendering, but the execution path does not enable those profiles yet.
+The immutable resolved snapshot is released from the mutation lock before
+rendering or networking. Adapters and shims never query SQLite or the credential
+store again during that session.
 
 Kantrip prepares the connection for one execution; it does not perform the
 Kafka or Registry operation itself. It does not install or replace clients,
@@ -37,8 +38,8 @@ The CLI follows one resource-oriented lifecycle. `add` creates a profile,
 inspects one safely. `doctor`, `ping`, `exec`, and `current` retain their
 diagnostic, connectivity, execution, and session roles.
 
-The CLI currently accepts explicit non-secret profile fields; it has no file
-input or prompted credential editor. Kantrip has no separate `import`, `secret`,
+The CLI accepts explicit profile fields and no-echo credential prompts; `edit`
+without options opens a field editor. It has no file import yet. Kantrip has no separate `import`, `secret`,
 `export`, `clone`, or `configure` command family. Human, JSON, and YAML
 inspection are observations rather than round-trip profile documents; they omit
 secret values and internal credential references. The exact planned CLI
@@ -54,8 +55,8 @@ from the executable user contract in `COMPATIBILITY.md`.
 
 | Capability | Internal model / rendering | Executable CLI |
 | --- | --- | --- |
-| Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and metadata ping |
-| PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | No authenticated input options; sessions and ping reject before launch |
+| Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and connection-state ping |
+| PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | Supported by `add`, `edit`, `exec`, and `ping` |
 | Kafka OAuth | Unimplemented | Unsupported |
 | Registry | One explicit provider, HTTP without authentication | Provider-aware clients and resource ping only |
 | External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
@@ -78,7 +79,7 @@ serializer/deserializer contracts.
 
 Explicit profile fields enter a validated connection model. Each renderer
 translates that model into native client configuration. External input sources
-and unified authenticated diagnostics are not implemented yet.
+are not implemented yet.
 
 ## Profiles and connection material
 
@@ -94,7 +95,11 @@ the database and SQLite sidecars are mode `0600`. Symlinks, unsafe ownership or
 permissions, corrupt schemas, and unsupported internal versions fail closed.
 WAL permits readers while writes are serialized with bounded
 `BEGIN IMMEDIATE` transactions. The profile document schema is independent of
-the internal database schema version.
+the internal database schema version. Every writable connection verifies WAL
+and FULL synchronization; supported macOS builds also verify `fullfsync`.
+Database and backup directory entries are synchronized before durable creation
+is acknowledged. This durability contract assumes a local filesystem, not a
+network or cloud-synchronized database directory.
 
 Long-lived secrets use immutable
 `profile/<profile-uuid>/<credential-uuid>/<field>` keys in macOS Keychain or a
@@ -113,9 +118,10 @@ JAAS for Java password mechanisms. OAuth 2.0 client credentials remain planned.
 A Registry remains an independent connection; Kafka and Registry credentials
 are never inherited across those boundaries.
 
-Authenticated execution is a separate capability boundary. Until adapter and
-authenticated-ping integration lands, `exec` and `ping` reject these otherwise
-valid authenticated profiles before creating a session or client.
+The adapter capability table covers Apache/Confluent Java commands, kcat, and
+Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Java PEM profiles
+retain their installed-version gate; unsupported combinations fail before the
+requested client operation.
 
 ## Schema evolution and maintenance
 
@@ -179,9 +185,10 @@ in the roadmap.
 
 Profile mutations share validation, cross-store locking, secret staging,
 transactional database updates, and reconciliation. `edit` may add or update a
-Registry; only an explicit removal deletes it. Internal authentication mutation
-helpers preserve omitted secrets and replace immutable references. The CLI does
-not yet expose those helpers or an interactive secret editor.
+Registry; only an explicit removal deletes it. Authentication mutation helpers
+preserve omitted secrets and replace immutable references. The CLI exposes them
+through typed options and an interactive editor that never displays or prefills
+secret values.
 
 The reusable cross-store transaction engine lives in
 `kantrip/credential_mutations.py`. Authentication-specific profile fields and
@@ -198,23 +205,31 @@ backend to enumerate credentials:
 - Stage new secrets under new references.
 - Atomically switch the profile document and advance its journal record in one
   SQLite transaction.
-- On a failed database update, remove staged secrets and retain the old profile.
+- On a failed database update, retain the old profile and durable cleanup intent
+  for every possibly written staged secret.
 - Delete superseded secrets only after the profile switch, retaining failed
   cleanup work for idempotent retry by a mutation or `doctor --repair`; a normal
   `doctor` run only reports the pending record.
 
+Mutation exit statuses distinguish definitely uncommitted (`1`), committed with
+cleanup or post-commit verification pending (`3`), and indeterminate commit
+outcomes (`4`). An exception is not treated as proof of rollback. Database
+backups contain references rather than credentials, so independently restoring
+SQLite cannot restore retired keyring values and is outside the supported
+recovery model.
+
 Each profile row has a stable UUID, a unique name, and a monotonically
 increasing revision. The revision is a generation and concurrency token, not
 retained history. The internal mutation API accepts an expected revision and
-rejects a concurrent change instead of overwriting it. Prompt collection and
-external file normalization have not been wired into the CLI; their transaction
-boundaries and format contracts are specified in the roadmap.
+rejects a concurrent change instead of overwriting it. Prompt and file
+collection occur before the maintenance lock. External file normalization
+remains specified in the roadmap.
 
 ## Session resolution and rendering
 
-The shared resolver can build an authenticated in-memory model. The current
-session path rejects authenticated profiles, then renders its supported model
-without independent keyring queries from adapters.
+The shared resolver builds one authenticated in-memory model from a single
+profile generation. The session path renders that model without independent
+keyring queries from adapters.
 
 Generated properties, custom CA bundles, adapter files, and shims live only in
 the private session directory. A selected Kafka CA bundle is validated and copied into the profile as public material, then
@@ -232,8 +247,8 @@ session path. Their native-client integration is scoped in the roadmap.
 ## Client adapters
 
 An adapter recognizes the executable, rejects connection overrides, and injects
-native configuration. Java custom-CA execution also checks the installed client
-version. Authentication is currently blocked before adapter execution.
+native configuration. One capability table drives direct commands and shell
+shims. Java custom-CA and mTLS execution also checks the installed client version.
 
 Current adapters cover Apache and Confluent Kafka commands, Confluent Schema
 Registry consoles, `kcat`/`kafkacat`, and Kaskade. The exact version and feature
@@ -250,10 +265,9 @@ installation changes are made.
 
 ![Kantrip exec sequence](images/exec-sequence.svg)
 
-The profile is validated before session files exist. Only the selected child
-receives rendered connection material, and the runtime is removed after
-supervision ends. Authenticated credential resolution is currently blocked in
-this path.
+The profile and its credentials are validated before session files exist. Only
+the selected child receives rendered connection material, and the runtime is
+removed after supervision ends.
 
 ### Session lifecycle
 
@@ -280,12 +294,12 @@ When control returns to Kantrip, it restores signal handlers, terminal
 attributes, and foreground ownership. A supervisor SIGKILL, host failure, or
 power loss can prevent restoration and leave the runtime session for recovery.
 
-The child inherits the parent environment with Kantrip's documented
-Kafka/config/session variables overwritten and both providers' Registry
-URL/config variables cleared before the selected pair is set. Other exported
-values, including sandbox credential variables, are currently retained. The
-caller environment is unchanged. Shell startup restores shims/PATH, not all
-connection variables; comprehensive precedence is pending in the roadmap.
+The child starts from the parent environment after removing `KAFKA_*`,
+`SCHEMA_REGISTRY_*`, `APICURIO_*`, `KANTRIP_SANDBOX_*`, and the four JVM option
+injection variables. Kantrip then injects only the selected snapshot's public
+values and private paths. Bash, Zsh, and Fish repeat this cleanup after user
+startup files and restore the owned environment and shims. The caller
+environment is unchanged.
 
 ### Runtime identity and liveness
 
@@ -296,10 +310,9 @@ execution.
 
 Managed directories use mode `0700`. Each direct child is named
 `session-<32-lowercase-hex-id>` and contains owner-only connection material,
-`session.lock`, and `session.json`. The marker contains only the session ID,
-owner UID, supervisor PID, creation time, and lifecycle state. It does not yet
-record profile ID or revision. Generated files are snapshots, but profile-scoped
-session attribution cannot yet be established from these markers.
+`session.lock`, and `session.json`. The marker contains the session ID, owner
+UID, supervisor PID, creation time, lifecycle state, profile UUID, and captured
+profile revision. Generated files remain immutable snapshots for that session.
 
 Kantrip holds an exclusive `fcntl.flock` for the session lifetime. The kernel
 lock, not the recorded PID, establishes liveness. A crash releases the lock even
@@ -344,19 +357,20 @@ unsupported. Kantrip exposes no persistent background-session API.
 
 ## Diagnostics and output
 
-`doctor` currently checks global migration/profile state, permissions,
-credential-backend availability, reconciliation counts, aggregate runtime
-sessions, and installed command presence. It does not yet inspect each stored
-credential's availability or certificate expiry, or attribute sessions to a
-profile revision. Its default mode is read-only; `--repair` explicitly enables
-only the deterministic maintenance sequence described above. Scoped diagnostics
-and detailed session observations remain in the roadmap.
+`doctor` checks global or profile-scoped migration/profile state, exact
+credential availability, certificate/key validity and expiry, reconciliation,
+runtime sessions, and installed commands. `doctor PROFILE --sessions` attributes
+validated runtime markers to the immutable profile UUID and captured revision.
+Its default mode is read-only; `--repair` explicitly enables only the
+deterministic maintenance sequence described above.
 
-`ping` reuses normal connection construction for bounded Kafka metadata and
-provider-specific Registry requests. Its result is limited to the operation it
-performed; it can depend on resource permissions and does not imply broader
-topic, group, schema, or administrative authorization. It does not yet implement
-a connection/authentication-only probe.
+Kafka `ping` polls librdkafka's public statistics and error callbacks until a
+configured or learned, addressable broker reaches `UP` after the required
+TLS/SASL exchange. It does not call resource or cluster-description APIs.
+Plaintext proves reachability, server-only TLS proves server identity, SASL
+proves its configured exchange, and mTLS proves the configured client exchange;
+none proves application authorization. The current unauthenticated Registry
+probe remains provider-specific pending the secure Registry work.
 
 Kantrip writes results to stdout and diagnostics to stderr. Sensitive values
 are classified and redacted before presentation, and color never carries

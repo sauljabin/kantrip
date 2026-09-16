@@ -2,12 +2,11 @@
 
 This developer security analysis follows the boundaries and decisions in
 [Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
-credential/rendering foundation, supervised plaintext/TLS execution, and current
-diagnostics.
-Authenticated sessions, secure Registry/OAuth connections, input parsers, and
-profile-scoped diagnostics remain unimplemented; their required controls and
-acceptance evidence live in [MVP.md](MVP.md). Do not treat schema acceptance as
-an end-to-end security guarantee. See [Compatibility](COMPATIBILITY.md).
+credential lifecycle, authenticated Kafka execution, and local diagnostics.
+Secure Registry/OAuth connections and input parsers remain unimplemented; their
+required controls and acceptance evidence live in [MVP.md](MVP.md). Do not treat
+schema acceptance as an end-to-end security guarantee. See
+[Compatibility](COMPATIBILITY.md).
 
 Kantrip reduces accidental disclosure, profile confusion, unsafe connection
 overrides, and abandoned secret-bearing artifacts. It does not make an
@@ -205,8 +204,8 @@ processes.
 
 Controls:
 
-- Keep shared secret resolution in memory; reject authenticated sessions until
-  their integration is complete.
+- Resolve one coherent profile generation under the mutation lock and retain
+  the resulting credentials only in memory and private session files.
 - Pass them only through a private generated file or a child-only environment
   variable documented by the selected client.
 - Execute children with argument arrays and never place secrets in arguments.
@@ -217,12 +216,9 @@ Controls:
 - Keep Registry credentials out of Kafka configuration unless a verified client
   requires one combined file.
 
-Residual risk: current execution also retains exported parent variables beyond
-its owned connection-variable set, including any exported sandbox credentials.
-Supported shell startup can change connection variables after initial injection;
-see [current environment behavior](USAGE.md#environment-precedence).
-The roadmap adds the missing scrubbing and precedence contract.
-The selected child, its descendants, shell startup files,
+Kantrip removes reserved Kafka/Registry namespaces, sandbox credential variables,
+and JVM option injection before launch, then restores owned values after
+supported shell startup. The selected child, its descendants, shell startup files,
 debuggers running as the same user, and sufficiently privileged processes can
 read the supplied material. Kantrip deliberately trusts this boundary and is
 not a sandbox.
@@ -239,8 +235,8 @@ Controls:
   arrays rather than constructed shell commands.
 - Reject bootstrap, config-path, TLS, authentication, Registry, and other
   connection overrides covered by each adapter contract.
-- Version-gate Java custom PEM trust and reject currently unsupported
-  authenticated execution before launch.
+- Version-gate Java custom PEM trust and client identities, and reject unsupported
+  adapter/mechanism combinations before launch.
 - Load normal interactive-shell startup files, then remove supported-client
   shadows and restore private shims at the front of `PATH`.
 - Reject nested Kantrip sessions.
@@ -262,8 +258,8 @@ Controls:
 - Keep Kafka certificate and hostname verification enabled.
 - Copy validated public CA material into the profile instead of depending on an
   externally mutable CA path during later sessions.
-- Reject authenticated sessions/ping and non-HTTP or credential-bearing Registry
-  configurations until their secure execution paths are implemented.
+- Reject non-HTTP or credential-bearing Registry configurations until their
+  secure execution paths are implemented.
 
 Residual risk: plaintext Kafka and HTTP Registry connections provide neither
 transport confidentiality nor server authentication. A trusted CA can still
@@ -311,13 +307,13 @@ Controls:
 - Bound and redact underlying exception messages before diagnostic output.
 - Never print resolved child environments or generated file contents.
 - Make color optional and semantically irrelevant.
-- Bound and sanitize metadata/Registry request failures, and keep quiet ping
+- Bound and sanitize connection/Registry request failures, and keep quiet ping
   silent for handled outcomes.
-- Treat the current ping as evidence of its exact metadata or Registry request.
-  Resource ACLs/roles can reject it; success is not general authorization and a
-  rejection is not necessarily an authentication failure.
-- Do not claim per-credential diagnostics or permission-independent identity
-  verification before the roadmap's probe/observation work is implemented.
+- Treat Kafka ping as evidence of an addressable configured/learned broker
+  reaching `UP` after its configured TLS/SASL exchange. Plaintext and
+  server-only TLS do not claim a client identity; no result claims authorization.
+- Treat Registry ping as evidence of its exact provider resource request; roles
+  can reject it independently of transport reachability.
 
 Residual risk: upstream clients control their own stdout and stderr. A trusted
 child can print credentials or sensitive Kafka records, and Kantrip cannot
@@ -354,7 +350,7 @@ can prevent operation.
 - Fail-closed capability checks favor confidentiality and integrity over broad
   client compatibility.
 - Native Kafka clients avoid a custom Kafka protocol stack; shared SASL/TLS
-  renderers do not themselves establish authenticated execution support.
+  renderers and a common capability table keep adapter decisions explicit.
 - Recoverable cross-store updates and lock-based crash cleanup address failure
   modes commonly omitted from local credential wrappers.
 - Ordered migration history and fail-closed checksum validation make schema

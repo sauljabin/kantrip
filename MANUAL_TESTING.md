@@ -51,17 +51,12 @@ sandbox names before reloading. Do not print `env`, `set`, the credential file,
 or complete client configs to verify this. Do not source credentials inside
 `kantrip exec`, or in shell startup files used by the session.
 
-Current `exec` gives its documented Kafka/config/session values precedence over
-exported values and removes inactive Registry URL/config variables. Other
-exported sandbox credentials are still inherited, including
-`KAFKA_SCRAM_PASSWORD`, `KAFKA_OAUTH_CLIENT_SECRET`, `APICURIO_CLIENT_SECRET`,
-`SCHEMA_REGISTRY_BASIC_PASSWORD`, and `KEYCLOAK_ADMIN_PASSWORD`. Assignment to an
-already exported name preserves its export attribute; a new assignment is not
-exported unless `set -a` is active. Interactive startup files can also change
-connection variables after the initial injection. Avoid changing connection
-variables in those startup files during these checks. See
-[the exact current precedence limits](USAGE.md#environment-precedence);
-the stronger contract and regression checks belong to MVP PR 1.
+`exec` removes the complete `KAFKA_*`, `SCHEMA_REGISTRY_*`, `APICURIO_*`, and
+`KANTRIP_SANDBOX_*` namespaces plus JVM option injection variables before it
+adds the selected profile values. Bash, Zsh, and Fish repeat this after startup
+files and restore `KCAT_CONFIG`, owned environment, and shims. The generated
+sandbox assignments all use the `KANTRIP_SANDBOX_*` prefix and therefore cannot
+become an ambient child credential source even when the parent used `set -a`.
 
 The laboratory exports PKCS12 mTLS properties for external clients. This does
 not imply that Kantrip can import PKCS12 or execute every authentication mode
@@ -95,8 +90,10 @@ print("Selected profile environment verified")'
 ```
 
 Expect child assertions and parent-shell assertions to pass, with no network
-request and no change to the outer environment. This checks only the currently
-owned variable set, not future secret scrubbing or post-startup shell repair.
+request and no change to the outer environment. Repeat with an exported
+`KANTRIP_SANDBOX_SYNTHETIC_SECRET`, `JAVA_TOOL_OPTIONS`, and startup-file
+override of `KCAT_CONFIG`; none may survive in the child after startup.
+Unrelated application variables must survive.
 
 ## Edit a profile without changing its identity
 
@@ -141,15 +138,24 @@ uv run --locked kantrip describe manual
   `schema.registry.url`.
 - The second edit removes the complete description and Registry fields, removes
   only the `owner` label, and preserves `environment`.
-- Running `kantrip edit manual` without any edit option fails without changing
-  the profile.
+- Running `kantrip edit manual` without options opens the field editor. Choosing
+  `done` immediately fails without changing the profile; replacing a field
+  commits one revision.
 
 ## Create a verified TLS profile
 
 ### Setup
 
-Initialize isolated state. The repository contains a synthetic public CA
-certificate for this configuration-only check.
+Initialize isolated state, then generate a disposable public CA in the manual
+temporary root:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$KANTRIP_MANUAL_ROOT/manual-ca.key" \
+  -out "$KANTRIP_MANUAL_ROOT/manual-ca.pem" \
+  -subj '/CN=Kantrip Manual Test CA' -days 1
+chmod 600 "$KANTRIP_MANUAL_ROOT/manual-ca.key" "$KANTRIP_MANUAL_ROOT/manual-ca.pem"
+```
 
 ### Exercise
 
@@ -157,7 +163,7 @@ certificate for this configuration-only check.
 uv run --locked kantrip add tls-manual \
   --bootstrap-servers kafka.example.com:9093 \
   --transport tls \
-  --ca-file tests/fixtures/kafka-ca.pem
+  --ca-file "$KANTRIP_MANUAL_ROOT/manual-ca.pem"
 uv run --locked kantrip describe tls-manual
 uv run --locked kantrip exec tls-manual -- sh -c \
   'grep -E "^(security.protocol|ssl.ca.location|ssl.endpoint.identification.algorithm|enable.ssl.certificate.verification)=" "$KAFKA_LIBRDKAFKA_CONFIG_FILE"; stat -f "%Lp" "$KANTRIP_SESSION_DIR/kafka-ca.pem" 2>/dev/null || stat -c "%a" "$KANTRIP_SESSION_DIR/kafka-ca.pem"'
@@ -169,8 +175,50 @@ uv run --locked kantrip exec tls-manual -- sh -c \
 - The generated librdkafka configuration uses `security.protocol=SSL`, enables
   hostname verification, and references the session-owned CA file.
 - The copied CA file has mode `0600` and disappears with the private session.
-- Replacing the fixture with malformed text causes `add` to fail without
+- Replacing the disposable CA with malformed text causes `add` to fail without
   creating the profile.
+
+## Exercise authenticated Kafka lifecycle
+
+Start the sandbox, then run its disposable authenticated acceptance matrix:
+
+```bash
+uv run --locked python -m scripts.auth_smoke
+```
+
+The matrix uses verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and
+mTLS. For each mechanism it creates the profile through the no-echo prompt,
+runs `ping`, exercises direct producer, consumer, admin and kcat operations,
+and invokes adapters through Bash, Zsh, and Fish. Its authorizer-enabled
+auxiliary broker also proves that a no-ACL principal passes Kafka `ping` while
+resource creation fails. It uses an isolated profile database and removes the
+temporary profiles and keyring entries on completion. Inspect process argv
+during a run when performing the release secrecy check; no credential should
+appear there or in terminal output.
+
+Rotate `kafka/password` with:
+
+```bash
+uv run --locked kantrip edit authenticated \
+  --replace-secret kafka/password
+uv run --locked kantrip describe authenticated --output json
+```
+
+The revision advances once, the safe state is `stored`, the reference and value
+are absent from output, and new sessions use only the replacement. Repeat mTLS
+with a matching encrypted key, then confirm a mismatched key is rejected before
+the profile changes. Remove the profile once with a declined confirmation and
+once with `--force`; only the latter removes the captured UUID/revision.
+
+During a live session, edit the same profile and run:
+
+```bash
+uv run --locked kantrip doctor authenticated --sessions --verbose
+```
+
+The session retains its captured revision and is reported as older than the
+current profile without being classified as corrupt. Removing and recreating
+the same display name must not associate the new UUID with the old session.
 
 ## Filter and describe profiles
 
@@ -479,9 +527,10 @@ rmdir "$XDG_RUNTIME_DIR/kantrip/sessions/unexpected"
 ## Start and inspect the Kubernetes sandbox
 
 The sandbox is a loopback-only Kind cluster. It runs one Strimzi Kafka cluster
-with several listeners, two baseline registries, authenticated endpoints for
-both registry products, Keycloak, and a cert-manager-issued local CA. It
-deliberately excludes Amazon MSK IAM and Confluent Cloud.
+with several listeners, an authorizer-enabled KRaft authentication fixture,
+two baseline registries, authenticated endpoints for both registry products,
+Keycloak, and a cert-manager-issued local CA. It deliberately excludes Amazon
+MSK IAM and Confluent Cloud.
 
 ### Setup
 
@@ -612,9 +661,10 @@ http GET \
 
 ## Exercise every Kafka listener
 
-One broker cluster exposes all of these connections. `PLAINTEXT` means no
-authentication and no encryption; it is not SASL/PLAIN. Password authentication
-uses SCRAM-SHA-512 over verified TLS.
+The Strimzi broker cluster exposes plaintext, TLS, SCRAM-SHA-512, mTLS, and
+OAuth connections. `PLAINTEXT` means no authentication and no encryption; it
+is not SASL/PLAIN. A disposable authorizer-enabled KRaft broker exposes PLAIN
+and SCRAM-SHA-256 over verified TLS on `localhost:9097` and `localhost:9098`.
 
 ### Setup
 
@@ -636,10 +686,11 @@ Run the current Kantrip adapter smoke test against the baseline listener:
 uv run --locked python -m scripts.smoke
 uv run --locked python -m scripts.smoke \
   --shell bash --shell zsh --shell fish
+uv run --locked python -m scripts.auth_smoke
 ```
 
-Exercise the server-authenticated TLS listener through today's Kantrip profile
-contract:
+Exercise plaintext, server-authenticated TLS, SCRAM-SHA-512, and mTLS through
+Kantrip:
 
 ```bash
 export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
@@ -653,13 +704,31 @@ uv run --locked kantrip add sandbox-tls \
   --ca-file "$KANTRIP_SANDBOX_CA"
 uv run --locked kantrip ping sandbox-tls
 uv run --locked kantrip exec sandbox-tls -- kafka-topics --list
+
+uv run --locked kantrip add sandbox-scram \
+  --bootstrap-servers localhost:9094 \
+  --transport tls \
+  --ca-file "$KANTRIP_SANDBOX_CA" \
+  --auth scram-sha-512 \
+  --username "$KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"
+uv run --locked kantrip ping sandbox-scram
+uv run --locked kantrip exec sandbox-scram -- kafka-topics --list
+
+uv run --locked kantrip add sandbox-mtls \
+  --bootstrap-servers localhost:9095 \
+  --transport tls \
+  --ca-file "$KANTRIP_SANDBOX_CA" \
+  --auth mtls \
+  --client-certificate-file "$KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE" \
+  --client-key-file "$KANTRIP_SANDBOX_KAFKA_MTLS_KEY"
+uv run --locked kantrip ping sandbox-mtls
+uv run --locked kantrip exec sandbox-mtls -- kafka-topics --list
 ```
 
-Kantrip's schema and shared renderers accept SCRAM-SHA-512 and mTLS, but the
-current CLI input, session adapters, and `ping` still accept only `plaintext`
-and unauthenticated verified `tls` profiles. The native Kafka client checks
-below remain infrastructure-level exercises until those integration steps land;
-OAuth is not yet represented by the profile schema.
+At the SCRAM password prompt, enter the generated
+`KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD` through a secure terminal paste without
+printing it. OAuth is not yet represented by the profile schema, so its native
+client check below remains infrastructure-only.
 
 Exercise the prepared authenticated listeners directly with the official Kafka
 CLI. These property files contain credentials and must remain private:
@@ -669,6 +738,10 @@ kafka-topics --bootstrap-server localhost:9094 \
   --command-config sandbox/.state/kafka-scram.properties --list
 kafka-topics --bootstrap-server localhost:9095 \
   --command-config sandbox/.state/kafka-mtls.properties --list
+kafka-topics --bootstrap-server localhost:9097 \
+  --command-config sandbox/.state/kafka-plain.properties --list
+kafka-topics --bootstrap-server localhost:9098 \
+  --command-config sandbox/.state/kafka-scram-256.properties --list
 KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8443/realms/kantrip/protocol/openid-connect/token' \
   kafka-topics --bootstrap-server localhost:9096 \
   --command-config sandbox/.state/kafka-oauth.properties --list
@@ -681,10 +754,11 @@ KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8
 - `sandbox-plaintext` reaches `localhost:9092`, and `sandbox-tls` reaches
   `localhost:9093` with the exported CA.
 - Kantrip verifies the sandbox CA and reaches the TLS listener on `9093`.
-- The native client reaches SCRAM-SHA-512 on `9094`, mTLS on `9095`, and OAuth
-  client credentials on `9096`.
-- Kantrip does not yet accept the three authenticated profiles; this section
-  validates the environment that will exercise those contracts when implemented.
+- Kantrip and the native client reach SCRAM-SHA-512 on `9094` and mTLS on
+  `9095`; the native OAuth client reaches `9096`; the authenticated smoke
+  reaches PLAIN on `9097` and SCRAM-SHA-256 on `9098`.
+- Kafka `ping` reports the authenticated exchange without requiring topic or
+  cluster ACLs; the subsequent topic command remains subject to broker ACLs.
 
 ## Exercise authenticated registries
 

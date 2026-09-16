@@ -114,8 +114,8 @@
   session. The schema accepts PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS only
   over verified TLS. Resolve their exact profile-owned references through
   `SecretStore`, validate mTLS certificate/key correspondence, construct Java
-  JAAS internally, and keep Java and librdkafka rendering independent. Until
-  authenticated adapters and ping land, reject those profiles before launch.
+  JAAS internally, and keep Java and librdkafka rendering independent. Resolve
+  one UUID/revision snapshot under the maintenance lock before launch.
 - Copy user-selected Kafka CA bundles into the profile as validated public PEM
   material. TLS always verifies certificates and hostnames. Materialize a
   custom CA only inside the private session and use canonical Java and
@@ -160,16 +160,15 @@
   Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
   environment variable until Kaskade implements that contract.
 - Bash, Zsh, and Fish sessions preserve startup files and history, neutralize
-  adapter shadows, and restore the private temporary shim path. Never install
-  persistent aliases.
+  adapter shadows, scrub reserved Kafka/Registry/sandbox and JVM injection
+  variables, and restore the owned environment and private shim path. Never
+  install persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
-- `kantrip ping` uses Confluent Kafka's `AdminClient` to request cluster metadata.
-  It checks `/subjects` for Confluent-compatible registries and
-  `/search/artifacts` for native Apicurio. These current resource checks can
-  depend on authorization; do not present them as authentication-only probes.
-  The replacement probe contract and its required evidence are in `MVP.md`.
-  All current checks use a bounded timeout and do not depend on an installed
-  external Kafka CLI.
+- `kantrip ping` polls Confluent Kafka's `AdminClient` statistics and error
+  callbacks for a configured/learned addressable broker reaching `UP`; never use
+  topic/group/schema/cluster resource APIs for Kafka success. It checks
+  `/subjects` for Confluent-compatible registries and `/search/artifacts` for
+  native Apicurio. Apply one bounded deadline and never overstate authorization.
 
 ## Sensitive Values and Output
 
@@ -189,7 +188,8 @@
 
 ## Tests, Scripts, and Sandbox
 
-- Tests and their fixtures live in `tests` and remain offline. Shared workflow
+- Tests live in `tests` and remain offline. Generate PKI in memory or in
+  test-owned temporary directories; never commit certificate/key fixtures. Shared workflow
   helpers belong in `scripts/__init__.py`; other script modules are executable
   workflows.
 - Keep Kind configuration, Kubernetes manifests, pinned versions, synthetic
@@ -202,8 +202,9 @@
   credential values from sandbox lifecycle commands.
 - `python -m sandbox up` reconciles the Kind laboratory; `status`, `credentials`,
   and `down` inspect or remove it. Keep plaintext, verified TLS, SCRAM-SHA-512,
-  mTLS, and OAuth listeners on one Strimzi cluster. SASL/PLAIN is not a sandbox
-  scenario; `plaintext` means no authentication and no encryption.
+  mTLS, and OAuth listeners on one Strimzi cluster. Keep PLAIN and
+  SCRAM-SHA-256 over TLS on the disposable authorizer-enabled KRaft fixture;
+  `plaintext` means no authentication and no encryption.
 - Kafka uses a disposable persistent volume so data survives broker pod restarts.
   Both Apicurio variants use KafkaSQL with isolated journal and snapshot topics,
   delete cleanup policy, and infinite retention so their data survives Apicurio
@@ -211,6 +212,9 @@
 - `python -m scripts.smoke` runs the adapter smoke workflow against the active
   plaintext listener on `localhost:9092`, with locally installed clients and
   optional shells. It is a pre-commit hook, not an offline or packaged E2E test.
+- `python -m scripts.auth_smoke` runs the real authenticated lifecycle,
+  producer/consumer/admin, Bash/Zsh/Fish, and no-ACL ping acceptance matrix.
+  It uses the native credential backend and must delete its temporary profiles.
 - `python -m scripts.verify_shell_contract` tests Bash, Zsh, and Fish through PTYs
   and fake clients. Keep assertions in Python and delete safe-metadata event logs
   with their temporary directory.

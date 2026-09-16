@@ -14,12 +14,12 @@ latest stable release unless the project explicitly announces otherwise.
 
 ## Scope of current support
 
-Use [Compatibility](COMPATIBILITY.md) to distinguish stored schema support from
-executable authentication and file-input support. The remaining security work
-and first-release verification requirements are tracked in [MVP.md](MVP.md).
-Current metadata/resource-list ping checks can depend on remote permissions;
-they do not establish general authorization or permission-independent identity
-verification.
+Use [Compatibility](COMPATIBILITY.md) to distinguish executable authentication
+from file-input and Registry support. The remaining security work and
+first-release verification requirements are tracked in [MVP.md](MVP.md).
+Kafka ping observes a completed broker connection without resource APIs; its
+transport/authentication proof does not establish application authorization.
+Current Registry resource-list probes can still depend on remote permissions.
 
 ## Reporting a vulnerability
 
