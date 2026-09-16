@@ -70,6 +70,11 @@ external CLI and defaults to a five-second timeout, configurable with
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
 
+These current probes can depend on resource permissions. A failure can be an
+authorization rejection even when the service is reachable. Success does not
+prove topic, group, schema, or administrative access. The future connection/auth
+probe is specified separately in [MVP.md](MVP.md); it is not implemented yet.
+
 For scripts that need only the exit status, suppress all output with:
 
 ```bash
@@ -589,6 +594,37 @@ Kantrip exposes settings only to supervised children. Kafka has no
 cross-language environment standard, so applications must opt into the generic
 `KAFKA_*` values below; `KANTRIP_*` is reserved for session metadata. Adapters
 may instead pass generated client files directly.
+
+### Precedence and inherited sandbox variables
+
+For a direct child, Kantrip copies the exported parent environment, overwrites
+its documented Kafka/config/session variables with the selected profile, then
+removes both providers' Registry URL/config variables and sets only the chosen
+provider's pair. Without a Registry, neither pair is present. The parent shell
+and any sourced file remain unchanged.
+
+This is not a purge of every `KAFKA_*` or credential variable. Currently,
+`KAFKA_SCRAM_PASSWORD`, `KAFKA_OAUTH_CLIENT_SECRET`, `APICURIO_CLIENT_SECRET`,
+`SCHEMA_REGISTRY_BASIC_PASSWORD`, and `KEYCLOAK_ADMIN_PASSWORD`, for example,
+remain inherited if exported. They are not profile inputs and cannot supply a
+missing stored credential. A custom child that independently reads them can
+still use them, so no universal precedence over custom applications is promised.
+
+`sandbox/.state/credentials.env` contains shell assignments, not `export`
+commands. `. sandbox/.state/credentials.env` defines shell variables; new names
+are not exported unless `set -a` is enabled. Names already marked for export
+remain exported when assigned again. `set +a` stops automatic export of later
+assignments; it does not unexport existing variables. The manual sandbox checks
+only need parent-shell expansion of public paths/identifiers and already use
+private native-client files for credentials, so they do not need blanket export.
+
+Load this file before `kantrip exec`, never inside its subshell. Supported
+interactive shells run user startup files after receiving the initial child
+environment. Current startup handling restores adapter shims/PATH, but does not
+restore every connection variable changed by `.bashrc`, `.zshrc`, or Fish
+configuration. Avoid changing those variables in startup files during current
+manual checks. The stronger environment precedence/scrubbing contract is pending
+in [MVP PR 1](MVP.md#16-give-the-selected-profile-precedence-over-inherited-connection-state).
 
 ### Kafka variables
 

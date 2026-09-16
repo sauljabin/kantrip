@@ -3,6 +3,10 @@
 These checks complement the offline test suite and the automated sandbox smoke
 workflow. Each scenario describes how to create a meaningful initial state, the
 action to take, and the observable result. Run commands from the repository root.
+These scenarios describe current behavior. The pending
+[first-release manual QA checklist](MVP.md#manual-qa--first-release-checklist)
+is kept with the roadmap until its commands are implemented; move those checks
+here as each owning PR lands. Human QA supplements both offline and smoke tests.
 
 ## Isolated test state
 
@@ -24,6 +28,65 @@ the scenarios are complete:
 ```bash
 rm -rf "$KANTRIP_MANUAL_ROOT"
 ```
+
+## Source sandbox variables without blanket export
+
+The generated `sandbox/.state/credentials.env` contains private laboratory
+values and shell assignments. These checks use public paths/identifiers in the
+parent shell and private client files for authentication. They do not require
+exporting every sandbox secret to every subsequently launched child.
+
+Use a dedicated parent shell, disable automatic export, and source the file
+before invoking Kantrip:
+
+```bash
+set +a
+. sandbox/.state/credentials.env
+```
+
+`set +a` does not remove export attributes already present. If you previously
+used `set -a` or `export` for these names, close that laboratory shell and start
+from a parent that has not exported them, or explicitly unexport/unset the
+sandbox names before reloading. Do not print `env`, `set`, the credential file,
+or complete client configs to verify this. Do not source credentials inside
+`kantrip exec`, or in shell startup files used by the session.
+
+Current `exec` gives its documented Kafka/config/session values precedence over
+exported values and removes inactive Registry URL/config variables. Other
+exported sandbox credentials are still inherited. Interactive startup files can
+also change connection variables after the initial injection. See
+[the exact current precedence limits](USAGE.md#precedence-and-inherited-sandbox-variables);
+the stronger contract and regression checks belong to MVP PR 1.
+
+### Check current direct-child precedence without a broker
+
+Create an isolated plaintext profile, then use synthetic conflicting values in
+a disposable subshell. No real credential is needed or printed:
+
+```bash
+uv run --locked kantrip add env-manual --bootstrap-servers localhost:9092
+(
+  export KAFKA_BOOTSTRAP_SERVERS=unselected.invalid:19092
+  export KAFKA_SECURITY_PROTOCOL=SASL_SSL
+  export KCAT_CONFIG=/synthetic/unselected.conf
+  export SCHEMA_REGISTRY_URL=http://unselected.invalid
+  export APICURIO_REGISTRY_URL=http://unselected.invalid
+  uv run --locked kantrip exec env-manual -- python -c '
+import os
+assert os.environ["KAFKA_BOOTSTRAP_SERVERS"] == "localhost:9092"
+assert os.environ["KAFKA_SECURITY_PROTOCOL"] == "PLAINTEXT"
+assert os.environ["KCAT_CONFIG"] != "/synthetic/unselected.conf"
+assert "SCHEMA_REGISTRY_URL" not in os.environ
+assert "APICURIO_REGISTRY_URL" not in os.environ
+print("Selected profile environment verified")'
+  test "$KAFKA_BOOTSTRAP_SERVERS" = unselected.invalid:19092
+  test "$KCAT_CONFIG" = /synthetic/unselected.conf
+)
+```
+
+Expect child assertions and parent-shell assertions to pass, with no network
+request and no change to the outer environment. This checks only the currently
+owned variable set, not future secret scrubbing or post-startup shell repair.
 
 ## Edit a profile without changing its identity
 
@@ -423,12 +486,12 @@ uv run --locked python -m sandbox credentials
 
 The last command lists private files and variable names, never values. Generated
 credentials and client configurations live below ignored `sandbox/.state` with
-private permissions. Load their paths and identifiers into the current shell:
+private permissions. Load their paths and identifiers as shell variables,
+following [the source-environment precautions](#source-sandbox-variables-without-blanket-export):
 
 ```bash
-set -a
-. sandbox/.state/credentials.env
 set +a
+. sandbox/.state/credentials.env
 ```
 
 ### Exercise
@@ -549,9 +612,8 @@ Start the Kubernetes sandbox and load the generated environment in this shell.
 Repeat the command here deliberately so this section can be run independently:
 
 ```bash
-set -a
-. sandbox/.state/credentials.env
 set +a
+. sandbox/.state/credentials.env
 ```
 
 The lifecycle tool has already written private Java client properties.
@@ -627,9 +689,8 @@ credentials and tokens do not appear in command arguments.
 Start the sandbox and load the generated environment in this shell:
 
 ```bash
-set -a
-. sandbox/.state/credentials.env
 set +a
+. sandbox/.state/credentials.env
 ```
 
 Create profiles for the two baseline Registry endpoints. These profiles contain
