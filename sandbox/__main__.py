@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -85,7 +86,10 @@ def up() -> None:
         _apply_manifest("21-kafka-users.yaml", versions)
         _wait_for_kafka()
         _apply_manifest("23-auth-kafka.yaml", versions)
-        _wait_for_deployment("auth-kafka", timeout="5m")
+        _wait_for_auth_kafka()
+        _delete_job("auth-kafka-users")
+        _apply_manifest("24-auth-kafka-users.yaml", versions)
+        _wait_for_job("auth-kafka-users", timeout="5m")
         _apply_manifest("22-apicurio-topics.yaml", versions)
         _wait_for_apicurio_topics()
         _apply_manifest("30-registries.yaml", versions)
@@ -302,6 +306,14 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
         f"{credentials['KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME']}: "
         f"{credentials['KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD']},developer\n"
     )
+    plain_jaas = (
+        "plain-jaas-config="
+        "org.apache.kafka.common.security.plain.PlainLoginModule required "
+        f"user_{credentials['KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME']}="
+        f'"{credentials["KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD"]}" '
+        f"user_{credentials['KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME']}="
+        f'"{credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"]}";\n'
+    )
     documents = (
         _secret(
             "keycloak-admin",
@@ -340,6 +352,7 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
                 "scram-256-password": credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD"],
                 "no-acl-username": credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME"],
                 "no-acl-password": credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"],
+                "plain-jaas.properties": plain_jaas,
             },
         ),
     )
@@ -352,7 +365,7 @@ def _apply_manifest(name: str, versions: Mapping[str, str]) -> None:
     content = path.read_text(encoding="utf-8")
     for key, value in versions.items():
         content = content.replace(f"${{{key}}}", value)
-    unresolved = sorted(part.split("}", 1)[0] for part in content.split("${")[1:])
+    unresolved = sorted(set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)\}", content)))
     if unresolved:
         raise SandboxFailure(f"unresolved version placeholders in {path}: {', '.join(unresolved)}")
     _run(("kubectl", "--context", KUBECTL_CONTEXT, "apply", "-f", "-"), input_text=content)
@@ -397,6 +410,21 @@ def _wait_for_kafka() -> None:
     _run((*base, "wait", "kafka/kantrip", "--for=condition=Ready", "--timeout=10m"))
     _run((*base, "wait", "kafkauser/kantrip-scram", "--for=condition=Ready", "--timeout=5m"))
     _run((*base, "wait", "kafkauser/kantrip-mtls", "--for=condition=Ready", "--timeout=5m"))
+
+
+def _wait_for_auth_kafka() -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    _run((*base, "wait", "kafka/auth-kantrip", "--for=condition=Ready", "--timeout=10m"))
+
+
+def _delete_job(name: str) -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    _run((*base, "delete", f"job/{name}", "--ignore-not-found"))
+
+
+def _wait_for_job(name: str, *, timeout: str) -> None:
+    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
+    _run((*base, "wait", f"job/{name}", "--for=condition=Complete", "--timeout", timeout))
 
 
 def _wait_for_apicurio_topics() -> None:

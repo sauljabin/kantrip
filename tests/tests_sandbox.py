@@ -53,22 +53,43 @@ class TestSandbox(unittest.TestCase):
             {mapping["hostPort"] for mapping in mappings},
         )
 
-    def test_auxiliary_kafka_covers_plain_scram_256_and_no_acl_ping(self) -> None:
-        deployment = resource("23-auth-kafka.yaml", "Deployment", "auth-kafka")
-        container = deployment["spec"]["template"]["spec"]["containers"][0]
-        script = container["args"][0]
+    def test_operator_managed_auth_kafka_covers_plain_scram_256_and_no_acl(self) -> None:
+        resources = documents("23-auth-kafka.yaml")
+        self.assertNotIn("Deployment", {item["kind"] for item in resources})
+        kafka = resource("23-auth-kafka.yaml", "Kafka", "auth-kantrip")
+        listeners = {listener["name"]: listener for listener in kafka["spec"]["kafka"]["listeners"]}
+        self.assertEqual({"provision", "plain", "scram256"}, set(listeners))
+        self.assertEqual(
+            "PLAIN",
+            listeners["plain"]["authentication"]["listenerConfig"]["sasl.enabled.mechanisms"],
+        )
+        self.assertEqual(
+            "SCRAM-SHA-256",
+            listeners["scram256"]["authentication"]["listenerConfig"]["sasl.enabled.mechanisms"],
+        )
+        self.assertEqual("simple", kafka["spec"]["kafka"]["authorization"]["type"])
+        super_users = set(kafka["spec"]["kafka"]["authorization"]["superUsers"])
+        self.assertEqual(
+            {"ANONYMOUS", "kantrip-plain", "kantrip-scram-256"},
+            super_users,
+        )
+        self.assertNotIn("kantrip-no-acl", " ".join(super_users))
+        self.assertEqual(
+            "org.apache.kafka.common.config.provider.FileConfigProvider",
+            kafka["spec"]["kafka"]["config"]["config.providers.file.class"],
+        )
 
-        self.assertIn("SASL_SSL", script)
-        self.assertIn("PLAIN", script)
+        pool = resource("23-auth-kafka.yaml", "KafkaNodePool", "auth-dual-role")
+        self.assertEqual("persistent-claim", pool["spec"]["storage"]["type"])
+        self.assertEqual("1Gi", pool["spec"]["storage"]["size"])
+        self.assertTrue(pool["spec"]["storage"]["deleteClaim"])
+
+        job = resource("24-auth-kafka-users.yaml", "Job", "auth-kafka-users")
+        script = job["spec"]["template"]["spec"]["containers"][0]["args"][0]
         self.assertIn("SCRAM-SHA-256", script)
-        self.assertIn("StandardAuthorizer", script)
-        self.assertIn("allow.everyone.if.no.acl.found=false", script)
-        super_users = next(line for line in script.splitlines() if line.startswith("super.users="))
-        self.assertIn("User:$PLAIN_USERNAME", super_users)
-        self.assertIn("User:$SCRAM_USERNAME", super_users)
-        self.assertNotIn("NO_ACL", super_users)
+        self.assertIn("auth-kantrip-kafka-bootstrap:9092", script)
 
-    def test_one_kafka_cluster_exposes_the_supported_listener_matrix(self) -> None:
+    def test_primary_kafka_cluster_exposes_the_supported_listener_matrix(self) -> None:
         kafka = resource("20-kafka.yaml", "Kafka", "kantrip")
         listeners = kafka["spec"]["kafka"]["listeners"]
         by_name = {listener["name"]: listener for listener in listeners}

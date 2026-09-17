@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: auth-kafka-users
+  namespace: kantrip-sandbox
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: provision
+          image: quay.io/strimzi/kafka:${STRIMZI_VERSION}-kafka-${KAFKA_VERSION}
+          command:
+            - /bin/bash
+            - -ceu
+          args:
+            - |
+              /opt/kafka/bin/kafka-configs.sh \
+                --bootstrap-server auth-kantrip-kafka-bootstrap:9092 \
+                --alter --entity-type users --entity-name "$SCRAM_USERNAME" \
+                --add-config "SCRAM-SHA-256=[password=$SCRAM_PASSWORD]"
+          env:
+            - name: SCRAM_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: auth-kafka-users
+                  key: scram-256-username
+            - name: SCRAM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: auth-kafka-users
+                  key: scram-256-password

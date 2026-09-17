@@ -49,9 +49,12 @@ SDIST_REQUIRED = {
     "kantrip/secret_store.py",
     "pyproject.toml",
     "sandbox/kubernetes/23-auth-kafka.yaml",
+    "sandbox/kubernetes/24-auth-kafka-users.yaml",
     "schemas/profile.schema.json",
     "scripts/auth_smoke.py",
     "tests/pki.py",
+    "tests/mutation_worker.py",
+    "tests/tests_mutation_crash.py",
     "tests/tests_pki.py",
 }
 _FORBIDDEN_TEST_CREDENTIAL_SUFFIXES = (".crt", ".key", ".p12", ".pem", ".pfx")
