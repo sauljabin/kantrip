@@ -180,7 +180,9 @@ output.
 The sandbox is a local Kind laboratory with two operator-managed Strimzi Kafka
 clusters, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
 Install Docker, Kind, kubectl, and Helm before using it. Component versions are
-pinned in `sandbox/versions.env`.
+pinned in `sandbox/versions.env`. The topology decision, trust boundary, and
+non-production provisioning limits are canonical in
+[Sandbox verification topology](ARCHITECTURE.md#sandbox-verification-topology).
 
 Create, inspect, and delete the environment with:
 
@@ -227,11 +229,14 @@ that those profile fields are already implemented. The primary Strimzi cluster's
 `plaintext` listener means no authentication and no encryption. A separate
 Strimzi cluster exposes PLAIN and SCRAM-SHA-256 over verified TLS with
 `StandardAuthorizer`; its no-ACL principal proves that `kantrip ping` does not
-depend on Kafka resource authorization. Isolation avoids changing the ACL and
-principal semantics of the primary cluster's plaintext, TLS, SCRAM-SHA-512,
-mTLS, OAuth, and Registry listeners. PLAIN JAAS is read from a mounted Secret;
-an idempotent Kubernetes Job provisions SCRAM-SHA-256 through the internal
-listener without putting credentials in host arguments or manifests.
+depend on Kafka resource authorization. PLAIN JAAS is read from a mounted
+Secret; an idempotent Kubernetes Job provisions SCRAM-SHA-256 through the
+internal listener without putting credentials in host arguments or manifests.
+That listener is intentionally unauthenticated plaintext laboratory access,
+with `ANONYMOUS` privileged for provisioning, and is not restricted by a
+`NetworkPolicy`. Do not present it as a production pattern or authentication
+test. The no-ACL proof uses the authenticated non-superuser principal through
+the external TLS/PLAIN listener.
 
 Both Kafka clusters use disposable persistent volumes, so broker data and the
 SCRAM-SHA-256 credential survive pod restarts but are removed with the Kind

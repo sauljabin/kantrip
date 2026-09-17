@@ -174,8 +174,10 @@
 - `kantrip ping` polls Confluent Kafka's `AdminClient` statistics and error
   callbacks for a configured/learned addressable broker reaching `UP`; never use
   topic/group/schema/cluster resource APIs for Kafka success. It checks
-  `/subjects` for Confluent-compatible registries and `/search/artifacts` for
-  native Apicurio. Apply one bounded deadline and never overstate authorization.
+  `/schemas/types` for Confluent-compatible registries and `/system/info` for
+  native Apicurio. These current unauthenticated probes prove provider-shaped
+  connectivity only. Apply one bounded deadline and never overstate
+  authentication or authorization.
 
 ## Sensitive Values and Output
 

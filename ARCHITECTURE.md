@@ -372,6 +372,35 @@ warnings, and unsafe state as errors. Runtime paths appear only with
 Nested sessions and processes that escape through `setsid` or daemonization are
 unsupported. Kantrip exposes no persistent background-session API.
 
+## Sandbox verification topology
+
+The local laboratory uses one Kind cluster with two operator-managed Strimzi
+Kafka clusters, each backed by a disposable persistent volume. The primary
+Kafka cluster retains the existing plaintext, verified TLS, SCRAM-SHA-512,
+mTLS, OAuth, and Registry-service listeners. A separate authentication cluster
+contains the PLAIN and SCRAM-SHA-256 over TLS fixtures with
+`StandardAuthorizer`. Keeping these brokers separate avoids changing the
+authorization, principal, and Registry-service assumptions of the primary
+fixture merely to exercise the two additional mechanisms; it is a test-topology
+boundary, not Kubernetes network isolation.
+
+PLAIN identities come from a private runtime-generated Secret mounted through
+Kafka's file configuration provider. An idempotent in-cluster Job provisions
+the SCRAM-SHA-256 identity. Its internal provisioning listener deliberately has
+neither TLS nor authentication, and `ANONYMOUS` is a superuser on this test
+cluster so that the Job can alter the SCRAM credential. No `NetworkPolicy`
+restricts that listener. This is trusted laboratory control-plane access, not a
+production deployment pattern and not authentication evidence. The no-ACL
+check instead connects through the external TLS/PLAIN listener as the
+authenticated, non-superuser `kantrip-no-acl` principal; ping must succeed
+while a protected Kafka operation remains denied.
+
+Both Kafka clusters retain state across broker pod restarts through their PVCs
+and lose it when the Kind cluster is destroyed. The authenticated smoke matrix
+was rerun successfully after deleting and recreating the authentication broker
+pod without rerunning the provisioning Job, demonstrating that its
+SCRAM-SHA-256 credential survives the tested restart boundary.
+
 ## Diagnostics and output
 
 `doctor` checks global or profile-scoped migration/profile state, exact

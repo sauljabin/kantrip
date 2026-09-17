@@ -189,13 +189,15 @@ and librdkafka session alive across token expiry and demonstrate successful
 refresh and later revocation failure. Repeat native Registry refresh for each
 advertised client. A successful short ping is not refresh evidence.
 
-### 2.3 Registry ping without resource-list permission dependencies
+### 2.3 Registry authentication probes with minimum authorization
 
-**Finding:** current `/subjects` can require Confluent `GLOBAL_READ`, and native
-Apicurio resource searches depend on configured roles. Replacing them with a
-public health endpoint would prove availability, not authentication. Sources:
+**Finding:** current unauthenticated profiles use Confluent-compatible
+`/schemas/types` and native Apicurio `/system/info`. These non-resource metadata
+responses prove provider-shaped connectivity only; they do not prove that a
+secured Registry accepted the configured identity. Subject, artifact, config,
+and mode operations can require provider- and deployment-specific roles. Sources:
 [Confluent operation authorization](https://docs.confluent.io/platform/current/confluent-security-plugins/schema-registry/authorization/index.html)
-and [Apicurio security](https://www.apicur.io/registry/docs/apicurio-registry/3.0.x/getting-started/assembly-configuring-registry-security.html).
+and [Apicurio security](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-registry-security.html).
 
 **Decision:** introduce explicit provider probe strategies in `ping.py` using
 `ssl.SSLContext`, safe Authorization headers, and the common deadline. First
@@ -207,12 +209,23 @@ These are endpoint candidates with version/deployment verification gates, not
 a claim that all servers protect them identically. Apicurio ccompat remains a
 separate compatibility case; do not rewrite its base URL into native mode.
 
-For each pinned server/security deployment, prove a valid identity without
-resource roles succeeds and invalid credentials fail at the selected endpoint.
-Validate response shape/content type, and for `/users/me` require non-anonymous
-identity when auth is configured. Do not accept an HTML login page as success.
-A credentialed 200 from a public endpoint or a token issued by an IdP alone is
+For each pinned server/security deployment, prefer a probe where a valid
+identity without resource roles succeeds and invalid credentials fail. Validate
+response shape/content type, and for `/users/me` require non-anonymous identity
+when auth is configured. Do not accept an HTML login page as success. A
+credentialed 200 from a public endpoint or a token issued by an IdP alone is
 insufficient evidence that the Registry accepted the credentials.
+
+When a provider/version/security configuration cannot prove authentication
+without resource authorization, use one reviewed, non-mutating protected
+operation with the minimum permission needed for that exact deployment. The
+choice may be a subject, artifact, config, mode, or another provider operation
+only after its authorization and response contract are verified; none is a
+universal fallback. Do not grant administrative or broad read roles merely for
+diagnostics. `USAGE.md` must then state the exact provider/version/configuration,
+operation, and minimum role or permission required for ping. This future
+documentation lands with the supported authenticated Registry feature; current
+`USAGE.md` continues to describe only unauthenticated metadata connectivity.
 
 Keep a reviewed provider/version probe contract recording whether the endpoint
 authenticates, needs a role, or is public. Do not infer this from a product name
@@ -223,19 +236,20 @@ authentication gate. An anonymous 200 does not. Do not submit deliberately wrong
 passwords during normal ping, or add a user-controlled arbitrary probe URL.
 For mTLS use verified handshake evidence from the actual configured connection;
 never claim that optional client certificates were required by the server.
-If authentication cannot be established for a deployment, report `transport verified; authentication unverified` and return
-`1`. For `auth: none`, a validated provider response suffices for connectivity
-but says nothing about resource access. Never downgrade an authenticated
-profile to this result.
+If authentication cannot be established for a deployment, report `transport
+verified; authentication unverified` and return `1`. For `auth: none`, a
+validated provider response suffices for connectivity but says nothing about
+resource access. Never downgrade an authenticated profile to this result.
 
-An HTTP 401 is authentication failure. An HTTP 403 proves reachability; label
-it authenticated-but-denied only with a verified server contract guaranteeing
-that ordering. Such independent authentication evidence can satisfy ping even
-when resource authorization is denied. Otherwise it is inconclusive, not a
-bad-password claim or a success. Do not grant roles just to make ping green,
-and do not fall back to `/subjects`, `/search/artifacts`, `/config`, or `/mode`.
-Document that arbitrary proxies/authorization filters can make a universally
-role-independent authentication check impossible.
+An HTTP 401 is authentication failure. A 403 can identify insufficient
+authorization only when the pinned server contract establishes that ordering;
+it is still a failed ping, not authentication success. Any ambiguous 401/403 is
+inconclusive and must never be accepted as success or mislabeled as a bad
+password. For a minimum-permission protected probe, success requires the
+expected validated response, normally 200, from an identity granted exactly
+the documented permission. Document that arbitrary proxies and authorization
+filters can make a universally role-independent authentication check
+impossible.
 
 Disable redirects for authenticated and token requests; never forward
 Authorization to another origin or downgrade HTTPS. Ignore inherited HTTP
@@ -244,11 +258,16 @@ Bound reads and retries as well as connection time. Preserve partial service
 results: Kafka success plus Registry failure is an overall failure with both
 outcomes visible in normal mode. Quiet mode remains fully silent.
 
-**Acceptance:** real no-role identities, wrong credentials, public endpoint,
+**Acceptance:** test a real valid identity without a resource role wherever the
+selected endpoint supports it, and an identity with only the documented minimum
+permission wherever a protected fallback is required. Also test the same valid
+identity without that required permission, wrong credentials, public endpoint,
 401, verified and ambiguous 403, unsupported endpoint, invalid response,
-redirects, revoked/expired tokens, custom CA, and server-required mTLS. Current
-sandbox Registry role filters are not evidence of a role-free probe. Add
-separate test configurations and record any remaining deployment limitation.
+redirects, revoked/expired tokens, custom CA, and server-required mTLS. Assert
+distinct connectivity, authentication, and authorization outcomes; an
+ambiguous 401/403 never passes. Current sandbox Registry role filters are not
+evidence of a role-free probe. Add separate provider/version/security
+configurations and record every remaining deployment limitation.
 
 ## PR 3 — Properties and Strimzi input sources
 
