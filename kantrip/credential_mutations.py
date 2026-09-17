@@ -49,6 +49,10 @@ class StagedSecret:
 
 ProfileSwitch = Callable[[Mapping[str, str]], None]
 ProfileRemoval = Callable[[], None]
+OutcomeInspection = Callable[
+    [tuple[CleanupRecord, ...], tuple[CleanupRecord, ...]],
+    bool | None,
+]
 
 
 def update_profile_revision(
@@ -137,6 +141,7 @@ def commit_secret_replacements(
     switch_profile: ProfileSwitch,
     *,
     retire_references: Iterable[str] = (),
+    inspect_outcome: OutcomeInspection | None = None,
 ) -> ReconciliationResult:
     """Switch a profile to staged references and retire superseded values."""
     committed = False
@@ -162,23 +167,38 @@ def commit_secret_replacements(
         switch_profile(references)
         for item in staged:
             _remove_cleanup_record(connection, item.cleanup)
-        for reference in retired:
-            queue_secret_cleanup(connection, reference)
+        retired_cleanup = tuple(
+            queue_secret_cleanup(connection, reference) for reference in retired
+        )
         try:
             connection.execute("COMMIT")
         except BaseException as error:
-            if connection.in_transaction and _rollback(connection):
-                raise
+            _rollback(connection)
+            outcome = _inspect_commit_outcome(inspect_outcome, staged, retired_cleanup)
             raise CredentialMutationError(
-                "credential mutation commit outcome could not be established",
-                committed=None,
+                (
+                    "credential mutation committed but its acknowledgement was lost"
+                    if outcome is True
+                    else (
+                        "credential mutation was not committed"
+                        if outcome is False
+                        else "credential mutation commit outcome could not be established"
+                    )
+                ),
+                committed=outcome,
             ) from error
         committed = True
     except BaseException:
         _rollback(connection)
         raise
     try:
-        return reconcile_secret_cleanup(connection, store)
+        if not retired_cleanup:
+            return ReconciliationResult(0, 0, 0)
+        return reconcile_secret_cleanup(
+            connection,
+            store,
+            record_ids=(record.record_id for record in retired_cleanup),
+        )
     except BaseException as error:
         if committed:
             raise CredentialMutationError(
@@ -194,6 +214,8 @@ def commit_profile_removal(
     profile_id: str,
     references: Iterable[str],
     remove_profile: ProfileRemoval,
+    *,
+    inspect_outcome: OutcomeInspection | None = None,
 ) -> ReconciliationResult:
     """Remove a profile transactionally before deleting its exact credentials."""
     validated = _validated_unique_references(references, profile_id=profile_id)
@@ -201,23 +223,38 @@ def commit_profile_removal(
     try:
         connection.execute("BEGIN IMMEDIATE")
         remove_profile()
-        for reference in validated:
-            queue_secret_cleanup(connection, reference)
+        removal_cleanup = tuple(
+            queue_secret_cleanup(connection, reference) for reference in validated
+        )
         try:
             connection.execute("COMMIT")
         except BaseException as error:
-            if connection.in_transaction and _rollback(connection):
-                raise
+            _rollback(connection)
+            outcome = _inspect_commit_outcome(inspect_outcome, (), removal_cleanup)
             raise CredentialMutationError(
-                "profile removal commit outcome could not be established",
-                committed=None,
+                (
+                    "profile removal committed but its acknowledgement was lost"
+                    if outcome is True
+                    else (
+                        "profile removal was not committed"
+                        if outcome is False
+                        else "profile removal commit outcome could not be established"
+                    )
+                ),
+                committed=outcome,
             ) from error
         committed = True
     except BaseException:
         _rollback(connection)
         raise
     try:
-        return reconcile_secret_cleanup(connection, store)
+        if not removal_cleanup:
+            return ReconciliationResult(0, 0, 0)
+        return reconcile_secret_cleanup(
+            connection,
+            store,
+            record_ids=(record.record_id for record in removal_cleanup),
+        )
     except BaseException as error:
         if committed:
             raise CredentialMutationError(
@@ -246,6 +283,20 @@ def _validate_replacements(
         fields.add(replacement.field)
         validated.append(replacement)
     return tuple(validated)
+
+
+def _inspect_commit_outcome(
+    inspection: OutcomeInspection | None,
+    removed_cleanup: Sequence[StagedSecret],
+    added_cleanup: tuple[CleanupRecord, ...],
+) -> bool | None:
+    if inspection is None:
+        return None
+    removed = tuple(item.cleanup for item in removed_cleanup)
+    try:
+        return inspection(removed, added_cleanup)
+    except (OSError, RuntimeError, sqlite3.Error, ValueError):
+        return None
 
 
 def _validated_unique_references(

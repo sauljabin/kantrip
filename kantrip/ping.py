@@ -52,6 +52,7 @@ class RegistryPingResult:
 
     provider: RegistryProvider
     transport: str
+    proof: str
 
 
 @dataclass(frozen=True)
@@ -175,43 +176,45 @@ def _registry_connectivity(
 ) -> RegistryPingResult:
     timeout = _remaining(deadline)
     if connection.provider == "apicurio":
-        _apicurio_artifact_count(connection.url, timeout)
+        _apicurio_system_info(connection.url, timeout)
     else:
-        _confluent_subject_count(connection.url, timeout)
-    return RegistryPingResult(connection.provider, "plaintext reachable")
+        _confluent_schema_types(connection.url, timeout)
+    return RegistryPingResult(
+        connection.provider,
+        "plaintext reachable",
+        "provider metadata validated",
+    )
 
 
-def _confluent_subject_count(url: str, timeout: float) -> int:
+def _confluent_schema_types(url: str, timeout: float) -> tuple[str, ...]:
     body = _registry_json(
-        f"{url.rstrip('/')}/subjects",
+        f"{url.rstrip('/')}/schemas/types",
         timeout,
         "Confluent Schema Registry",
         "application/vnd.schemaregistry.v1+json",
     )
-    if not isinstance(body, list) or not all(isinstance(subject, str) for subject in body):
-        raise PingError("the Confluent Schema Registry returned an invalid subjects response")
-    return len(body)
+    if (
+        not isinstance(body, list)
+        or not body
+        or not all(isinstance(schema_type, str) and schema_type for schema_type in body)
+    ):
+        raise PingError("the Confluent Schema Registry returned invalid schema-type metadata")
+    return tuple(body)
 
 
-def _apicurio_artifact_count(url: str, timeout: float) -> int:
+def _apicurio_system_info(url: str, timeout: float) -> str:
     body = _registry_json(
-        f"{url.rstrip('/')}/search/artifacts?limit=1",
+        f"{url.rstrip('/')}/system/info",
         timeout,
         "Apicurio Registry",
         "application/json",
     )
     if not isinstance(body, dict):
-        raise PingError("the Apicurio Registry returned an invalid artifact search response")
-    count = body.get("count")
-    artifacts = body.get("artifacts")
-    if (
-        not isinstance(count, int)
-        or isinstance(count, bool)
-        or count < 0
-        or not isinstance(artifacts, list)
-    ):
-        raise PingError("the Apicurio Registry returned an invalid artifact search response")
-    return count
+        raise PingError("the Apicurio Registry returned invalid system metadata")
+    version = body.get("version")
+    if not isinstance(version, str) or not version:
+        raise PingError("the Apicurio Registry returned invalid system metadata")
+    return version
 
 
 def _registry_json(url: str, timeout: float, name: str, accept: str) -> object:

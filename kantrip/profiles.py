@@ -12,11 +12,12 @@ import stat
 import sys
 import time
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager, nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
@@ -92,6 +93,39 @@ class ProfileStoreError(ValueError):
     def __init__(self, message: str, *, exit_code: int = 1) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+class _MutationOutcome(Enum):
+    """Durable outcome of the profile-row transaction."""
+
+    NOT_COMMITTED = "not-committed"
+    COMMITTED = "committed"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class _MutationTracker:
+    operation: str
+    outcome: _MutationOutcome = _MutationOutcome.NOT_COMMITTED
+
+    def mark_committed(self) -> None:
+        self.outcome = _MutationOutcome.COMMITTED
+
+
+@dataclass(frozen=True)
+class _ProfileRowState:
+    name: str
+    profile_id: str
+    revision: int
+    document: str
+
+
+@dataclass(frozen=True)
+class _MutationEvidence:
+    before: _ProfileRowState | None
+    after: _ProfileRowState | None
+    removed_cleanup: tuple[CleanupRecord, ...] = ()
+    added_cleanup: tuple[CleanupRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -387,6 +421,7 @@ def add_profile(
     )
     _validate_profile(profile)
     _validate_auth_transport(auth_plan.auth_type, transport)
+    mutation = _MutationTracker(f"profile '{profile_name}' creation")
 
     try:
         with _writable_connection(database_path) as connection:
@@ -395,7 +430,19 @@ def add_profile(
             if not auth_plan.replacements:
                 profile["kafka"]["auth"] = _auth_document(auth_plan, {})
                 _validate_profile(profile)
-                _insert_profile(connection, profile_name, profile)
+                document = _encode_profile(profile)
+                evidence = _MutationEvidence(
+                    before=None,
+                    after=_ProfileRowState(profile_name, profile_id, 1, document),
+                )
+                _insert_profile(
+                    connection,
+                    profile_name,
+                    profile,
+                    database_path=database_path,
+                    evidence=evidence,
+                    mutation=mutation,
+                )
                 return _load_profile_collection(database_path, connection)
             store = secret_store or load_secret_store()
             staged = stage_secret_replacements(
@@ -404,10 +451,22 @@ def add_profile(
                 profile_id,
                 auth_plan.replacements,
             )
+            staged_references = {item.field: item.reference for item in staged}
+            profile["kafka"]["auth"] = _auth_document(auth_plan, staged_references)
+            _validate_profile(profile)
+            evidence = _MutationEvidence(
+                before=None,
+                after=_ProfileRowState(
+                    profile_name,
+                    profile_id,
+                    1,
+                    _encode_profile(profile),
+                ),
+            )
 
             def insert(references: Mapping[str, str]) -> None:
-                profile["kafka"]["auth"] = _auth_document(auth_plan, references)
-                _validate_profile(profile)
+                if dict(references) != staged_references:
+                    raise CredentialMutationError("staged credential references changed")
                 _insert_profile(connection, profile_name, profile, transaction=False)
 
             commit_secret_replacements(
@@ -416,16 +475,18 @@ def add_profile(
                 profile_id,
                 staged,
                 insert,
+                inspect_outcome=_credential_outcome_inspector(database_path, evidence),
             )
+            mutation.mark_committed()
             return _load_profile_collection(database_path, connection)
     except CredentialMutationError as error:
         raise _profile_mutation_error(error) from error
     except SecretStoreError as error:
         raise ProfileStoreError(str(error)) from error
-    except ProfileStoreError:
-        raise
+    except ProfileStoreError as error:
+        raise _classify_post_commit_error(error, mutation) from error
     except sqlite3.Error as error:
-        raise ProfileStoreError("profile database could not be updated safely") from error
+        raise _database_mutation_error(error, mutation) from error
 
 
 def remove_profile(
@@ -442,6 +503,7 @@ def remove_profile(
     database_path = path if path is not None else resolve_database_path(environment)
     if not _path_entry_exists(database_path):
         raise ProfileStoreError(f"profile '{profile_name}' was not found")
+    mutation = _MutationTracker(f"profile '{profile_name}' removal")
 
     try:
         with _writable_connection(database_path) as connection:
@@ -451,15 +513,17 @@ def remove_profile(
             if profile is None:
                 raise ProfileStoreError(f"profile '{profile_name}' was not found")
             current_revision = revisions[profile_name]
-            if (
-                expected_profile_id is not None
-                and profile["id"] != expected_profile_id
-                or expected_revision is not None
-                and current_revision != expected_revision
-            ):
-                raise ProfileStoreError(
-                    f"profile '{profile_name}' changed after removal was requested"
-                )
+            before = _read_profile_row_state(connection, profile_name)
+            if before is None:
+                raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly")
+            _validate_expected_generation(
+                profile_name,
+                profile,
+                current_revision,
+                expected_profile_id,
+                expected_revision,
+                message="changed after removal was requested",
+            )
             references = _profile_secret_references(profile)
             if references:
                 return _remove_profile_with_credentials(
@@ -470,6 +534,8 @@ def remove_profile(
                     current_revision,
                     references,
                     secret_store,
+                    before,
+                    mutation,
                 )
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -479,8 +545,11 @@ def remove_profile(
                     profile_id=profile["id"],
                     expected_revision=current_revision,
                 )
-                _commit_or_unknown(
+                _commit_with_evidence(
                     connection,
+                    database_path,
+                    _MutationEvidence(before=before, after=None),
+                    mutation,
                     "profile removal commit outcome could not be established",
                 )
             except BaseException:
@@ -491,10 +560,25 @@ def remove_profile(
         raise _profile_mutation_error(error) from error
     except SecretStoreError as error:
         raise ProfileStoreError(str(error)) from error
-    except ProfileStoreError:
-        raise
+    except ProfileStoreError as error:
+        raise _classify_post_commit_error(error, mutation) from error
     except sqlite3.Error as error:
-        raise ProfileStoreError("profile database could not be updated safely") from error
+        raise _database_mutation_error(error, mutation) from error
+
+
+def _validate_expected_generation(
+    profile_name: str,
+    profile: Mapping[str, Any],
+    revision: int,
+    expected_profile_id: str | None,
+    expected_revision: int | None,
+    *,
+    message: str,
+) -> None:
+    identity_changed = expected_profile_id is not None and profile["id"] != expected_profile_id
+    revision_changed = expected_revision is not None and revision != expected_revision
+    if identity_changed or revision_changed:
+        raise ProfileStoreError(f"profile '{profile_name}' {message}")
 
 
 def _remove_profile_with_credentials(
@@ -505,6 +589,8 @@ def _remove_profile_with_credentials(
     current_revision: int,
     references: tuple[str, ...],
     secret_store: SecretStore | None,
+    before: _ProfileRowState,
+    mutation: _MutationTracker,
 ) -> ProfileCollection:
     store = secret_store or load_secret_store()
     result = commit_profile_removal(
@@ -518,7 +604,12 @@ def _remove_profile_with_credentials(
             profile_id=profile["id"],
             expected_revision=current_revision,
         ),
+        inspect_outcome=_credential_outcome_inspector(
+            database_path,
+            _MutationEvidence(before=before, after=None),
+        ),
     )
+    mutation.mark_committed()
     collection = _load_profile_collection(database_path, connection)
     if result.failed:
         raise ProfileStoreError(
@@ -569,6 +660,7 @@ def edit_profile(
     database_path = path if path is not None else resolve_database_path(environment)
     if not _path_entry_exists(database_path):
         raise ProfileStoreError(f"profile '{profile_name}' was not found")
+    mutation = _MutationTracker(f"profile '{profile_name}' update")
     try:
         with _writable_connection(database_path) as connection:
             revisions: dict[str, int] = {}
@@ -577,15 +669,17 @@ def edit_profile(
             if current is None:
                 raise ProfileStoreError(f"profile '{profile_name}' was not found")
             current_revision = revisions[profile_name]
-            if (
-                expected_profile_id is not None
-                and current["id"] != expected_profile_id
-                or expected_revision is not None
-                and current_revision != expected_revision
-            ):
-                raise ProfileStoreError(
-                    f"profile '{profile_name}' changed while credentials were collected"
-                )
+            before = _read_profile_row_state(connection, profile_name)
+            if before is None:
+                raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly")
+            _validate_expected_generation(
+                profile_name,
+                current,
+                current_revision,
+                expected_profile_id,
+                expected_revision,
+                message="changed while credentials were collected",
+            )
             updated = _apply_profile_edits(
                 current,
                 bootstrap_servers=bootstrap_servers,
@@ -612,6 +706,8 @@ def edit_profile(
                     updated,
                     plan,
                     secret_store,
+                    before,
+                    mutation,
                 )
             _commit_plain_edit(
                 connection,
@@ -619,16 +715,19 @@ def edit_profile(
                 current,
                 current_revision,
                 updated,
+                database_path,
+                before,
+                mutation,
             )
             return _load_profile_collection(database_path, connection)
     except CredentialMutationError as error:
         raise _profile_mutation_error(error) from error
     except SecretStoreError as error:
         raise ProfileStoreError(str(error)) from error
-    except ProfileStoreError:
-        raise
+    except ProfileStoreError as error:
+        raise _classify_post_commit_error(error, mutation) from error
     except sqlite3.Error as error:
-        raise ProfileStoreError("profile database could not be updated safely") from error
+        raise _database_mutation_error(error, mutation) from error
 
 
 def _commit_plain_edit(
@@ -637,6 +736,9 @@ def _commit_plain_edit(
     current: Mapping[str, Any],
     current_revision: int,
     updated: dict[str, Any],
+    database_path: Path,
+    before: _ProfileRowState,
+    mutation: _MutationTracker,
 ) -> None:
     connection.execute("BEGIN IMMEDIATE")
     try:
@@ -652,8 +754,20 @@ def _commit_plain_edit(
             )
         except CredentialMutationError as error:
             raise ProfileStoreError(f"profile '{profile_name}' changed unexpectedly") from error
-        _commit_or_unknown(
+        evidence = _MutationEvidence(
+            before=before,
+            after=_ProfileRowState(
+                profile_name,
+                str(current["id"]),
+                current_revision + 1,
+                _encode_profile(updated),
+            ),
+        )
+        _commit_with_evidence(
             connection,
+            database_path,
+            evidence,
+            mutation,
             "profile update commit outcome could not be established",
         )
     except BaseException:
@@ -670,6 +784,8 @@ def _commit_authenticated_edit(
     updated: dict[str, Any],
     plan: _AuthPlan,
     secret_store: SecretStore | None,
+    before: _ProfileRowState,
+    mutation: _MutationTracker,
 ) -> ProfileCollection:
     def switch(references: Mapping[str, str]) -> None:
         updated["kafka"]["auth"] = _auth_document(plan, references)
@@ -684,11 +800,26 @@ def _commit_authenticated_edit(
         )
 
     if not plan.replacements and not plan.retire_references:
+        updated["kafka"]["auth"] = _auth_document(plan, {})
+        _validate_profile(updated)
+        _validate_stored_registry(updated)
+        evidence = _MutationEvidence(
+            before=before,
+            after=_ProfileRowState(
+                profile_name,
+                str(current["id"]),
+                current_revision + 1,
+                _encode_profile(updated),
+            ),
+        )
         connection.execute("BEGIN IMMEDIATE")
         try:
             switch({})
-            _commit_or_unknown(
+            _commit_with_evidence(
                 connection,
+                database_path,
+                evidence,
+                mutation,
                 "profile update commit outcome could not be established",
             )
         except BaseException:
@@ -703,6 +834,19 @@ def _commit_authenticated_edit(
         current["id"],
         plan.replacements,
     )
+    staged_references = {item.field: item.reference for item in staged}
+    updated["kafka"]["auth"] = _auth_document(plan, staged_references)
+    _validate_profile(updated)
+    _validate_stored_registry(updated)
+    evidence = _MutationEvidence(
+        before=before,
+        after=_ProfileRowState(
+            profile_name,
+            str(current["id"]),
+            current_revision + 1,
+            _encode_profile(updated),
+        ),
+    )
     result = commit_secret_replacements(
         connection,
         store,
@@ -710,7 +854,9 @@ def _commit_authenticated_edit(
         staged,
         switch,
         retire_references=plan.retire_references,
+        inspect_outcome=_credential_outcome_inspector(database_path, evidence),
     )
+    mutation.mark_committed()
     collection = _load_profile_collection(database_path, connection)
     if result.failed:
         raise ProfileStoreError(
@@ -1147,6 +1293,9 @@ def _insert_profile(
     profile: Mapping[str, Any],
     *,
     transaction: bool = True,
+    database_path: Path | None = None,
+    evidence: _MutationEvidence | None = None,
+    mutation: _MutationTracker | None = None,
 ) -> None:
     if transaction:
         connection.execute("BEGIN IMMEDIATE")
@@ -1156,8 +1305,13 @@ def _insert_profile(
             (profile_name, profile["id"], _encode_profile(profile)),
         )
         if transaction:
-            _commit_or_unknown(
+            if database_path is None or evidence is None or mutation is None:
+                raise RuntimeError("profile mutation evidence is required")
+            _commit_with_evidence(
                 connection,
+                database_path,
+                evidence,
+                mutation,
                 "profile creation commit outcome could not be established",
             )
     except BaseException:
@@ -1173,17 +1327,164 @@ def _validated_ca_bundle(contents: str) -> str:
         raise ProfileStoreError(str(error)) from error
 
 
-def _commit_or_unknown(connection: sqlite3.Connection, message: str) -> None:
+def _commit_with_evidence(
+    connection: sqlite3.Connection,
+    database_path: Path,
+    evidence: _MutationEvidence,
+    mutation: _MutationTracker,
+    message: str,
+) -> None:
     try:
         connection.execute("COMMIT")
-    except BaseException as error:
-        if connection.in_transaction:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                raise ProfileStoreError(message, exit_code=4) from error
-            raise
+    except Exception as error:
+        _rollback_after_commit_error(connection)
+        outcome = _inspect_mutation_outcome(database_path, evidence)
+        mutation.outcome = outcome
+        if outcome is _MutationOutcome.COMMITTED:
+            raise ProfileStoreError(message, exit_code=3) from error
+        if outcome is _MutationOutcome.NOT_COMMITTED:
+            raise ProfileStoreError(f"{message}; the change was not committed") from error
         raise ProfileStoreError(message, exit_code=4) from error
+    mutation.mark_committed()
+
+
+def _rollback_after_commit_error(connection: sqlite3.Connection) -> None:
+    if not connection.in_transaction:
+        return
+    try:
+        connection.execute("ROLLBACK")
+    except sqlite3.Error:
+        pass
+
+
+def _read_profile_row_state(
+    connection: sqlite3.Connection,
+    profile_name: str,
+) -> _ProfileRowState | None:
+    row = connection.execute(
+        "SELECT name, id, revision, document FROM profiles WHERE name = ?",
+        (profile_name,),
+    ).fetchone()
+    if row is None:
+        return None
+    name, profile_id, revision, document = tuple(row)
+    if not isinstance(name, str) or not isinstance(profile_id, str):
+        raise ProfileStoreError("stored profile identity is invalid")
+    if type(revision) is not int or not isinstance(document, str):
+        raise ProfileStoreError("stored profile revision is invalid")
+    return _ProfileRowState(name, profile_id, revision, document)
+
+
+def _credential_outcome_inspector(
+    database_path: Path,
+    base: _MutationEvidence,
+) -> Callable[[tuple[CleanupRecord, ...], tuple[CleanupRecord, ...]], bool | None]:
+    def inspect(
+        removed_cleanup: tuple[CleanupRecord, ...],
+        added_cleanup: tuple[CleanupRecord, ...],
+    ) -> bool | None:
+        evidence = _MutationEvidence(
+            before=base.before,
+            after=base.after,
+            removed_cleanup=removed_cleanup,
+            added_cleanup=added_cleanup,
+        )
+        outcome = _inspect_mutation_outcome(database_path, evidence)
+        if outcome is _MutationOutcome.COMMITTED:
+            return True
+        if outcome is _MutationOutcome.NOT_COMMITTED:
+            return False
+        return None
+
+    return inspect
+
+
+def _inspect_mutation_outcome(
+    database_path: Path,
+    evidence: _MutationEvidence,
+) -> _MutationOutcome:
+    try:
+        with closing(_connect(database_path, writable=False)) as inspection:
+            if evidence.after is not None:
+                profile_name = evidence.after.name
+            elif evidence.before is not None:
+                profile_name = evidence.before.name
+            else:
+                return _MutationOutcome.UNKNOWN
+            current = _read_profile_row_state(inspection, profile_name)
+            before_cleanup = _cleanup_records_match(
+                inspection,
+                present=evidence.removed_cleanup,
+                absent=evidence.added_cleanup,
+            )
+            after_cleanup = _cleanup_records_match(
+                inspection,
+                present=evidence.added_cleanup,
+                absent=evidence.removed_cleanup,
+            )
+    except (OSError, sqlite3.Error, ProfileStoreError, ReconciliationError):
+        return _MutationOutcome.UNKNOWN
+    before_matches = current == evidence.before and before_cleanup
+    after_matches = current == evidence.after and after_cleanup
+    if after_matches and not before_matches:
+        return _MutationOutcome.COMMITTED
+    if before_matches and not after_matches:
+        return _MutationOutcome.NOT_COMMITTED
+    return _MutationOutcome.UNKNOWN
+
+
+def _cleanup_records_match(
+    connection: sqlite3.Connection,
+    *,
+    present: tuple[CleanupRecord, ...],
+    absent: tuple[CleanupRecord, ...],
+) -> bool:
+    for record in present:
+        row = connection.execute(
+            "SELECT secret_reference, created_at FROM credential_reconciliation WHERE id = ?",
+            (record.record_id,),
+        ).fetchone()
+        if row is None or tuple(row) != (record.secret_reference, record.created_at):
+            return False
+    for record in absent:
+        row = connection.execute(
+            "SELECT 1 FROM credential_reconciliation WHERE id = ?",
+            (record.record_id,),
+        ).fetchone()
+        if row is not None:
+            return False
+    return True
+
+
+def _classify_post_commit_error(
+    error: ProfileStoreError,
+    mutation: _MutationTracker,
+) -> ProfileStoreError:
+    if mutation.outcome is not _MutationOutcome.COMMITTED or error.exit_code in {3, 4}:
+        return ProfileStoreError(str(error), exit_code=error.exit_code)
+    return ProfileStoreError(
+        f"{mutation.operation} committed but completion could not be verified; "
+        "inspect the profile and run 'kantrip doctor --repair'",
+        exit_code=3,
+    )
+
+
+def _database_mutation_error(
+    error: sqlite3.Error,
+    mutation: _MutationTracker,
+) -> ProfileStoreError:
+    if mutation.outcome is _MutationOutcome.COMMITTED:
+        return ProfileStoreError(
+            f"{mutation.operation} committed but completion could not be verified; "
+            "inspect the profile and run 'kantrip doctor --repair'",
+            exit_code=3,
+        )
+    if mutation.outcome is _MutationOutcome.UNKNOWN:
+        return ProfileStoreError(
+            f"{mutation.operation} outcome could not be established; stop automatic retries",
+            exit_code=4,
+        )
+    return ProfileStoreError("profile database could not be updated safely")
 
 
 @contextmanager
@@ -1192,6 +1493,7 @@ def _writable_connection(path: Path) -> Iterator[sqlite3.Connection]:
     with database_maintenance_lock(path):
         _create_or_validate_database_file(path)
         connection: sqlite3.Connection | None = None
+        body_completed = False
         try:
             connection = _connect(path, writable=True)
             path.chmod(0o600)
@@ -1199,12 +1501,25 @@ def _writable_connection(path: Path) -> Iterator[sqlite3.Connection]:
             _migrate_connection(connection, path)
             _configure_writable_connection(connection)
             yield connection
+            body_completed = True
         except OSError as error:
             raise ProfileStoreError("profile database could not be opened safely") from error
         finally:
+            cleanup_error: BaseException | None = None
             if connection is not None:
-                connection.close()
-            _harden_sqlite_files(path)
+                try:
+                    connection.close()
+                except (OSError, sqlite3.Error) as error:
+                    cleanup_error = error
+            try:
+                _harden_sqlite_files(path, strict=True)
+            except OSError as error:
+                cleanup_error = cleanup_error or error
+            if body_completed and cleanup_error is not None:
+                raise ProfileStoreError(
+                    "profile database committed but its private files could not be verified",
+                    exit_code=3,
+                ) from cleanup_error
 
 
 def _connect(path: Path, *, writable: bool) -> sqlite3.Connection:
@@ -1369,8 +1684,28 @@ def _validation_detail(error: ValidationError) -> str | None:
 
 
 def _ensure_private_parent(path: Path) -> None:
+    missing: list[Path] = []
+    current = path
     try:
-        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        while True:
+            try:
+                current.lstat()
+                break
+            except FileNotFoundError:
+                missing.append(current)
+                parent = current.parent
+                if parent == current:
+                    raise ProfileStoreError("profile database directory has no existing parent")
+                current = parent
+        for directory in reversed(missing):
+            try:
+                directory.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            _validate_private_parent(directory)
+            _sync_directory(directory.parent)
+    except ProfileStoreError:
+        raise
     except OSError as error:
         raise ProfileStoreError("profile database directory could not be created") from error
     _validate_private_parent(path)
@@ -1487,7 +1822,8 @@ def _backup_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S.%fZ")
 
 
-def _harden_sqlite_files(path: Path) -> None:
+def _harden_sqlite_files(path: Path, *, strict: bool = False) -> None:
+    failure: OSError | None = None
     for suffix in _SQLITE_PRIVATE_SUFFIXES:
         candidate = Path(f"{path}{suffix}")
         try:
@@ -1496,8 +1832,10 @@ def _harden_sqlite_files(path: Path) -> None:
                 candidate.chmod(0o600)
         except FileNotFoundError:
             continue
-        except OSError:
-            continue
+        except OSError as error:
+            failure = error
+    if strict and failure is not None:
+        raise failure
 
 
 def _configure_writable_connection(connection: sqlite3.Connection) -> None:

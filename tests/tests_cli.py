@@ -478,6 +478,22 @@ class TestCli(unittest.TestCase):
             self.assertEqual(exit_code, result.exit_code, result.output)
             self.assertIn("synthetic mutation outcome", result.output)
 
+    def test_broken_stdout_after_mutation_reports_committed_exit_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            with patch(
+                "kantrip.cli.click.echo",
+                side_effect=(BrokenPipeError("synthetic broken pipe"), None),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["add", "local"],
+                    env={"KANTRIP_DATABASE": str(database_path)},
+                )
+
+            self.assertEqual(3, result.exit_code)
+            self.assertIn("local", load_profiles(database_path).profiles)
+
     def test_list_is_empty_when_database_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "missing.db"
@@ -630,7 +646,11 @@ class TestCli(unittest.TestCase):
                     "plaintext reachable",
                     "not configured",
                     "reachability",
-                    RegistryPingResult("confluent", "plaintext reachable"),
+                    RegistryPingResult(
+                        "confluent",
+                        "plaintext reachable",
+                        "provider metadata validated",
+                    ),
                 ),
             ):
                 result = self.runner.invoke(
@@ -643,9 +663,10 @@ class TestCli(unittest.TestCase):
         self.assertIn("[running] Checking profile 'local'", result.output)
         self.assertIn("Kafka transport: plaintext reachable", result.output)
         self.assertIn(
-            "[passed] Confluent Schema Registry transport: plaintext reachable",
+            "[passed] Confluent Schema Registry transport: plaintext reachable; proof:",
             result.output,
         )
+        self.assertIn("provider metadata validated", " ".join(result.output.split()))
 
     def test_ping_reports_apicurio_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
@@ -658,7 +679,11 @@ class TestCli(unittest.TestCase):
                     "plaintext reachable",
                     "not configured",
                     "reachability",
-                    RegistryPingResult("apicurio", "plaintext reachable"),
+                    RegistryPingResult(
+                        "apicurio",
+                        "plaintext reachable",
+                        "provider metadata validated",
+                    ),
                 ),
             ):
                 result = self.runner.invoke(
@@ -668,7 +693,11 @@ class TestCli(unittest.TestCase):
                 )
 
         self.assertEqual(0, result.exit_code, result.output)
-        self.assertIn("[passed] Apicurio Registry transport: plaintext reachable", result.output)
+        self.assertIn(
+            "[passed] Apicurio Registry transport: plaintext reachable; proof:",
+            result.output,
+        )
+        self.assertIn("provider metadata validated", " ".join(result.output.split()))
 
     def test_add_apicurio_requires_and_persists_its_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -12,7 +12,7 @@ from kantrip.credential_mutations import (
     update_profile_revision,
 )
 from kantrip.migrations import apply_migrations
-from kantrip.reconciliation import pending_secret_cleanup
+from kantrip.reconciliation import pending_secret_cleanup, queue_secret_cleanup
 from kantrip.secret_store import SecretNotFoundError, SecretStoreError, secret_reference
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
@@ -228,6 +228,62 @@ class TestCredentialMutations(unittest.TestCase):
         self.assertEqual(1, len(store.values))
         self.assertTrue(set(store.values).issubset({record.secret_reference for record in records}))
 
+    def test_store_write_then_error_retains_every_cleanup_intent(self) -> None:
+        store = _Store(self.connection, fail_after_write_at=2)
+
+        with self.assertRaises(CredentialMutationError):
+            stage_secret_replacements(
+                self.connection,
+                store,
+                PROFILE_ID,
+                (
+                    SecretReplacement("kafka/password", "first-secret"),
+                    SecretReplacement("registry/password", "second-secret"),
+                ),
+            )
+
+        records = pending_secret_cleanup(self.connection)
+        self.assertEqual(2, len(records))
+        self.assertEqual(2, len(store.values))
+        self.assertEqual(
+            {record.secret_reference for record in records},
+            set(store.values),
+        )
+
+    def test_successful_mutation_does_not_process_unrelated_cleanup_debt(self) -> None:
+        store = _Store(self.connection)
+        unrelated = secret_reference(
+            PROFILE_ID,
+            "registry/token",
+            credential_id=OLD_CREDENTIAL_ID,
+        )
+        store.values[unrelated] = "unrelated-secret"
+        self.connection.execute("BEGIN IMMEDIATE")
+        unrelated_record = queue_secret_cleanup(self.connection, unrelated)
+        self.connection.execute("COMMIT")
+        store.fail_delete.add(unrelated)
+        staged = stage_secret_replacements(
+            self.connection,
+            store,
+            PROFILE_ID,
+            (SecretReplacement("kafka/password", "active-secret"),),
+        )
+
+        result = commit_secret_replacements(
+            self.connection,
+            store,
+            PROFILE_ID,
+            staged,
+            lambda references: self.connection.execute(
+                "UPDATE profiles SET revision = revision + 1, document = ? WHERE id = ?",
+                (references["kafka/password"], PROFILE_ID),
+            ),
+        )
+
+        self.assertEqual((0, 0, 0), (result.pending, result.removed, result.failed))
+        self.assertEqual((unrelated_record,), pending_secret_cleanup(self.connection))
+        self.assertEqual("unrelated-secret", store.values[unrelated])
+
     def test_profile_removal_commits_before_exact_cleanup(self) -> None:
         store = _Store(self.connection)
         reference = secret_reference(
@@ -310,9 +366,11 @@ class _Store:
         connection: sqlite3.Connection,
         *,
         fail_set_after: int | None = None,
+        fail_after_write_at: int | None = None,
     ) -> None:
         self.connection = connection
         self.fail_set_after = fail_set_after
+        self.fail_after_write_at = fail_after_write_at
         self.set_count = 0
         self.values: dict[str, str] = {}
         self.fail_delete: set[str] = set()
@@ -334,6 +392,8 @@ class _Store:
             raise SecretStoreError("synthetic set failure")
         self.set_count += 1
         self.values[reference] = value
+        if self.fail_after_write_at == self.set_count:
+            raise SecretStoreError("synthetic post-write failure")
 
     def delete(self, reference: str) -> None:
         if reference in self.fail_delete:

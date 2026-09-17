@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Barrier, Event
 from unittest.mock import patch
 
 from cryptography import x509
@@ -14,6 +15,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
+import kantrip.profiles as profiles_module
 from kantrip.migrations import MIGRATIONS, MigrationChain, SqlMigration
 from kantrip.profiles import (
     DATABASE_BACKUP_PREFIX,
@@ -22,14 +24,16 @@ from kantrip.profiles import (
     KafkaAuthInput,
     ProfileStoreError,
     add_profile,
+    database_maintenance_lock,
     edit_profile,
     inspect_pending_secret_cleanup,
     load_profiles,
     reconcile_pending_secrets,
     remove_profile,
     resolve_database_path,
+    resolve_profile_snapshot,
 )
-from kantrip.reconciliation import queue_secret_cleanup
+from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
 from tests.pki import synthetic_pki
 
@@ -69,6 +73,153 @@ class TestProfiles(unittest.TestCase):
 
             self.assertEqual({}, profiles.profiles)
             self.assertEqual({}, load_profiles(path).profiles)
+
+    def test_add_reports_committed_when_post_commit_reload_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+
+            with (
+                patch(
+                    "kantrip.profiles._load_profile_collection",
+                    side_effect=sqlite3.OperationalError("synthetic reload failure"),
+                ),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                add_profile("local", path)
+
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertIn("committed", str(raised.exception))
+            self.assertIn("local", load_profiles(path).profiles)
+
+    def test_edit_reports_committed_when_post_commit_reload_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+
+            with (
+                patch(
+                    "kantrip.profiles._load_profile_collection",
+                    side_effect=sqlite3.OperationalError("synthetic reload failure"),
+                ),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                edit_profile("local", path, description="persisted")
+
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertIn("committed", str(raised.exception))
+            persisted = load_profiles(path)
+            self.assertEqual("persisted", persisted.profile("local")["description"])
+            self.assertEqual(2, persisted.revision("local"))
+
+    def test_remove_reports_committed_when_post_commit_reload_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            add_profile("local", path)
+
+            with (
+                patch(
+                    "kantrip.profiles._load_profile_collection",
+                    side_effect=sqlite3.OperationalError("synthetic reload failure"),
+                ),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                remove_profile("local", path)
+
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertIn("committed", str(raised.exception))
+            self.assertNotIn("local", load_profiles(path).profiles)
+
+    def test_add_reports_committed_when_file_hardening_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+
+            with (
+                patch(
+                    "kantrip.profiles._harden_sqlite_files",
+                    side_effect=OSError("synthetic chmod failure"),
+                ),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                add_profile("local", path)
+
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertIn("committed", str(raised.exception))
+            self.assertIn("local", load_profiles(path).profiles)
+
+    def test_lost_commit_ack_is_classified_from_durable_add_evidence(self) -> None:
+        for durable, expected_exit in ((True, 3), (False, 1), (None, 4)):
+            with self.subTest(durable=durable), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "profiles.db"
+                factory = _commit_fault_factory(durable)
+
+                with (
+                    patch("kantrip.profiles._connect", side_effect=factory),
+                    self.assertRaises(ProfileStoreError) as raised,
+                ):
+                    add_profile("local", path)
+
+                self.assertEqual(expected_exit, raised.exception.exit_code)
+                persisted = load_profiles(path).profiles
+                self.assertEqual(durable is not False, "local" in persisted)
+
+    def test_lost_commit_ack_is_confirmed_for_authenticated_mutation_family(self) -> None:
+        auth = KafkaAuthInput("plain", username="alice", password="first-secret")
+        replacement = KafkaAuthInput("plain", username="alice", password="second-secret")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "add.db"
+            store = _RecordingSecretStore()
+            with (
+                patch("kantrip.profiles._connect", side_effect=_commit_fault_factory(True)),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                add_profile(
+                    "local",
+                    path,
+                    transport="tls",
+                    auth=auth,
+                    secret_store=store,
+                )
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertIn("local", load_profiles(path).profiles)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "edit.db"
+            store = _RecordingSecretStore()
+            add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=auth,
+                secret_store=store,
+            )
+            with (
+                patch("kantrip.profiles._connect", side_effect=_commit_fault_factory(True)),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                edit_profile("local", path, auth=replacement, secret_store=store)
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertEqual(2, load_profiles(path).revision("local"))
+            self.assertEqual(1, len(inspect_pending_secret_cleanup(path)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "remove.db"
+            store = _RecordingSecretStore()
+            add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=auth,
+                secret_store=store,
+            )
+            with (
+                patch("kantrip.profiles._connect", side_effect=_commit_fault_factory(True)),
+                self.assertRaises(ProfileStoreError) as raised,
+            ):
+                remove_profile("local", path, secret_store=store)
+            self.assertEqual(3, raised.exception.exit_code)
+            self.assertNotIn("local", load_profiles(path).profiles)
+            self.assertEqual(1, len(inspect_pending_secret_cleanup(path)))
 
     def test_database_uses_wal_and_the_current_schema_version(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -269,6 +420,199 @@ class TestProfiles(unittest.TestCase):
 
             self.assertEqual(len(MIGRATIONS), migration_count)
             self.assertEqual(4, len(load_profiles(path).profiles))
+
+    def test_competing_edits_accept_exactly_one_captured_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            initial = add_profile("local", path)
+            profile_id = str(initial.profile("local")["id"])
+            revision = initial.revision("local")
+            barrier = Barrier(3)
+
+            def update(description: str) -> str:
+                barrier.wait()
+                return edit_profile(
+                    "local",
+                    path,
+                    description=description,
+                    expected_profile_id=profile_id,
+                    expected_revision=revision,
+                ).profile("local")["description"]
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(update, value) for value in ("first", "second")]
+                barrier.wait()
+                outcomes = []
+                for future in futures:
+                    try:
+                        outcomes.append(("ok", future.result()))
+                    except ProfileStoreError as error:
+                        outcomes.append(("error", str(error)))
+
+            self.assertEqual(1, sum(kind == "ok" for kind, _ in outcomes))
+            self.assertEqual(1, sum(kind == "error" for kind, _ in outcomes))
+            self.assertEqual(2, load_profiles(path).revision("local"))
+
+    def test_competing_edit_and_remove_preserve_one_exact_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            initial = add_profile("local", path)
+            profile_id = str(initial.profile("local")["id"])
+            revision = initial.revision("local")
+            barrier = Barrier(3)
+
+            def edit() -> None:
+                barrier.wait()
+                edit_profile(
+                    "local",
+                    path,
+                    description="edited",
+                    expected_profile_id=profile_id,
+                    expected_revision=revision,
+                )
+
+            def remove() -> None:
+                barrier.wait()
+                remove_profile(
+                    "local",
+                    path,
+                    expected_profile_id=profile_id,
+                    expected_revision=revision,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = (executor.submit(edit), executor.submit(remove))
+                barrier.wait()
+                successes = 0
+                failures = 0
+                for future in futures:
+                    try:
+                        future.result()
+                        successes += 1
+                    except ProfileStoreError:
+                        failures += 1
+
+            self.assertEqual((1, 1), (successes, failures))
+            remaining = load_profiles(path).profiles
+            if "local" in remaining:
+                self.assertEqual("edited", remaining["local"]["description"])
+
+    def test_stale_remove_confirmation_cannot_remove_recreated_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            captured = add_profile("local", path)
+            stale_id = str(captured.profile("local")["id"])
+            stale_revision = captured.revision("local")
+            remove_profile("local", path)
+            recreated = add_profile("local", path)
+
+            with self.assertRaisesRegex(ProfileStoreError, "changed after removal"):
+                remove_profile(
+                    "local",
+                    path,
+                    expected_profile_id=stale_id,
+                    expected_revision=stale_revision,
+                )
+
+            self.assertEqual(
+                recreated.profile("local")["id"],
+                load_profiles(path).profile("local")["id"],
+            )
+
+    def test_lock_timeout_is_bounded_and_preserves_the_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            original = add_profile("local", path).profile("local")
+
+            with (
+                database_maintenance_lock(path),
+                patch("kantrip.profiles.DATABASE_TIMEOUT_SECONDS", 0),
+                self.assertRaisesRegex(ProfileStoreError, "maintenance is busy"),
+            ):
+                edit_profile("local", path, description="must-not-commit")
+
+            self.assertEqual(original, load_profiles(path).profile("local"))
+
+    def test_snapshot_and_credential_edit_never_mix_generations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput("plain", username="alice", password="old-secret"),
+                secret_store=store,
+            )
+            entered = Event()
+            release = Event()
+            blocking_store = _OneShotBlockingGetStore(store, entered, release)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                snapshot_future = executor.submit(
+                    resolve_profile_snapshot,
+                    "local",
+                    path,
+                    secret_store=blocking_store,
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                edit_future = executor.submit(
+                    edit_profile,
+                    "local",
+                    path,
+                    auth=KafkaAuthInput("plain", username="alice", password="new-secret"),
+                    secret_store=store,
+                )
+                release.set()
+                snapshot = snapshot_future.result()
+                edited = edit_future.result()
+
+            self.assertEqual(1, snapshot.revision)
+            self.assertEqual("old-secret", snapshot.kafka.password)
+            self.assertEqual(2, edited.revision("local"))
+            active_reference = edited.profile("local")["kafka"]["auth"]["passwordRef"]
+            self.assertEqual("new-secret", store.values[active_reference])
+
+    def test_repair_and_secret_staging_are_serialized_by_the_maintenance_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput("plain", username="alice", password="old-secret"),
+                secret_store=store,
+            )
+            entered = Event()
+            release = Event()
+            repair_started = Event()
+            blocking_store = _OneShotBlockingSetStore(store, entered, release)
+
+            def repair() -> ReconciliationResult:
+                repair_started.set()
+                return reconcile_pending_secrets(path, store=store)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                edit_future = executor.submit(
+                    edit_profile,
+                    "local",
+                    path,
+                    auth=KafkaAuthInput("plain", username="alice", password="new-secret"),
+                    secret_store=blocking_store,
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                repair_future = executor.submit(repair)
+                self.assertTrue(repair_started.wait(timeout=5))
+                release.set()
+                edited = edit_future.result()
+                repaired = repair_future.result()
+
+            self.assertEqual(2, edited.revision("local"))
+            self.assertEqual((0, 0, 0), (repaired.pending, repaired.removed, repaired.failed))
+            self.assertEqual((), inspect_pending_secret_cleanup(path))
+            active_reference = edited.profile("local")["kafka"]["auth"]["passwordRef"]
+            self.assertEqual("new-secret", store.values[active_reference])
 
     def test_missing_database_can_be_loaded_without_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -787,6 +1131,110 @@ class _RecordingSecretStore:
             raise SecretStoreError("synthetic failure")
         self.deleted.append(reference)
         self.values.pop(reference, None)
+
+
+class _OneShotBlockingGetStore:
+    def __init__(
+        self,
+        delegate: _RecordingSecretStore,
+        entered: Event,
+        release: Event,
+    ) -> None:
+        self.delegate = delegate
+        self.entered = entered
+        self.release = release
+        self.blocked = False
+
+    def get(self, reference: str) -> str:
+        value = self.delegate.get(reference)
+        if not self.blocked:
+            self.blocked = True
+            self.entered.set()
+            if not self.release.wait(timeout=5):
+                raise SecretStoreError("synthetic snapshot barrier timed out")
+        return value
+
+    def set(self, reference: str, value: str) -> None:
+        self.delegate.set(reference, value)
+
+    def delete(self, reference: str) -> None:
+        self.delegate.delete(reference)
+
+
+class _OneShotBlockingSetStore:
+    def __init__(
+        self,
+        delegate: _RecordingSecretStore,
+        entered: Event,
+        release: Event,
+    ) -> None:
+        self.delegate = delegate
+        self.entered = entered
+        self.release = release
+        self.blocked = False
+
+    def get(self, reference: str) -> str:
+        return self.delegate.get(reference)
+
+    def set(self, reference: str, value: str) -> None:
+        self.delegate.set(reference, value)
+        if not self.blocked:
+            self.blocked = True
+            self.entered.set()
+            if not self.release.wait(timeout=5):
+                raise SecretStoreError("synthetic staging barrier timed out")
+
+    def delete(self, reference: str) -> None:
+        self.delegate.delete(reference)
+
+
+class _CommitFaultConnection:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        durable: bool,
+        state: dict[str, bool],
+    ) -> None:
+        self._connection = connection
+        self._durable = durable
+        self._state = state
+        self._armed = False
+
+    def execute(self, statement: str, parameters: object = ()) -> sqlite3.Cursor:
+        normalized = " ".join(statement.upper().split())
+        if normalized.startswith(
+            ("INSERT INTO PROFILES", "UPDATE PROFILES", "DELETE FROM PROFILES")
+        ):
+            self._armed = True
+        if normalized == "COMMIT" and self._armed:
+            self._state["faulted"] = True
+            if self._durable:
+                self._connection.execute(statement)
+            raise sqlite3.OperationalError("synthetic lost commit acknowledgement")
+        return self._connection.execute(statement, parameters)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+
+def _commit_fault_factory(durable: bool | None):
+    original = profiles_module._connect
+    state = {"faulted": False}
+
+    def connect(path: Path, *, writable: bool) -> sqlite3.Connection:
+        if not writable and durable is None and state["faulted"]:
+            raise sqlite3.OperationalError("synthetic inspection failure")
+        connection = original(path, writable=writable)
+        if writable:
+            return _CommitFaultConnection(
+                connection,
+                durable=durable is not False,
+                state=state,
+            )
+        return connection
+
+    return connect
 
 
 def _client_identity(password: str) -> tuple[str, str]:

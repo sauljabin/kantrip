@@ -78,6 +78,16 @@ def _profile_click_exception(error: ProfileStoreError) -> _ProfileClickException
     return exception_type(str(error))
 
 
+def _echo_committed_mutation(message: str) -> None:
+    try:
+        click.echo(message)
+    except OSError as error:
+        raise _CommittedProfileClickException(
+            "profile change committed but its result could not be written; "
+            "inspect the profile and run 'kantrip doctor --repair'"
+        ) from error
+
+
 def _configure_consoles(context: click.Context, *, no_color: bool) -> None:
     """Configure result and diagnostic consoles on the root context."""
     root_context = context.find_root()
@@ -605,7 +615,7 @@ def add_configured_profile(
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
-    click.echo(f"Added profile '{profile_name}' to {profiles.path}")
+    _echo_committed_mutation(f"Added profile '{profile_name}' to {profiles.path}")
 
 
 @cli.command("edit")
@@ -786,7 +796,7 @@ def edit_configured_profile(
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
-    click.echo(f"Updated profile '{profile_name}' in {profiles.path}")
+    _echo_committed_mutation(f"Updated profile '{profile_name}' in {profiles.path}")
 
 
 @cli.command("remove")
@@ -809,7 +819,7 @@ def remove_configured_profile(profile_name: str, force: bool) -> None:
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
-    click.echo(f"Removed profile '{profile_name}' from {profiles.path}")
+    _echo_committed_mutation(f"Removed profile '{profile_name}' from {profiles.path}")
 
 
 @cli.command("list")
@@ -1063,7 +1073,8 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
             create_status_text(
                 console,
                 "success",
-                f"{product} transport: {result.registry.transport}",
+                f"{product} transport: {result.registry.transport}; "
+                f"proof: {result.registry.proof}",
             )
         )
 

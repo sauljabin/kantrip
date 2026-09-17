@@ -238,7 +238,7 @@ else:
     def test_profile_checks_configured_confluent_registry(self) -> None:
         profile = self._registry_profile("confluent")
         response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'["orders-value"]'
+        response.__enter__.return_value.read.return_value = b'["AVRO", "JSON"]'
 
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
@@ -246,9 +246,16 @@ else:
         ):
             result = ping_profile(profile, timeout=1.25)
 
-        self.assertEqual(RegistryPingResult("confluent", "plaintext reachable"), result.registry)
         self.assertEqual(
-            "http://registry.invalid:8081/subjects",
+            RegistryPingResult(
+                "confluent",
+                "plaintext reachable",
+                "provider metadata validated",
+            ),
+            result.registry,
+        )
+        self.assertEqual(
+            "http://registry.invalid:8081/schemas/types",
             open_registry.call_args.args[0].full_url,
         )
         self.assertLessEqual(open_registry.call_args.kwargs["timeout"], 1.25)
@@ -256,7 +263,9 @@ else:
     def test_profile_checks_configured_apicurio_registry(self) -> None:
         profile = self._registry_profile("apicurio")
         response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"artifacts": [], "count": 7}'
+        response.__enter__.return_value.read.return_value = (
+            b'{"name": "Apicurio", "version": "3.3.3"}'
+        )
 
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
@@ -264,9 +273,16 @@ else:
         ):
             result = ping_profile(profile, timeout=1.25)
 
-        self.assertEqual(RegistryPingResult("apicurio", "plaintext reachable"), result.registry)
         self.assertEqual(
-            "http://registry.invalid/apis/registry/v3/search/artifacts?limit=1",
+            RegistryPingResult(
+                "apicurio",
+                "plaintext reachable",
+                "provider metadata validated",
+            ),
+            result.registry,
+        )
+        self.assertEqual(
+            "http://registry.invalid/apis/registry/v3/system/info",
             open_registry.call_args.args[0].full_url,
         )
 
@@ -280,15 +296,25 @@ else:
 
         self.assertEqual("connection refused", raised.exception.detail)
 
-    def test_profile_rejects_invalid_apicurio_artifact_metadata(self) -> None:
+    def test_profile_rejects_invalid_apicurio_system_metadata(self) -> None:
         response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"artifacts": [], "count": true}'
+        response.__enter__.return_value.read.return_value = b'{"name": "Apicurio"}'
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
             patch("kantrip.ping.urlopen", return_value=response),
-            self.assertRaisesRegex(PingError, "invalid artifact search response"),
+            self.assertRaisesRegex(PingError, "invalid system metadata"),
         ):
             ping_profile(self._registry_profile("apicurio"))
+
+    def test_profile_rejects_invalid_confluent_schema_type_metadata(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"[]"
+        with (
+            patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
+            patch("kantrip.ping.urlopen", return_value=response),
+            self.assertRaisesRegex(PingError, "invalid schema-type metadata"),
+        ):
+            ping_profile(self._registry_profile("confluent"))
 
     @staticmethod
     def _registry_profile(provider: str) -> dict[str, object]:

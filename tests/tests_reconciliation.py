@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import unittest
 
@@ -83,6 +84,24 @@ class TestReconciliation(unittest.TestCase):
                 self.assertRaises(ReconciliationError),
             ):
                 queue_secret_cleanup(self.connection, reference, created_at=created_at)
+
+    def test_live_reference_in_cleanup_journal_fails_without_deleting(self) -> None:
+        reference = secret_reference(PROFILE_ID, "kafka/password")
+        document = json.dumps({"kafka": {"auth": {"passwordRef": reference}}})
+        self.connection.execute(
+            "INSERT INTO profiles (name, id, revision, document) VALUES (?, ?, 1, ?)",
+            ("local", PROFILE_ID, document),
+        )
+        self.connection.execute("BEGIN IMMEDIATE")
+        queue_secret_cleanup(self.connection, reference)
+        self.connection.execute("COMMIT")
+        store = _Store()
+
+        with self.assertRaisesRegex(ReconciliationError, "live profile credential"):
+            reconcile_secret_cleanup(self.connection, store)
+
+        self.assertEqual([], store.deleted)
+        self.assertEqual(1, len(pending_secret_cleanup(self.connection)))
 
 
 class _Store:
