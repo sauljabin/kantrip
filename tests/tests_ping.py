@@ -296,6 +296,21 @@ else:
 
         self.assertEqual("connection refused", raised.exception.detail)
 
+    def test_profile_converts_exhausted_kafka_to_registry_deadline(self) -> None:
+        profile = self._registry_profile("confluent")
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch("kantrip.ping.time.monotonic", side_effect=(0.0, 6.0)),
+            self.assertRaisesRegex(
+                PingError,
+                "Confluent Schema Registry did not return registry metadata",
+            ) as raised,
+        ):
+            ping_profile(profile, timeout=5)
+
+        self.assertEqual("network deadline exhausted", raised.exception.detail)
+
     def test_profile_rejects_invalid_apicurio_system_metadata(self) -> None:
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"name": "Apicurio"}'

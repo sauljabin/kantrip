@@ -13,7 +13,7 @@ from kantrip import APP_VERSION
 from kantrip.cli import cli
 from kantrip.console import create_console
 from kantrip.maintenance import RepairAction, RepairReport
-from kantrip.ping import PingError, PingResult, RegistryPingResult
+from kantrip.ping import PingError, PingResult, RegistryPingResult, ping_profile
 from kantrip.profiles import ProfileStoreError, add_profile, load_profiles
 from kantrip.secret_store import SecretNotFoundError
 from tests.pki import synthetic_pki, temporary_pki_files
@@ -779,6 +779,32 @@ class TestCli(unittest.TestCase):
         self.assertEqual(1, result.exit_code, result.output)
         self.assertEqual("", result.stdout)
         self.assertEqual("", result.stderr)
+
+    def test_ping_quiet_handles_exhausted_kafka_to_registry_deadline(self) -> None:
+        with self.runner.isolated_filesystem():
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path, registry=True)
+            profile = load_profiles(database_path).profile("local")
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+
+            def exhausted_deadline(*_args: object, **_kwargs: object) -> PingResult:
+                return ping_profile(profile, timeout=5)
+
+            with (
+                patch("kantrip.ping._probe_kafka"),
+                patch("kantrip.ping.time.monotonic", side_effect=(0.0, 6.0)),
+                patch("kantrip.cli.ping_profile", side_effect=exhausted_deadline),
+            ):
+                result = self.runner.invoke(
+                    cli,
+                    ["ping", "local", "--quiet"],
+                    env=environment,
+                )
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertEqual("", result.stdout)
+        self.assertEqual("", result.stderr)
+        self.assertNotIn("Traceback", result.output)
 
     def test_ping_quiet_emits_nothing_on_success(self) -> None:
         with self.runner.isolated_filesystem():

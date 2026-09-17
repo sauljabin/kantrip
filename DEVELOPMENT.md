@@ -177,8 +177,8 @@ output.
 
 ## Sandbox services and smoke workflow
 
-The sandbox is a local Kind laboratory with two operator-managed Strimzi Kafka
-clusters, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
+The sandbox is a local Kind laboratory with one operator-managed Strimzi Kafka
+cluster, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
 Install Docker, Kind, kubectl, and Helm before using it. Component versions are
 pinned in `sandbox/versions.env`. The topology decision, trust boundary, and
 non-production provisioning limits are canonical in
@@ -225,22 +225,25 @@ executable. Schema Registry uses separate Basic and OAuth processes because its
 local JAAS property-file login and OAuth `AuthenticationHandler` are different
 server authentication paths; Apicurio accepts both mechanisms on one endpoint.
 These secure variants prepare authenticated Registry scenarios without claiming
-that those profile fields are already implemented. The primary Strimzi cluster's
-`plaintext` listener means no authentication and no encryption. A separate
-Strimzi cluster exposes PLAIN and SCRAM-SHA-256 over verified TLS with
-`StandardAuthorizer`; its no-ACL principal proves that `kantrip ping` does not
-depend on Kafka resource authorization. PLAIN JAAS is read from a mounted
-Secret; an idempotent Kubernetes Job provisions SCRAM-SHA-256 through the
-internal listener without putting credentials in host arguments or manifests.
-That listener is intentionally unauthenticated plaintext laboratory access,
-with `ANONYMOUS` privileged for provisioning, and is not restricted by a
-`NetworkPolicy`. Do not present it as a production pattern or authentication
-test. The no-ACL proof uses the authenticated non-superuser principal through
-the external TLS/PLAIN listener.
+that those profile fields are already implemented. The single Kafka cluster's
+`plaintext` listener means no authentication and no encryption. All other
+external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
+principals prove that `kantrip ping` does not depend on Kafka resource
+authorization. PLAIN JAAS is read from the mounted `kafka-custom-users` Secret.
+An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
+through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
+from a private temporary config file. `sandbox-admin` is the only superuser.
 
-Both Kafka clusters use disposable persistent volumes, so broker data and the
-SCRAM-SHA-256 credential survive pod restarts but are removed with the Kind
-cluster. Both Apicurio instances use KafkaSQL with
+Strimzi owns authenticated-client, OAuth, and Registry ACLs. The Job owns only
+the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe needed
+by the plaintext and server-only TLS smoke; `ANONYMOUS` is not a superuser. The
+laboratory does not claim Kubernetes network isolation or production hardening.
+
+The Kafka cluster uses a disposable persistent volume, so broker data, ACLs,
+and the SCRAM-SHA-256 credential survive pod restarts but are removed with the
+Kind cluster. A pre-unification laboratory containing `Kafka/auth-kantrip` is
+rejected with explicit `sandbox down` and `sandbox up` guidance rather than
+being deleted silently. Both Apicurio instances use KafkaSQL with
 separate journal and snapshot topics configured for delete cleanup and infinite
 retention. Their registry data therefore survives an Apicurio pod restart without
 leaking data between the baseline and authenticated variants.

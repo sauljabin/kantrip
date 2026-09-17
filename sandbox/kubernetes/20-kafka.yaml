@@ -109,10 +109,55 @@ spec:
             - broker: 0
               advertisedHost: localhost
               advertisedPort: 9096
-      - name: registry
+      - name: plain
         port: 9097
+        type: nodeport
+        tls: true
+        authentication:
+          type: custom
+          sasl: true
+          listenerConfig:
+            sasl.enabled.mechanisms: PLAIN
+            plain.sasl.jaas.config: '${file:/mnt/auth-users/plain-jaas.properties:plain-jaas-config}'
+        configuration:
+          brokerCertChainAndKey:
+            secretName: kafka-listeners-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            nodePort: 30097
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9097
+      - name: scram256
+        port: 9098
+        type: nodeport
+        tls: true
+        authentication:
+          type: custom
+          sasl: true
+          listenerConfig:
+            sasl.enabled.mechanisms: SCRAM-SHA-256
+            scram-sha-256.sasl.jaas.config: >-
+              org.apache.kafka.common.security.scram.ScramLoginModule required;
+        configuration:
+          brokerCertChainAndKey:
+            secretName: kafka-listeners-tls
+            certificate: tls.crt
+            key: tls.key
+          bootstrap:
+            nodePort: 30098
+          brokers:
+            - broker: 0
+              advertisedHost: localhost
+              advertisedPort: 9098
+      - name: services
+        port: 9099
         type: internal
-        tls: false
+        tls: true
+        authentication:
+          type: scram-sha-512
     config:
       auto.create.topics.enable: false
       default.replication.factor: 1
@@ -121,6 +166,12 @@ spec:
       transaction.state.log.min.isr: 1
       transaction.state.log.replication.factor: 1
       principal.builder.class: io.strimzi.kafka.oauth.server.OAuthKafkaPrincipalBuilder
+      config.providers: file
+      config.providers.file.class: org.apache.kafka.common.config.provider.FileConfigProvider
+    authorization:
+      type: simple
+      superUsers:
+        - sandbox-admin
     template:
       pod:
         volumes:
@@ -130,11 +181,25 @@ spec:
               items:
                 - key: ca.crt
                   path: ca.crt
+          - name: auth-users
+            secret:
+              secretName: kafka-custom-users
+              items:
+                - key: plain-jaas.properties
+                  path: plain-jaas.properties
       kafkaContainer:
         volumeMounts:
           - name: oauth-ca
             mountPath: /mnt/oauth-ca
             readOnly: true
+          - name: auth-users
+            mountPath: /mnt/auth-users
+            readOnly: true
   entityOperator:
     topicOperator: {}
     userOperator: {}
+    template:
+      userOperatorContainer:
+        env:
+          - name: STRIMZI_IGNORED_USERS_PATTERN
+            value: ^ANONYMOUS$

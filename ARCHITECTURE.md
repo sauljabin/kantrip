@@ -374,32 +374,47 @@ unsupported. Kantrip exposes no persistent background-session API.
 
 ## Sandbox verification topology
 
-The local laboratory uses one Kind cluster with two operator-managed Strimzi
-Kafka clusters, each backed by a disposable persistent volume. The primary
-Kafka cluster retains the existing plaintext, verified TLS, SCRAM-SHA-512,
-mTLS, OAuth, and Registry-service listeners. A separate authentication cluster
-contains the PLAIN and SCRAM-SHA-256 over TLS fixtures with
-`StandardAuthorizer`. Keeping these brokers separate avoids changing the
-authorization, principal, and Registry-service assumptions of the primary
-fixture merely to exercise the two additional mechanisms; it is a test-topology
-boundary, not Kubernetes network isolation.
+The local laboratory uses one Kind cluster with one operator-managed Strimzi
+Kafka cluster and one disposable persistent node pool. The cluster exposes
+plaintext, verified TLS, SCRAM-SHA-512, mTLS, OAuth, PLAIN over TLS, and
+SCRAM-SHA-256 over TLS on loopback ports 9092 through 9098. Registry processes
+and provisioning use a separate internal listener on port 9099 with TLS and
+SCRAM-SHA-512. `StandardAuthorizer` applies to the whole broker;
+`sandbox-admin` is its only superuser.
 
-PLAIN identities come from a private runtime-generated Secret mounted through
-Kafka's file configuration provider. An idempotent in-cluster Job provisions
-the SCRAM-SHA-256 identity. Its internal provisioning listener deliberately has
-neither TLS nor authentication, and `ANONYMOUS` is a superuser on this test
-cluster so that the Job can alter the SCRAM credential. No `NetworkPolicy`
-restricts that listener. This is trusted laboratory control-plane access, not a
-production deployment pattern and not authentication evidence. The no-ACL
-check instead connects through the external TLS/PLAIN listener as the
-authenticated, non-superuser `kantrip-no-acl` principal; ping must succeed
-while a protected Kafka operation remains denied.
+PLAIN identities come from the private runtime-generated
+`kafka-custom-users` Secret mounted through Kafka's file configuration
+provider. An idempotent in-cluster Job authenticates to the internal listener
+as `sandbox-admin` and provisions both SCRAM-SHA-256 credentials. It writes the
+credential update to a mode-restricted temporary properties file, passes only
+that path to `kafka-configs.sh --add-config-file`, and removes the file on exit;
+the password does not enter the container argument vector. There is no
+unauthenticated provisioning listener.
 
-Both Kafka clusters retain state across broker pod restarts through their PVCs
-and lose it when the Kind cluster is destroyed. The authenticated smoke matrix
-was rerun successfully after deleting and recreating the authentication broker
-pod without rerunning the provisioning Job, demonstrating that its
-SCRAM-SHA-256 credential survives the tested restart boundary.
+The Strimzi User Operator is the single owner of ACLs for authenticated clients,
+the OAuth service account, and the five Registry Kafka identities. PLAIN,
+SCRAM-SHA-256, and OAuth principals also have unused SCRAM-SHA-512
+`KafkaUser` credentials so the operator can reconcile their real ACL
+principals; their tested listeners still use their named mechanisms. Registry
+identities receive only their exact topic and consumer-group permissions.
+Allowed client fixtures receive the `kantrip-auth-` prefix, while matching
+authenticated no-ACL identities prove that ping does not imply resource
+authorization.
+
+The provisioning Job is the sole owner of the unauthenticated smoke ACL:
+`ANONYMOUS` receives only topic and group prefixes `kantrip-smoke-` plus cluster
+Describe. It is never a superuser. The User Operator explicitly ignores that
+principal so periodic reconciliation does not erase the Job-owned rule. The
+OAuth service account is limited to `kantrip-oauth-`. This is a loopback-only,
+disposable test fixture, not a claim of Kubernetes network isolation or a
+production authorization design.
+
+The cluster retains broker data, ACLs, and SCRAM-SHA-256 credentials across
+broker pod restarts through its PVC and loses them when the Kind cluster is
+destroyed. `sandbox up` rejects the retired `Kafka/auth-kantrip` topology and
+requires an explicit `down` followed by `up`; it never silently deletes the old
+cluster. Acceptance forces a User Operator reconciliation, restarts the broker
+without rerunning provisioning, and performs a second idempotent `sandbox up`.
 
 ## Diagnostics and output
 

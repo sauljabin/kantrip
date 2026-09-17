@@ -186,6 +186,14 @@ Start the sandbox, then run its disposable authenticated acceptance matrix:
 uv run --locked python -m scripts.auth_smoke
 ```
 
+The authenticated script exercises allowed and no-ACL identities for PLAIN,
+SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; native OAuth; unauthenticated plaintext
+and server-only TLS; Bash, Zsh, and Fish; invalid passwords and client
+certificate; wrong CA and hostname; and an unavailable broker. Allowed
+identities can use only `kantrip-auth-`, OAuth can use only `kantrip-oauth-`,
+and unauthenticated smoke clients can use only `kantrip-smoke-`. Each no-ACL
+identity must complete `ping` and then receive a resource authorization denial.
+
 The matrix uses verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and
 mTLS. For each mechanism it creates the profile through the no-echo prompt,
 runs `ping`, exercises direct producer, consumer, admin and kcat operations,
@@ -526,11 +534,11 @@ rmdir "$XDG_RUNTIME_DIR/kantrip/sessions/unexpected"
 
 ## Start and inspect the Kubernetes sandbox
 
-The sandbox is a loopback-only Kind cluster. It runs a primary multi-listener
-Strimzi Kafka cluster, an isolated authorizer-enabled Strimzi authentication cluster,
-two baseline registries, authenticated endpoints for both registry products,
-Keycloak, and a cert-manager-issued local CA. It deliberately excludes Amazon
-MSK IAM and Confluent Cloud.
+The sandbox is a loopback-only Kind cluster. It runs one persistent,
+authorizer-enabled, multi-listener Strimzi Kafka cluster, two baseline
+registries, authenticated endpoints for both registry products, Keycloak, and a
+cert-manager-issued local CA. It deliberately excludes Amazon MSK IAM and
+Confluent Cloud.
 
 ### Setup
 
@@ -555,8 +563,8 @@ set +a
 
 ### Exercise
 
-List both Strimzi clusters, their persistent node pools, and the preconfigured
-native users without reading generated Secrets:
+List the single Strimzi cluster, its persistent node pool, and the
+preconfigured native users without reading generated Secrets:
 
 ```bash
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox get kafkausers
@@ -579,8 +587,8 @@ http GET http://localhost:8082/apis/registry/v3/system/info
 
 ### Expected result
 
-- Kubernetes reports both Kafka clusters, both persistent node pools, and both
-  `KafkaUser` resources as ready. User YAML identifies SCRAM-SHA-512 and TLS
+- Kubernetes reports one Kafka cluster, one persistent node pool, and every
+  `KafkaUser` resource as ready. User YAML identifies SCRAM-SHA-512 and TLS
   authentication but contains no credential value.
 - Keycloak discovery reports issuer `https://localhost:8443/realms/kantrip`.
 - Both baseline Registry requests return successful JSON responses.
@@ -601,6 +609,7 @@ Start the sandbox, then inspect the topics and their retention policy:
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
   get kafkatopics apicurio-journal apicurio-snapshots \
   apicurio-secure-journal apicurio-secure-snapshots \
+  registry-events \
   schema-registry schema-registry-secure \
   schema-registry-oauth
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
@@ -653,7 +662,8 @@ http GET \
 
 ### Expected result
 
-- The four Apicurio KafkaSQL topics are ready with `cleanup.policy: delete`,
+- The four Apicurio KafkaSQL topics and shared `registry-events` topic are ready
+  with `cleanup.policy: delete`,
   `retention.ms: -1`, and `retention.bytes: -1`.
 - The three Schema Registry topics are ready with `cleanup.policy: compact`:
   `schema-registry`, `schema-registry-secure`, and `schema-registry-oauth`.
@@ -663,11 +673,12 @@ http GET \
 
 ## Exercise every Kafka listener
 
-The primary Strimzi cluster exposes plaintext, TLS, SCRAM-SHA-512, mTLS, and
-OAuth connections. `PLAINTEXT` means no authentication and no encryption; it
-is not SASL/PLAIN. A second persistent Strimzi cluster with
-`StandardAuthorizer` exposes PLAIN and SCRAM-SHA-256 over verified TLS on
-`localhost:9097` and `localhost:9098`.
+The single Strimzi cluster exposes plaintext, TLS, SCRAM-SHA-512, mTLS, OAuth,
+PLAIN, and SCRAM-SHA-256 connections under one `StandardAuthorizer`.
+`PLAINTEXT` means no authentication and no encryption; it is not SASL/PLAIN.
+PLAIN and SCRAM-SHA-256 use verified TLS on `localhost:9097` and
+`localhost:9098`. Registry services and the provisioning Job use only the
+internal TLS/SCRAM-SHA-512 listener on port 9099.
 
 ### Setup
 
@@ -750,14 +761,18 @@ KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8
   --command-config sandbox/.state/kafka-oauth.properties --list
 ```
 
-Prove that the isolated cluster is not reformatted on restart and that its
-SCRAM-SHA-256 user remains available:
+Prove that the unified cluster is not reformatted on restart and that its
+SCRAM-SHA-256 user remains available without rerunning the provisioning Job:
 
 ```bash
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
-  delete pod/auth-kantrip-auth-dual-role-0
+  delete pod/kantrip-dual-role-0
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
-  wait pod/auth-kantrip-auth-dual-role-0 --for=condition=Ready --timeout=5m
+  wait --for=create pod/kantrip-dual-role-0 --timeout=5m
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  wait pod/kantrip-dual-role-0 --for=condition=Ready --timeout=5m
+uv run --locked python -m scripts.auth_smoke
+uv run --locked python -m sandbox up
 uv run --locked python -m scripts.auth_smoke
 ```
 
@@ -773,8 +788,11 @@ uv run --locked python -m scripts.auth_smoke
   reaches PLAIN on `9097` and SCRAM-SHA-256 on `9098`.
 - Kafka `ping` reports the authenticated exchange without requiring topic or
   cluster ACLs; the subsequent topic command remains subject to broker ACLs.
-- After the isolated broker restart, the complete authenticated smoke still
+- After the unified broker restart, the complete authenticated smoke still
   passes without rerunning the provisioning Job.
+- A second `sandbox up` completes idempotently and the matrix remains green.
+- Wrong credentials, client identity, CA, hostname, and unavailable broker
+  cases fail cleanly without revealing credential values.
 
 ## Exercise authenticated registries
 

@@ -210,14 +210,18 @@
   `sandbox/.state`, with directory mode `0700` and file mode `0600`. Never print
   credential values from sandbox lifecycle commands.
 - `python -m sandbox up` reconciles the Kind laboratory; `status`, `credentials`,
-  and `down` inspect or remove it. Keep plaintext, verified TLS, SCRAM-SHA-512,
-  mTLS, and OAuth listeners on the primary Strimzi cluster. Keep PLAIN and
-  SCRAM-SHA-256 over TLS on an isolated, persistent, authorizer-enabled Strimzi
-  cluster; provision SCRAM-SHA-256 with the idempotent in-cluster Job and keep
-  PLAIN credentials in its mounted Secret.
-  `plaintext` means no authentication and no encryption.
-- Both Kafka clusters use disposable persistent volumes so data survives broker
-  pod restarts.
+  and `down` inspect or remove it. Keep one persistent, authorizer-enabled
+  Strimzi Kafka cluster with plaintext, verified TLS, SCRAM-SHA-512, mTLS,
+  OAuth, PLAIN over TLS, and SCRAM-SHA-256 over TLS listeners. Reserve the
+  internal TLS/SCRAM-SHA-512 listener for Registry services and authenticated
+  provisioning. `plaintext` means no authentication and no encryption.
+- Keep `sandbox-admin` as the only Kafka superuser. Model client and Registry
+  ACLs through `KafkaUser`; the idempotent in-cluster Job authenticates as that
+  administrator, provisions SCRAM-SHA-256 from private mounted files, and owns
+  only the prefix-limited `ANONYMOUS` smoke ACL. Never place a credential in Job
+  arguments, manifests, or logs.
+- The Kafka cluster uses a disposable persistent volume so data and
+  SCRAM-SHA-256 credentials survive broker pod restarts.
   Both Apicurio variants use KafkaSQL with isolated journal and snapshot topics,
   delete cleanup policy, and infinite retention so their data survives Apicurio
   pod restarts. Destroying the Kind cluster intentionally removes sandbox data.

@@ -103,6 +103,24 @@ depends on certificate/hostname verification with default trust or the selected
 CA. Current HTTP Registry connections provide no transport confidentiality or
 server identity. Remote services evaluate application authorization.
 
+### Sandbox laboratory boundary
+
+The contributor sandbox is disposable infrastructure, not a production
+security boundary. It binds host endpoints to loopback and uses one persistent
+Strimzi Kafka cluster with authorization enabled, but it does not claim pod
+network isolation. `sandbox-admin` is the only broker superuser and is used only
+by the in-cluster provisioning Job over TLS/SCRAM-SHA-512. Runtime-generated
+credentials remain below private ignored state and mounted Secrets.
+
+Strimzi owns ACLs for authenticated clients, OAuth, and Registry identities.
+The Job owns only the `ANONYMOUS` `kantrip-smoke-` topic/group prefix and cluster
+Describe needed by unauthenticated smoke clients; `ANONYMOUS` is never a
+superuser. SCRAM-SHA-256 provisioning reads passwords from mounted files,
+writes a mode-restricted temporary config, passes its path rather than the
+password to Kafka tooling, and deletes it on exit. A privileged cluster
+administrator, compromised node, or process inside that short-lived container
+can still read the mounted or temporary value.
+
 ### Recovery boundary
 
 Database state and runtime directories found during startup or explicit repair

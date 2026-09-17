@@ -42,6 +42,8 @@ SECRET_FIELDS = (
     "KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD",
     "KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME",
     "KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD",
+    "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_USERNAME",
+    "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_PASSWORD",
     "KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME",
     "KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD",
     "KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
@@ -77,6 +79,7 @@ def up() -> None:
                 ("kind", "create", "cluster", "--name", CLUSTER_NAME, "--config", str(KIND_CONFIG))
             )
         _install_operators(versions)
+        _reject_legacy_topology()
         _apply_manifest("00-pki.yaml", versions)
         _wait_for_certificates()
         _apply_runtime_secrets(credentials)
@@ -85,11 +88,9 @@ def up() -> None:
         _apply_manifest("20-kafka.yaml", versions)
         _apply_manifest("21-kafka-users.yaml", versions)
         _wait_for_kafka()
-        _apply_manifest("23-auth-kafka.yaml", versions)
-        _wait_for_auth_kafka()
-        _delete_job("auth-kafka-users")
-        _apply_manifest("24-auth-kafka-users.yaml", versions)
-        _wait_for_job("auth-kafka-users", timeout="5m")
+        _delete_job("kafka-provisioning")
+        _apply_manifest("23-kafka-provisioning.yaml", versions)
+        _wait_for_job("kafka-provisioning", timeout="5m")
         _apply_manifest("22-apicurio-topics.yaml", versions)
         _wait_for_apicurio_topics()
         _apply_manifest("30-registries.yaml", versions)
@@ -222,6 +223,8 @@ def _new_credentials() -> dict[str, str]:
         "KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD": _password(),
         "KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME": "kantrip-scram-256",
         "KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD": _password(),
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_USERNAME": "kantrip-scram-256-no-acl",
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_PASSWORD": _password(),
         "KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME": "kantrip-no-acl",
         "KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD": _password(),
         "KANTRIP_SANDBOX_APICURIO_CLIENT_ID": "kantrip-apicurio",
@@ -280,6 +283,30 @@ def _install_operators(versions: Mapping[str, str]) -> None:
             "5m",
         )
     )
+
+
+def _reject_legacy_topology() -> None:
+    result = _run(
+        (
+            "kubectl",
+            "--context",
+            KUBECTL_CONTEXT,
+            "-n",
+            NAMESPACE,
+            "get",
+            "kafka/auth-kantrip",
+            "--ignore-not-found",
+            "-o",
+            "name",
+        ),
+        capture_output=True,
+    )
+    if result.stdout.strip():
+        raise SandboxFailure(
+            "the sandbox uses the retired two-Kafka topology; run "
+            "'python -m sandbox down' and then 'python -m sandbox up' to recreate "
+            "only the disposable kantrip-sandbox Kind cluster"
+        )
 
 
 def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
@@ -344,12 +371,18 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
             },
         ),
         _secret(
-            "auth-kafka-users",
+            "kafka-custom-users",
             {
                 "plain-username": credentials["KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME"],
                 "plain-password": credentials["KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD"],
                 "scram-256-username": credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME"],
                 "scram-256-password": credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD"],
+                "scram-256-no-acl-username": credentials[
+                    "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_USERNAME"
+                ],
+                "scram-256-no-acl-password": credentials[
+                    "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_PASSWORD"
+                ],
                 "no-acl-username": credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME"],
                 "no-acl-password": credentials["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"],
                 "plain-jaas.properties": plain_jaas,
@@ -408,13 +441,22 @@ def _wait_for_deployment(name: str, *, timeout: str) -> None:
 def _wait_for_kafka() -> None:
     base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
     _run((*base, "wait", "kafka/kantrip", "--for=condition=Ready", "--timeout=10m"))
-    _run((*base, "wait", "kafkauser/kantrip-scram", "--for=condition=Ready", "--timeout=5m"))
-    _run((*base, "wait", "kafkauser/kantrip-mtls", "--for=condition=Ready", "--timeout=5m"))
-
-
-def _wait_for_auth_kafka() -> None:
-    base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
-    _run((*base, "wait", "kafka/auth-kantrip", "--for=condition=Ready", "--timeout=10m"))
+    for user in (
+        "sandbox-admin",
+        "kantrip-plain",
+        "kantrip-scram-256",
+        "kantrip-scram",
+        "kantrip-scram-no-acl",
+        "kantrip-mtls",
+        "kantrip-mtls-no-acl",
+        "schema-registry-kafka",
+        "schema-registry-secure-kafka",
+        "schema-registry-oauth-kafka",
+        "apicurio-kafka",
+        "apicurio-secure-kafka",
+        "service-account-kantrip-kafka",
+    ):
+        _run((*base, "wait", f"kafkauser/{user}", "--for=condition=Ready", "--timeout=5m"))
 
 
 def _delete_job(name: str) -> None:
@@ -434,6 +476,7 @@ def _wait_for_apicurio_topics() -> None:
         "apicurio-snapshots",
         "apicurio-secure-journal",
         "apicurio-secure-snapshots",
+        "registry-events",
         "schema-registry",
         "schema-registry-secure",
         "schema-registry-oauth",
@@ -457,18 +500,46 @@ def _export_credentials(credentials: Mapping[str, str]) -> None:
     generated = {
         "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME": "kantrip-scram",
         "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD": _secret_value("kantrip-scram", "password").decode(),
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_USERNAME": "kantrip-scram-no-acl",
+        "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_PASSWORD": (
+            _secret_value("kantrip-scram-no-acl", "password").decode()
+        ),
     }
-    for key, secret_key, filename in (
-        ("KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE", "user.crt", "user.crt"),
-        ("KANTRIP_SANDBOX_KAFKA_MTLS_KEY", "user.key", "user.key"),
-        ("KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE", "user.p12", "user.p12"),
+    for key, secret_name, secret_key, filename in (
+        ("KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE", "kantrip-mtls", "user.crt", "user.crt"),
+        ("KANTRIP_SANDBOX_KAFKA_MTLS_KEY", "kantrip-mtls", "user.key", "user.key"),
+        ("KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE", "kantrip-mtls", "user.p12", "user.p12"),
+        (
+            "KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_CERTIFICATE",
+            "kantrip-mtls-no-acl",
+            "user.crt",
+            "no-acl-user.crt",
+        ),
+        (
+            "KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEY",
+            "kantrip-mtls-no-acl",
+            "user.key",
+            "no-acl-user.key",
+        ),
+        (
+            "KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE",
+            "kantrip-mtls-no-acl",
+            "user.p12",
+            "no-acl-user.p12",
+        ),
     ):
         target = STATE_ROOT / filename
-        _write_private_bytes(target, _secret_value("kantrip-mtls", secret_key))
+        _write_private_bytes(target, _secret_value(secret_name, secret_key))
         generated[key] = str(target)
     generated["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE_PASSWORD"] = _secret_value(
         "kantrip-mtls", "user.password"
     ).decode()
+    generated["KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE_PASSWORD"] = _secret_value(
+        "kantrip-mtls-no-acl", "user.password"
+    ).decode()
+    wrong_ca = STATE_ROOT / "wrong-kafka-ca.crt"
+    _write_private_bytes(wrong_ca, _secret_value("kantrip-cluster-ca-cert", "ca.crt"))
+    generated["KANTRIP_SANDBOX_WRONG_KAFKA_CA"] = str(wrong_ca)
     combined = {**credentials, **generated, "KANTRIP_SANDBOX_CA": str(CA_FILE)}
     content = "".join(f"{key}={shlex.quote(value)}\n" for key, value in combined.items())
     _write_private_text(STATE_FILE, content)
@@ -508,6 +579,21 @@ def _write_client_properties(values: Mapping[str, str]) -> None:
             f'username="{values["KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME"]}" '
             f'password="{values["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"]}";\n' + common_tls
         ),
+        "kafka-scram-256-no-acl.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=SCRAM-SHA-256\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_USERNAME"]}" '
+            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_PASSWORD"]}";\n'
+            + common_tls
+        ),
+        "kafka-scram-no-acl.properties": (
+            "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=SCRAM-SHA-512\n"
+            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
+            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_USERNAME"]}" '
+            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_PASSWORD"]}";\n' + common_tls
+        ),
         "kafka-mtls.properties": (
             "security.protocol=SSL\n"
             + common_tls
@@ -515,6 +601,14 @@ def _write_client_properties(values: Mapping[str, str]) -> None:
             + f'ssl.keystore.location={values["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE"]}\n'
             + "ssl.keystore.password="
             + f'{values["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE_PASSWORD"]}\n'
+        ),
+        "kafka-mtls-no-acl.properties": (
+            "security.protocol=SSL\n"
+            + common_tls
+            + "ssl.keystore.type=PKCS12\n"
+            + f'ssl.keystore.location={values["KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE"]}\n'
+            + "ssl.keystore.password="
+            + f'{values["KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE_PASSWORD"]}\n'
         ),
         "kafka-oauth.properties": (
             "security.protocol=SASL_SSL\n"

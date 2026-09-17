@@ -109,14 +109,14 @@ def _probe_kafka(connection: KafkaConnection, deadline: float) -> None:
     def error_callback(error: KafkaError) -> None:
         state.latest_error = f"{error.name()}: {error.str()}"
 
-    remaining = _remaining(deadline)
-    configuration = _client_configuration(
-        connection,
-        remaining,
-        statistics_callback=statistics_callback,
-        error_callback=error_callback,
-    )
     try:
+        remaining = _remaining(deadline)
+        configuration = _client_configuration(
+            connection,
+            remaining,
+            statistics_callback=statistics_callback,
+            error_callback=error_callback,
+        )
         client = AdminClient(configuration, logger=_QUIET_KAFKA_LOGGER)
         while not state.connected:
             remaining = _remaining(deadline)
@@ -174,7 +174,16 @@ def _registry_connectivity(
     connection: RegistryConnection,
     deadline: float,
 ) -> RegistryPingResult:
-    timeout = _remaining(deadline)
+    registry_name = (
+        "Apicurio Registry" if connection.provider == "apicurio" else "Confluent Schema Registry"
+    )
+    try:
+        timeout = _remaining(deadline)
+    except TimeoutError as error:
+        raise PingError(
+            f"the {registry_name} did not return registry metadata",
+            detail=error,
+        ) from error
     if connection.provider == "apicurio":
         _apicurio_system_info(connection.url, timeout)
     else:
