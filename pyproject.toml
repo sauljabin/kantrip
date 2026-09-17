@@ -85,10 +85,12 @@ include = [
     "/examples",
     "/images",
     "/kantrip",
+    "/sandbox",
     "/schemas",
     "/scripts",
     "/tests",
 ]
+exclude = ["/sandbox/.state"]
 
 [tool.black]
 line-length = 100

@@ -135,6 +135,7 @@ def smoke(
     shells: Sequence[str] = (),
 ) -> None:
     """Run the adapter smoke checks with an isolated Kantrip configuration."""
+    consumer_group = f"{topic}-consumer"
     installed = {
         adapter: _installed_commands(executables, environment)
         for adapter, executables in KAFKA_COMMANDS.items()
@@ -220,6 +221,8 @@ def smoke(
                     installed["consumer"][0],
                     "--topic",
                     topic,
+                    "--group",
+                    consumer_group,
                     "--from-beginning",
                     "--max-messages",
                     "1",
@@ -288,6 +291,7 @@ def smoke(
                     shell=shell,
                     profile=profile,
                     topic=topic,
+                    consumer_group=consumer_group,
                     installed=installed,
                     kcat_executables=kcat_executables,
                     registry_provider=registry_provider,
@@ -354,6 +358,7 @@ def _check_shell(
     shell: str,
     profile: str,
     topic: str,
+    consumer_group: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
     registry_provider: str,
@@ -365,6 +370,7 @@ def _check_shell(
     commands = _shell_commands(
         shell_name,
         topic=topic,
+        consumer_group=consumer_group,
         installed=installed,
         kcat_executables=kcat_executables,
         registry_provider=registry_provider,
@@ -415,11 +421,13 @@ def _shell_commands(
     shell_name: str,
     *,
     topic: str,
+    consumer_group: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
     registry_provider: str,
 ) -> list[str]:
     quoted_topic = quote_shell_argument(shell_name, topic)
+    quoted_group = quote_shell_argument(shell_name, consumer_group)
     quoted_python = quote_shell_argument(shell_name, sys.executable)
     commands = [f"{quoted_python} -m kantrip.cli current"]
     commands.extend(f"{executable} --list" for executable in installed["topics"])
@@ -428,7 +436,8 @@ def _shell_commands(
         for executable in installed["producer"]
     )
     commands.extend(
-        f"{executable} --topic {quoted_topic} --from-beginning --max-messages 1"
+        f"{executable} --topic {quoted_topic} --group {quoted_group} "
+        "--from-beginning --max-messages 1"
         for executable in installed["consumer"]
     )
     commands.extend(f"{executable} --list" for executable in installed["groups"])

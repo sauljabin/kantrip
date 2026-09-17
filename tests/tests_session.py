@@ -5,15 +5,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kantrip.adapters import SCHEMA_REGISTRY_EXECUTABLES, create_subshell_shims
+from kantrip.kafka import KafkaConnection
 from kantrip.registry import RegistryConnection
 from kantrip.runtime import create_session_runtime
 from kantrip.secret_store import secret_reference
 from kantrip.session import SessionError, run_profile_session
+from tests.pki import synthetic_pki
 
-CA_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "kafka-ca.pem"
+PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
 
 class TestProfileSession(unittest.TestCase):
@@ -27,6 +29,7 @@ class TestProfileSession(unittest.TestCase):
         self.addCleanup(self.runtime_patch.stop)
         self.addCleanup(self.runtime_directory.cleanup)
         self.profile = {
+            "id": PROFILE_ID,
             "kafka": {
                 "bootstrapServers": ["localhost:9092", "localhost:9093"],
                 "transport": "plaintext",
@@ -75,7 +78,7 @@ class TestProfileSession(unittest.TestCase):
 
     def test_removes_an_abandoned_stale_session_before_exec(self) -> None:
         with patch("kantrip.runtime.time.time", return_value=0):
-            abandoned = create_session_runtime({})
+            abandoned = create_session_runtime(PROFILE_ID, 1, {})
         abandoned_path = abandoned.path
         abandoned._closed = True
         os.close(abandoned._lock_descriptor)
@@ -194,7 +197,7 @@ class TestProfileSession(unittest.TestCase):
             {
                 "bootstrapServers": ["broker.invalid:9093"],
                 "transport": "tls",
-                "tls": {"caCertificates": CA_FIXTURE.read_text(encoding="utf-8")},
+                "tls": {"caCertificates": synthetic_pki().ca},
             }
         )
         observed: dict[str, object] = {}
@@ -225,9 +228,55 @@ class TestProfileSession(unittest.TestCase):
         self.assertIn("security.protocol=SSL\n", observed["java"])
         self.assertIn("ssl.endpoint.identification.algorithm=https\n", observed["java"])
         self.assertIn("ssl.truststore.type=PEM\n", observed["java"])
-        self.assertEqual(CA_FIXTURE.read_text(encoding="utf-8"), observed["ca"])
+        self.assertEqual(synthetic_pki().ca, observed["ca"])
         self.assertEqual(0o600, observed["ca_mode"])
         self.assertEqual("SSL", observed["security_protocol"])
+
+    def test_mtls_java_configuration_escapes_pem_and_keeps_private_files(self) -> None:
+        pki = synthetic_pki()
+        resolved = KafkaConnection(
+            ("localhost:9095",),
+            "tls",
+            pki.ca,
+            "mtls",
+            client_certificate=pki.client_certificate,
+            private_key=pki.client_key,
+        )
+        observed: dict[str, object] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            session = Path(environment["KANTRIP_SESSION_DIR"])
+            java_path = Path(environment["KAFKA_JAVA_CONFIG_FILE"])
+            observed["java"] = java_path.read_text(encoding="utf-8")
+            observed["certificate_mode"] = stat.S_IMODE(
+                (session / "kafka-client.crt").stat().st_mode
+            )
+            observed["key_mode"] = stat.S_IMODE((session / "kafka-client.key").stat().st_mode)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/kafka/kafka-topics"),
+            patch("kantrip.adapters.require_java_pem_support"),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "mtls",
+                self.profile,
+                ["kafka-topics", "--list"],
+                environment={},
+                resolved_kafka=resolved,
+            )
+
+        java = observed["java"]
+        assert isinstance(java, str)
+        self.assertIn("ssl.keystore.type=PEM\n", java)
+        self.assertIn("ssl.keystore.certificate.chain=-----BEGIN CERTIFICATE-----\\n", java)
+        self.assertIn("ssl.keystore.key=-----BEGIN PRIVATE KEY-----\\n", java)
+        self.assertNotIn("\nMI", java)
+        self.assertEqual(0o600, observed["certificate_mode"])
+        self.assertEqual(0o600, observed["key_mode"])
 
     def test_custom_ca_rejects_java_clients_older_than_kafka_2_7_before_operation(
         self,
@@ -235,7 +284,7 @@ class TestProfileSession(unittest.TestCase):
         self.profile["kafka"].update(
             {
                 "transport": "tls",
-                "tls": {"caCertificates": CA_FIXTURE.read_text(encoding="utf-8")},
+                "tls": {"caCertificates": synthetic_pki().ca},
             }
         )
         for version in ("2.13-2.6.0", "6.0.4"):
@@ -265,7 +314,7 @@ class TestProfileSession(unittest.TestCase):
         self.profile["kafka"].update(
             {
                 "transport": "tls",
-                "tls": {"caCertificates": CA_FIXTURE.read_text(encoding="utf-8")},
+                "tls": {"caCertificates": synthetic_pki().ca},
             }
         )
         for version in ("2.13-2.7.0", "4.3.0", "6.1.0", "8.3.1"):
@@ -305,6 +354,7 @@ class TestProfileSession(unittest.TestCase):
                 root_path / "bin",
                 bootstrap_servers="localhost:9093",
                 java_config_path=root_path / "kafka.properties",
+                kcat_config_path=root_path / "kcat.conf",
                 kaskade_config_path=root_path / "kaskade.ini",
                 kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                 environment={"PATH": root},
@@ -494,6 +544,7 @@ class TestProfileSession(unittest.TestCase):
                         root_path / "bin",
                         bootstrap_servers="localhost:9092",
                         java_config_path=root_path / "kafka.properties",
+                        kcat_config_path=root_path / "kcat.conf",
                         kaskade_config_path=root_path / "kaskade.ini",
                         kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                         environment={"PATH": str(root_path)},
@@ -985,7 +1036,7 @@ class TestProfileSession(unittest.TestCase):
             run.call_args.args[0],
         )
 
-    def test_authenticated_profile_is_rejected_before_launch(self) -> None:
+    def test_authenticated_profile_resolves_once_and_launches(self) -> None:
         profile_id = "018f8f13-7c21-7cee-8000-000000000010"
         self.profile["id"] = profile_id
         self.profile["kafka"]["transport"] = "tls"
@@ -994,14 +1045,26 @@ class TestProfileSession(unittest.TestCase):
             "username": "synthetic-user",
             "passwordRef": secret_reference(profile_id, "kafka/password"),
         }
+        store = Mock()
+        store.get.return_value = "synthetic-password"
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            patch("kantrip.session._run_child") as run,
-            self.assertRaisesRegex(SessionError, "authentication is not yet supported"),
+            patch(
+                "kantrip.session._run_child",
+                return_value=subprocess.CompletedProcess(["kcat"], 0),
+            ) as run,
         ):
-            run_profile_session("local", self.profile, ["kcat", "-L"], environment={})
+            result = run_profile_session(
+                "local",
+                self.profile,
+                ["kcat", "-L"],
+                environment={},
+                secret_store=store,
+            )
 
-        run.assert_not_called()
+        self.assertEqual(0, result)
+        store.get.assert_called_once()
+        run.assert_called_once()
 
 
 if __name__ == "__main__":

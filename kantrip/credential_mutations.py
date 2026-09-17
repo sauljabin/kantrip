@@ -23,6 +23,10 @@ from kantrip.secret_store import (
 class CredentialMutationError(RuntimeError):
     """Raised when a cross-store credential mutation cannot finish safely."""
 
+    def __init__(self, message: str, *, committed: bool | None = False) -> None:
+        super().__init__(message)
+        self.committed = committed
+
 
 @dataclass(frozen=True)
 class SecretReplacement:
@@ -45,6 +49,10 @@ class StagedSecret:
 
 ProfileSwitch = Callable[[Mapping[str, str]], None]
 ProfileRemoval = Callable[[], None]
+OutcomeInspection = Callable[
+    [tuple[CleanupRecord, ...], tuple[CleanupRecord, ...]],
+    bool | None,
+]
 
 
 def update_profile_revision(
@@ -118,8 +126,9 @@ def stage_secret_replacements(
     try:
         for item, replacement in zip(journaled, validated, strict=True):
             store.set(item.reference, replacement.value)
+            if store.get(item.reference) != replacement.value:
+                raise CredentialMutationError("staged credential verification failed")
     except SecretStoreError as error:
-        reconcile_secret_cleanup(connection, store)
         raise CredentialMutationError("profile credentials could not be staged") from error
     return journaled
 
@@ -132,8 +141,10 @@ def commit_secret_replacements(
     switch_profile: ProfileSwitch,
     *,
     retire_references: Iterable[str] = (),
+    inspect_outcome: OutcomeInspection | None = None,
 ) -> ReconciliationResult:
     """Switch a profile to staged references and retire superseded values."""
+    committed = False
     try:
         references = {item.field: item.reference for item in staged}
         if len(references) != len(staged):
@@ -156,14 +167,45 @@ def commit_secret_replacements(
         switch_profile(references)
         for item in staged:
             _remove_cleanup_record(connection, item.cleanup)
-        for reference in retired:
-            queue_secret_cleanup(connection, reference)
-        connection.execute("COMMIT")
+        retired_cleanup = tuple(
+            queue_secret_cleanup(connection, reference) for reference in retired
+        )
+        try:
+            connection.execute("COMMIT")
+        except BaseException as error:
+            _rollback(connection)
+            outcome = _inspect_commit_outcome(inspect_outcome, staged, retired_cleanup)
+            raise CredentialMutationError(
+                (
+                    "credential mutation committed but its acknowledgement was lost"
+                    if outcome is True
+                    else (
+                        "credential mutation was not committed"
+                        if outcome is False
+                        else "credential mutation commit outcome could not be established"
+                    )
+                ),
+                committed=outcome,
+            ) from error
+        committed = True
     except BaseException:
         _rollback(connection)
-        reconcile_secret_cleanup(connection, store)
         raise
-    return reconcile_secret_cleanup(connection, store)
+    try:
+        if not retired_cleanup:
+            return ReconciliationResult(0, 0, 0)
+        return reconcile_secret_cleanup(
+            connection,
+            store,
+            record_ids=(record.record_id for record in retired_cleanup),
+        )
+    except BaseException as error:
+        if committed:
+            raise CredentialMutationError(
+                "profile change committed but credential cleanup could not be verified",
+                committed=True,
+            ) from error
+        raise
 
 
 def commit_profile_removal(
@@ -172,19 +214,54 @@ def commit_profile_removal(
     profile_id: str,
     references: Iterable[str],
     remove_profile: ProfileRemoval,
+    *,
+    inspect_outcome: OutcomeInspection | None = None,
 ) -> ReconciliationResult:
     """Remove a profile transactionally before deleting its exact credentials."""
     validated = _validated_unique_references(references, profile_id=profile_id)
+    committed = False
     try:
         connection.execute("BEGIN IMMEDIATE")
         remove_profile()
-        for reference in validated:
-            queue_secret_cleanup(connection, reference)
-        connection.execute("COMMIT")
+        removal_cleanup = tuple(
+            queue_secret_cleanup(connection, reference) for reference in validated
+        )
+        try:
+            connection.execute("COMMIT")
+        except BaseException as error:
+            _rollback(connection)
+            outcome = _inspect_commit_outcome(inspect_outcome, (), removal_cleanup)
+            raise CredentialMutationError(
+                (
+                    "profile removal committed but its acknowledgement was lost"
+                    if outcome is True
+                    else (
+                        "profile removal was not committed"
+                        if outcome is False
+                        else "profile removal commit outcome could not be established"
+                    )
+                ),
+                committed=outcome,
+            ) from error
+        committed = True
     except BaseException:
         _rollback(connection)
         raise
-    return reconcile_secret_cleanup(connection, store)
+    try:
+        if not removal_cleanup:
+            return ReconciliationResult(0, 0, 0)
+        return reconcile_secret_cleanup(
+            connection,
+            store,
+            record_ids=(record.record_id for record in removal_cleanup),
+        )
+    except BaseException as error:
+        if committed:
+            raise CredentialMutationError(
+                "profile removal committed but credential cleanup could not be verified",
+                committed=True,
+            ) from error
+        raise
 
 
 def _validate_replacements(
@@ -206,6 +283,20 @@ def _validate_replacements(
         fields.add(replacement.field)
         validated.append(replacement)
     return tuple(validated)
+
+
+def _inspect_commit_outcome(
+    inspection: OutcomeInspection | None,
+    removed_cleanup: Sequence[StagedSecret],
+    added_cleanup: tuple[CleanupRecord, ...],
+) -> bool | None:
+    if inspection is None:
+        return None
+    removed = tuple(item.cleanup for item in removed_cleanup)
+    try:
+        return inspection(removed, added_cleanup)
+    except (OSError, RuntimeError, sqlite3.Error, ValueError):
+        return None
 
 
 def _validated_unique_references(
@@ -251,9 +342,14 @@ def _remove_cleanup_record(
         raise CredentialMutationError("staged credential cleanup record changed unexpectedly")
 
 
-def _rollback(connection: sqlite3.Connection) -> None:
-    if connection.in_transaction:
-        connection.execute("ROLLBACK")
+def _rollback(connection: sqlite3.Connection) -> bool:
+    """Roll back when possible and report whether non-commit is established."""
+    try:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        return not connection.in_transaction
+    except sqlite3.Error:
+        return False
 
 
 __all__ = [

@@ -1,7 +1,7 @@
 # First-release MVP roadmap
 
 This is the implementation handoff for the remaining first-release work, audited
-against commit `70f2d42`. Read PRs 1–7 in order. Each numbered PR is one delivery
+after completion of PR 1. Read PRs 2–7 in order. Each numbered PR is one delivery
 unit; its subsections are tasks within that PR, not additional PRs. All commands
 and contracts below are **targets**, unless explicitly identified as current.
 
@@ -47,8 +47,7 @@ and affected documentation land together. Move its runnable manual checks to
 
 | PR | Outcome | Includes | Depends on |
 | --- | --- | --- | --- |
-| 1 | Usable authenticated Kafka profiles | Lifecycle/transaction guarantees, environment precedence, temporary PKI, existing adapters, Kafka ping, profile doctor and sessions | Current foundation |
-| 2 | Independent secure Registry and OAuth connections | Registry TLS/basic/token/mTLS, Kafka and Registry OAuth, provider probes, capability enforcement | PR 1 |
+| 2 | Independent secure Registry and OAuth connections | Registry TLS/basic/token/mTLS, Kafka and Registry OAuth, authenticated provider probes, capability enforcement | Completed authenticated Kafka foundation |
 | 3 | Complete profile creation from external files | Java/librdkafka/Confluent properties, Strimzi Secrets, all supported auth types, matching sandbox exports | PRs 1–2 |
 | 4 | Additional native clients | `kcl` and `kafkactl`, direct commands and three shells | PRs 1–3 |
 | 5 | Readable, verified CLI implementation | Focused refactoring and design patterns, remaining integration fixtures/matrix, CLI documentation reconciliation and manual QA | PRs 1–4 |
@@ -66,429 +65,12 @@ Implementation navigation (extend these tests; do not duplicate whole suites):
 
 | PR | Main existing code and test seams |
 | --- | --- |
-| 1 | `cli.py`, `profiles.py`, `credential_mutations.py`, `reconciliation.py`, `profile_output.py`, `kafka.py`, `session.py`, `runtime.py`, `doctor.py`, `ping.py`, `adapters.py`; `tests/tests_cli.py`, `tests/tests_profiles.py`, `tests/tests_profile_output.py`, `tests/tests_kafka.py`, `tests/tests_session.py`, `tests/tests_runtime.py`, `tests/tests_doctor.py`, `tests/tests_ping.py`, `tests/tests_shells.py` |
 | 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/tests_registry.py`, `tests/tests_schemas.py`, `tests/tests_credential_mutations.py`, `tests/tests_redaction.py`, client integration fixtures |
 | 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/tests_sandbox.py` |
 | 4 | Adapter/rendering/capability seams from PRs 1–2, `shells.py`, `doctor.py`; session, shell, smoke, and PTY contract tests |
 | 5 | Lifecycle/resolution/adapter/rendering seams from PRs 1–4; platform integration evidence, `scripts/verify_release.py`, `scripts/smoke.py`, docs, examples, packaging/workflow checks |
 | 6 | New `site/` static sources and focused site build/validation script; `.github/workflows/`, existing artwork, `README.md`, `DEVELOPMENT.md` |
 | 7 | All root guides and their anchors, schemas/examples, site links, `pyproject.toml` sdist includes, `scripts/verify_release.py` required files, templates/workflows |
-
-## PR 1 — Complete Kafka execution, lifecycle, and local diagnostics
-
-### 1.1 Authentication and credential lifecycle through the CLI
-
-**Gap:** `profiles.py` accepts `KafkaAuthInput`, but `cli.py` exposes no auth
-options. `edit` without options fails, `remove` has no confirmation, and
-`profile_output.py` does not inspect credential availability.
-
-**Architecture:** collect a typed mutation request in `cli.py`, validate it
-through `kafka.py` and `profiles.py`, and reuse `credential_mutations.py` and
-`reconciliation.py`. Read the profile ID/revision before prompting; collect
-input outside the maintenance lock; commit with that expected generation.
-Cancellation, keyring failure, or a concurrent edit before commit must preserve
-the old usable profile. After commit, report the persisted outcome separately
-from cleanup; follow the failure contract in section 1.5. Reuse the existing immutable-reference staging; do not build another
-secret store or transaction mechanism.
-
-**CLI delta:**
-
-| Command | New options / behavior |
-| --- | --- |
-| `add PROFILE`, `edit PROFILE` | `--auth none\|plain\|scram-sha-256\|scram-sha-512\|mtls`, `--username TEXT`, `--client-certificate-file PATH`, `--client-key-file PATH` |
-| `edit PROFILE` | No options opens a field-based interactive editor; omitted options in scripted edits keep existing fields |
-| `edit PROFILE` | Repeatable `--replace-secret FIELD`; prompt without echo for text secrets, prompt for a file path for private-key replacement, and prompt without echo for an encrypted key's password |
-| `remove PROFILE` | Confirm removal of every profile; new `--force` skips confirmation only; noninteractive removal without it fails |
-| `describe PROFILE [-o human\|json\|yaml]` | Add safe per-field credential states `stored`, `missing`, `unavailable`; keep ID/revision and omit references and values |
-
-Required passwords and key passwords are prompted only when creating or
-replacing them. The editor offers keep/replace/remove without showing or
-prefilling values. Removing a required secret must accompany an auth change
-that makes it unnecessary. No standalone `--remove-secret` flag. Reject unknown,
-duplicate, or inapplicable replacement fields. Missing credentials are repaired
-through the same replacement path. The initial field vocabulary is
-`kafka/password`, `kafka/tls/private-key`, and
-`kafka/tls/private-key-password`; PR 2 extends it explicitly.
-
-Changing an auth variant discards incompatible old fields in the validated
-candidate and retires only its superseded references after commit. Switching
-to plaintext requires explicit `--auth none` if currently authenticated, and
-removes obsolete TLS material. TLS requires `--transport tls`; do not silently
-upgrade/downgrade an explicitly selected transport. Do not read or prompt for
-unaffected credentials during metadata-only edits.
-
-Noninteractive input must never hang: if a required secret has no source and
-there is no controlling terminal, fail with guidance. When stdin carries an
-import in PR 3, any additional prompt uses the controlling terminal, not stdin.
-Credential observations may read exact references through the approved store
-and immediately discard values; backend selection alone cannot prove `stored`.
-They must never create, unlock by changing policy, repair, or enumerate entries.
-
-**Acceptance:** exercise add/edit/remove, no-options editing, canceled prompts,
-missing/locked store, missing secret recovery, concurrent prompted edits,
-mechanism changes, encrypted and mismatched PEM keys, and redaction in all
-output modes. Public CA/certificate values stay in the profile; private keys
-and passwords stay in the OS store. Verify realistic PEM sizes on both OSes.
-
-### 1.2 Enable existing adapters and authenticated execution
-
-**Gap:** `session.py` rejects every `requires_secrets` connection before using
-the already implemented resolution/rendering helpers.
-
-**Architecture:** load the profile document and revision from one collection,
-resolve one immutable connection snapshot, and pass it to rendering and runtime
-creation. Enable PLAIN, both SCRAM variants, and mTLS for verified mappings in
-Apache/Confluent Kafka, Confluent console, kcat/kafkacat, and Kaskade adapters.
-Resolve once per session; do not let shims query SQLite or the keyring again.
-Materialize PEM files only in the private runtime and retain existing cleanup.
-Java PEM support gates must cover client keys/certificates even when the CA uses
-default trust. Keep Java and librdkafka serialization separate.
-
-Build one capability table keyed by adapter, installed client version/library
-build, Kafka mechanism, Registry provider/auth, and trust requirements. Direct
-commands and shell shims consume the same decisions. A subshell may start for a
-valid profile; each invoked adapter rejects unsupported combinations before its
-operation. Generate only supported client artifacts rather than blocking an
-entire shell on an unused installed client. Unknown custom commands continue to
-receive the documented generic session files/environment, without a claim of
-automatic adaptation. Preserve connection-override rejection, including
-single-token assignments, short forms, and property injection flags.
-
-**CLI delta:** no new `exec` syntax. The existing `exec PROFILE [-- COMMAND...]`
-now executes supported authenticated profiles. `KAFKA_*` remains client
-configuration; `KANTRIP_*` remains session metadata. Any new file variable must
-be explicitly added to `USAGE.md`; do not expose literal secrets by default.
-
-**Acceptance:** real produce/consume/admin operations for every advertised
-mechanism, direct commands and Bash/Zsh/Fish, missing client/version refusal,
-wrong credentials, no secret in argv, and cleanup after preparation failures,
-normal exit, signals, and forced termination. Add a disposable integration
-fixture for PLAIN and SCRAM-SHA-256: the current Strimzi sandbox supplies only
-SCRAM-SHA-512, mTLS, OAuth, TLS, and plaintext. Do not mark the missing mechanisms
-verified using mock tests alone.
-
-### 1.3 Make Kafka ping independent of resource ACLs
-
-**Gap:** `ping.py` rejects authenticated profiles and bases success on
-`AdminClient.list_topics()`. Its broker count is a metadata observation, not a
-pure authentication result.
-
-**Decision:** retain the Python/librdkafka stack and shared resolver, but use a
-bounded connection-state probe. Poll an `AdminClient` with `stats_cb` and
-`error_cb`, a short statistics interval within the deadline, and connection
-initiation verified against the pinned library (use its documented
-`enable.sparse.connections=false` probe setting if needed to initiate a real
-connection without an application request). A real configured/learned broker
-reaching `UP` after its required TLS/SASL exchange is success. Exclude internal,
-logical, and address-less pseudo-brokers; do not require a nonnegative broker ID
-because a bootstrap connection can legitimately use `-1`. The pinned library's
-[statistics contract](https://github.com/confluentinc/librdkafka/blob/v2.15.0/STATISTICS.md)
-and [connection state implementation](https://github.com/confluentinc/librdkafka/blob/v2.15.0/src/rdkafka_broker.c)
-support this design; prove callback delivery and authentication sequencing with
-real integration tests before enabling it. Do not parse debug logs or access
-private C handles.
-
-Do not call topic/group/schema listing or `describe_cluster` to decide success.
-Library background discovery can still occur; do not claim zero metadata
-traffic. Its authorization errors must not override independently observed
-successful authentication. If the pinned binding cannot establish the required
-state evidence, treat that as a PR blocker requiring a revised documented
-public-library approach; do not silently fall back to ACL-dependent success.
-
-A TCP connection or `ApiVersions` response alone cannot prove SASL success:
-Kafka accepts API-version negotiation before authentication. See the
-[Kafka authentication sequence](https://kafka.apache.org/26/design/protocol/).
-TLS without client authentication proves server identity only; plaintext proves
-reachability only. Neither should claim an authenticated user identity. mTLS
-proves the configured client exchange, not that a permissive server required
-that certificate.
-
-**CLI delta:** add `-q` as the alias for existing `--quiet`; keep
-`--timeout SECONDS` (default 5, minimum 0.1). Replace broker/resource counts with
-per-service transport and authentication observations. Apply one monotonic
-network deadline across Kafka, configured Registry, and any token acquisition,
-passing remaining time to each phase. No per-retry fresh timeout. Success means
-at least one real broker connection, not health of all brokers.
-
-Return `0` when all configured services meet their required connectivity/auth
-proof, `1` for failure or inconclusive authentication. Quiet mode produces no
-stdout/stderr on either outcome (including library logs and profile errors).
-Report DNS/TCP, TLS, authentication, capability, timeout, and inconclusive
-outcomes distinctly. Authentication failure cannot become success because a
-public endpoint or TLS socket worked. Add Registry behavior in PR 2.
-
-**Acceptance:** a principal with no topic/group/cluster ACLs can ping; an
-invalid password cannot. Test zero-topic clusters, internal pseudo-broker
-statistics, unavailable bootstrap plus reachable bootstrap, invalid CA/hostname,
-missing certificate, deadline exhaustion, and quiet output. Provision an
-authorizer-enabled test broker: the current sandbox Kafka manifest has no
-explicit authorizer and cannot prove the no-ACL requirement by itself.
-
-### 1.4 Implement `doctor PROFILE --sessions` and credential diagnostics
-
-**Gap:** `doctor` currently has no positional profile or `--sessions`;
-`runtime.py` markers contain no profile identity/revision. Global doctor checks
-backend availability and journal counts, not each referenced credential or
-certificate expiry. Its unconditional “profiles are executable” claim also
-needs replacement with evidence-based checks.
-
-**Architecture:** extend runtime markers with required `profileId` (UUID) and
-`profileRevision` (positive integer) from the same snapshot used by the child.
-Carry those fields through creation and `mark_running`. Extend the existing
-safe scanner to return validated observations plus aggregate counts. Never
-open generated client files to determine ownership. Keep `flock` as liveness
-proof, the five-minute stale threshold, descriptor-relative inspection, and
-bounded scans. Report truncation explicitly. Old development markers are
-invalid and never guessed or automatically deleted.
-
-Add profile scope to `run_doctor`; inspect the database read-only, then exact
-credential references, certificate/key match, not-before/not-after dates, and
-compatible installed clients. Expired/not-yet-valid certificates are errors;
-expiry within 30 days is a warning. Display only safe status. Global doctor
-checks all profiles; scoped doctor excludes unrelated profile failures while
-still reporting shared database/backend/runtime safety failures.
-
-**CLI delta:**
-
-```text
-kantrip doctor [--verbose] [PROFILE]
-kantrip doctor PROFILE --sessions [--verbose]
-kantrip doctor --repair [--verbose]
-```
-
-`--sessions` requires `PROFILE`. Reject `PROFILE --repair` and
-`--sessions --repair` as usage errors. Repair remains global and unchanged.
-Default scoped output summarizes session counts; `--sessions` shows active,
-recent, and stale entries with captured revision, age, and state. Session IDs,
-PIDs, and resolved runtime paths are verbose-only; generated config paths,
-contents, and credential references are never displayed. Recreated profiles
-with the same name must not inherit old UUID-owned sessions. Edits do not
-rewrite live sessions; report an older captured revision without treating that
-alone as corruption. Deleted-profile sessions remain visible globally.
-
-**Acceptance:** two profiles, two simultaneous revisions, remove/recreate same
-name, active/recent/stale/invalid/truncated entries, missing/locked credentials,
-expired/mismatched certificates, empty and missing database. Ordinary doctor
-must create no database, lock file, runtime directory, or credential and must
-perform no network request. Test read-only behavior before pending migrations.
-
-### 1.5 Close the mutation integrity and durability contract
-
-**Plan assessment:** immutable references, revision checks, journaling, private
-SQLite, and exact cleanup are the correct foundation. They do not constitute a
-single atomic transaction across SQLite and the OS credential store. The MVP
-must promise atomic profile visibility plus recoverable credential side effects,
-with the following mandatory invariants and failure evidence. This is a review
-of the finished MVP's guarantees, not a claim that current code satisfies them.
-
-**Common mutation protocol:**
-
-1. Read identity/revision and collect confirmation, files, and no-echo input
-   outside the maintenance lock. Validate syntax, schema, credential ownership,
-   and certificate/key correspondence before persistent side effects. Do not
-   contact Kafka/Registry to decide whether a local profile can be saved.
-2. Acquire the same bounded maintenance lock used by every mutation and repair.
-   Reload and compare both UUID and revision, not just name/revision. For `add`,
-   recheck name uniqueness under the lock. For `remove`, bind confirmation to
-   the captured UUID/revision even when no credentials exist. A concurrently
-   removed/recreated same-name profile must never inherit an earlier approval.
-3. Hold this lock across durable staging intent, exact credential writes,
-   profile commit, and post-commit reconciliation. No interactive questions
-   while holding it. Repair must never interpret another live mutation's staged
-   entries as abandoned. Keep SQLite write transactions short; do not keep a
-   SQLite transaction open while talking to the OS store.
-4. Journal every new immutable reference durably **before** `store.set`.
-   Validate backend success and read back the exact staged value before it can
-   become active; failed readback keeps the old profile and cleanup intent.
-   Readback detects a failed write, not physical power-loss durability. If a
-   backend writes and then raises, the existing durable intent still owns that
-   uncertain side effect. Never blindly retry under a different reference.
-5. In one SQLite transaction, install the complete validated profile (Kafka and
-   Registry together), advance revision once, remove staging cleanup records
-   for its new active references, and journal all superseded references. For
-   removal, delete the exact generation and journal all its references in that
-   same transaction. Never delete old secrets before this commit.
-6. Reconcile only after the durable outcome is known. Before each deletion,
-   validate the journal and all live profile reference ownership under the same
-   lock and prove the target is not referenced by any current profile. A live
-   reference in the deletion journal is an integrity error: retain it, delete
-   nothing for that conflicting record, and report the inconsistency. If the
-   database cannot be validated, do not perform credential cleanup. Missing
-   orphan entries count as already deleted; backend-unavailable errors do not.
-7. Remove each cleanup record only after its exact deletion is confirmed.
-   A crash after deletion but before journal removal is safe to retry. Cleanup
-   failure after commit must never roll back the profile or delete its new
-   credentials. Preserve pending work for `doctor --repair`.
-
-Do not infer rollback solely because an exception was thrown. If commit or
-subsequent filesystem/output work fails, reopen and inspect committed identity,
-revision, references, and journal under the lock. If the outcome cannot be
-established, retain recovery evidence and perform no speculative credential
-compensation. A broken stdout pipe after commit also does not undo a mutation.
-Every error message must distinguish the persisted outcome from cleanup status.
-
-**Mutation CLI result contract (new public exit statuses):**
-
-| Exit | `add`, `edit`, `remove` outcome | Safe next step |
-| --- | --- | --- |
-| `0` | Requested profile change committed and its credential cleanup completed | Continue |
-| `1` | Requested profile change definitely not committed; staged cleanup may remain journaled | Inspect cause, repair if indicated, then explicitly retry |
-| `2` | CLI usage error | Correct arguments |
-| `3` | Requested profile change committed, but cleanup or post-commit verification failed | Inspect `describe`/`list` and `doctor`; repair, do not repeat mutation blindly |
-| `4` | Commit outcome could not be established | Stop automatic retries; diagnose storage and inspect state before acting |
-
-Cancellation before commit leaves the profile unchanged; cancellation or a
-signal after commit cannot promise that. Forced termination may return a shell
-signal status instead of the table above. Do not promise exactly-once CLI
-invocation across process death or add persistent operation history merely to
-simulate it. Unrelated older cleanup debt is reported separately from the
-requested mutation's outcome. `ping` retains its own `0`/`1` contract.
-
-**Concurrency with secret readers:** a revision field alone does not prevent
-`exec` from reading old references while `edit`/`remove` deletes their values.
-For `exec` and authenticated `ping`, hold the maintenance lock while loading one
-validated generation and resolving all of its required secrets into memory;
-then release it before rendering, networking, or the child lifetime. Never
-combine Kafka from one generation with Registry from another. Concurrent
-rotation/removal either precedes this snapshot or follows it; no partially
-resolved child may start. Do not retain the lock for a long-running session.
-Read-only observations can use re-read/revision checks with bounded retry and
-report a concurrent change; they must not create a lock file just to inspect.
-
-A running session already has its own credentials. Local rotation/removal does
-not revoke copies in that child or tokens at the remote service. Remote
-revocation can end a session independently. New sessions use the new generation
-or fail after removal. Do not retain historical keyring entries just to support
-already materialized sessions, and do not promise their continued remote access.
-
-**Durability boundary:** keep the existing WAL/FULL policy and verify it for
-*every* writable connection, including migration, reconciliation, and initial
-creation. Check effective `journal_mode`/`synchronous`, not only successful
-execution of a PRAGMA. Enable and verify SQLite `fullfsync` on supported macOS
-builds. Ensure newly created database/backup names and private parent directory
-entries are synchronized before acknowledging durable creation, using supported
-filesystem operations. An I/O error must preserve the outcome distinction above.
-Document local-filesystem support; network/cloud-synchronized databases and
-concurrently writable restored/copied databases are outside the guarantee.
-[SQLite WAL](https://www.sqlite.org/wal.html) and
-[synchronization settings](https://www.sqlite.org/pragma.html#pragma_synchronous)
-explain the local storage and synchronization assumptions.
-
-The OS credential store remains a separate durability boundary. Verify successful
-writes across a fresh process and supported-store restart where practical;
-never advertise distributed ACID or absolute power-loss protection. Database
-backups contain references, not credentials, and cannot restore secrets retired
-since the backup. Do not document automatic cleanup of an independently restored
-old journal as safe: arbitrary out-of-band rollback cannot be reliably detected.
-A full profile/credential backup/restore feature is out of scope;
-document this limit before the first release. After database/keyring loss,
-report missing references and use explicit secret replacement; never substitute
-inherited environment credentials or delete a profile to hide the inconsistency.
-
-**Required automated failure matrix:** extend credential mutation,
-reconciliation, profile, CLI, and session tests with controlled failpoints and
-real subprocess termination. After each restart assert profile identity/revision,
-complete reference resolution or unchanged absence, exact journal contents,
-absence of deleted live references, private permissions, and no secret output.
-
-| Cut / race | Required result |
-| --- | --- |
-| Before durable staging intent | No credential write and no profile change |
-| After intent, before first write | Old profile / absent add; exact recoverable intent |
-| Store writes then raises; second of several writes fails | Old profile / absent add; every possible new value remains tracked |
-| Before profile commit, including validation/CAS failure | Previous complete profile; staged values removable; no old value retired |
-| Immediately after commit / lost acknowledgement | Entire new profile or exact removal; active values preserved; obsolete values journaled |
-| During cleanup / after delete before journal commit | Committed state preserved; retry idempotent |
-| Two adds, edit/edit, edit/remove, remove/recreate/confirm | One serial valid outcome; no lost update or deletion of a different UUID |
-| Repair versus staging; exec/ping versus rotation/removal | No live staged/active value deleted; one coherent resolved reader snapshot |
-| Syntactically valid but live-reference cleanup record | Integrity error without credential deletion |
-| Disk full, permission loss, lock timeout, keyring lock/loss, commit I/O error | Truthful unchanged/committed/unknown result, bounded safe failure, recoverable evidence |
-
-Mocked exceptions and SIGKILL tests cover process-failure paths; they do not
-simulate hardware power loss. PR 5 records the actual OS/backend durability
-checks and remaining storage assumptions. PR 2 repeats the matrix with combined
-Kafka/Registry changes; PR 3 proves failed imports cannot leave partial profiles.
-
-### 1.6 Give the selected profile precedence over inherited connection state
-
-**Gap:** current `exec` overwrites its documented Kafka/session variables and
-clears the four Registry URL/config variables. It otherwise copies the parent
-environment, including sandbox passwords and OAuth secrets. Startup scripts can
-also replace `KCAT_CONFIG` or other connection variables after launch; current
-shell preparation restores shims/PATH, not the complete owned environment.
-
-**Decision:** create one documented environment policy shared by direct launch,
-interactive startup, and adapter shims. Start from the caller's environment,
-remove reserved Kafka/Registry/client connection namespaces and known sandbox
-credential names, then inject only the selected snapshot's public values and
-private config paths. Scrub `KAFKA_*`, `SCHEMA_REGISTRY_*`, `APICURIO_*`, and
-`KANTRIP_SANDBOX_*`; keep unrelated application variables unless an adapter has
-a documented conflict. Do not use ambient secrets to fill missing keyring data.
-Preserve Kantrip storage/runtime selectors; active-session nesting checks still
-run before any environment rewriting. PR 4 adds `KCL_*`/`KAFKA_CTL_*` handling.
-
-For Java adapters, neutralize inherited connection/security injection through
-`KAFKA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and `_JAVA_OPTIONS` before
-the native launcher runs. Any supported JVM tuning must be explicitly
-allowlisted and unable to replace profile trust/authentication. Version-gated
-OAuth launcher requirements (such as an allowed token-endpoint URL) must be
-generated from the profile, not depend on the user's sourced environment.
-
-After Bash/Zsh/Fish startup completes, restore the owned non-secret environment
-and remove conflicting inherited connection variables. Adapter shims reassert
-their exact private config paths and sanitized connection environment before
-each supported client invocation. Never write secrets into startup scripts.
-This prevents accidental configuration drift; hostile startup code and a user
-intentionally changing a custom application's environment remain inside the
-trusted-child boundary, not something Kantrip can sandbox.
-
-**Sandbox/documentation delta:** rename generated source variables to the
-`KANTRIP_SANDBOX_*` namespace and update every producer/consumer together:
-`KAFKA_SCRAM_*` becomes `KANTRIP_SANDBOX_KAFKA_SCRAM_*`, and apply the same prefix
-to existing `KAFKA_OAUTH_*`, `KAFKA_MTLS_*`, `KEYCLOAK_ADMIN_*`, `APICURIO_CLIENT_*`,
-and `SCHEMA_REGISTRY_*` sandbox fields. Keep the existing
-`KANTRIP_SANDBOX_CA`. No old-name aliases. These variables are laboratory inputs,
-not Kantrip's child API; strip the entire namespace from supervised children.
-Use plain shell assignments without automatic export when sourcing the file;
-only public arguments that a manual command needs should be expanded by the
-parent shell. Do not source the file inside `kantrip exec`.
-
-**Acceptance:** load a synthetic credentials file before launch, once as local
-shell variables and once with `set -a`; run direct commands and Bash/Zsh/Fish.
-Assert profile values win, source passwords/tokens/admin credentials are absent
-from children, unrelated application variables survive, caller variables remain
-unchanged, and opposite-provider values disappear. Repeat with startup scripts
-that export conflicting config paths, and with inherited JVM connection
-options. Check only boolean assertions/names, never dump the environment.
-
-### 1.7 Replace the committed certificate fixture with temporary PKI
-
-Remove `tests/fixtures/kafka-ca.pem` and the now-empty `tests/fixtures/`
-directory in this PR. Generate synthetic CA/key/certificate material with the
-existing `cryptography` dependency through a focused helper in `tests/`, or
-load material generated into a test-owned temporary directory. Do not move the
-same PEM blob into a Python constant, download certificates, use the system
-trust store, or create files at module import time.
-
-Give tests a controlled clock/validity interval and explicit expired,
-not-yet-valid, wrong-host, wrong-CA, encrypted-key, and mismatched-key variants.
-Create keys in memory; materialize only the files required by path-based tests
-in `TemporaryDirectory`, directories 0700/files 0600, with unconditional cleanup.
-Use shared setup/helpers to avoid repeated expensive key generation while
-keeping test state independent. Compare validated semantics, not random serials
-or exact newly generated PEM bytes across runs.
-
-Replace all fixture-path readers in `tests_cli.py`, `tests_kafka.py`,
-`tests_ping.py`, `tests_profiles.py`, `tests_schemas.py`, and `tests_session.py`.
-The configuration-only TLS scenario in `MANUAL_TESTING.md` must generate its
-public CA in the manual temporary root or use the sandbox's generated CA for
-live checks; no instruction may require a deleted repository fixture. Keep
-sandbox workflows independent from imports of test helpers. Remove the deleted
-fixture from `scripts/verify_release.py` required source-distribution files and
-update affected packaging assertions. Extend packaging verification to reject committed test certificate/key artifacts and validate
-that the source distribution's tests run without `tests/fixtures/`.
-No CLI change; this is part of PR 1's security test infrastructure, not a new PR.
-
 
 ## PR 2 — Secure Registry connections and native OAuth
 
@@ -595,7 +177,8 @@ token type/expiry, redact OAuth errors, and discard the token after the check.
 Test basic and form-based client authentication only as supported by the chosen
 native clients/provider; do not silently retry different credential methods.
 
-**Acceptance for 2.1–2.2:** apply section 1.5's failure matrix to simultaneous
+**Acceptance for 2.1–2.2:** extend the implemented mutation failure matrix in
+`DEVELOPMENT.md` to simultaneous
 Kafka/Registry creation, rotation, and removal, including an unavailable store
 halfway through staging either owner's credentials. A profile must never contain
 a new Kafka identity with an unintended old/partial Registry identity.
@@ -606,13 +189,15 @@ and librdkafka session alive across token expiry and demonstrate successful
 refresh and later revocation failure. Repeat native Registry refresh for each
 advertised client. A successful short ping is not refresh evidence.
 
-### 2.3 Registry ping without resource-list permission dependencies
+### 2.3 Registry authentication probes with minimum authorization
 
-**Finding:** current `/subjects` can require Confluent `GLOBAL_READ`, and native
-Apicurio resource searches depend on configured roles. Replacing them with a
-public health endpoint would prove availability, not authentication. Sources:
+**Finding:** current unauthenticated profiles use Confluent-compatible
+`/schemas/types` and native Apicurio `/system/info`. These non-resource metadata
+responses prove provider-shaped connectivity only; they do not prove that a
+secured Registry accepted the configured identity. Subject, artifact, config,
+and mode operations can require provider- and deployment-specific roles. Sources:
 [Confluent operation authorization](https://docs.confluent.io/platform/current/confluent-security-plugins/schema-registry/authorization/index.html)
-and [Apicurio security](https://www.apicur.io/registry/docs/apicurio-registry/3.0.x/getting-started/assembly-configuring-registry-security.html).
+and [Apicurio security](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-registry-security.html).
 
 **Decision:** introduce explicit provider probe strategies in `ping.py` using
 `ssl.SSLContext`, safe Authorization headers, and the common deadline. First
@@ -624,12 +209,23 @@ These are endpoint candidates with version/deployment verification gates, not
 a claim that all servers protect them identically. Apicurio ccompat remains a
 separate compatibility case; do not rewrite its base URL into native mode.
 
-For each pinned server/security deployment, prove a valid identity without
-resource roles succeeds and invalid credentials fail at the selected endpoint.
-Validate response shape/content type, and for `/users/me` require non-anonymous
-identity when auth is configured. Do not accept an HTML login page as success.
-A credentialed 200 from a public endpoint or a token issued by an IdP alone is
+For each pinned server/security deployment, prefer a probe where a valid
+identity without resource roles succeeds and invalid credentials fail. Validate
+response shape/content type, and for `/users/me` require non-anonymous identity
+when auth is configured. Do not accept an HTML login page as success. A
+credentialed 200 from a public endpoint or a token issued by an IdP alone is
 insufficient evidence that the Registry accepted the credentials.
+
+When a provider/version/security configuration cannot prove authentication
+without resource authorization, use one reviewed, non-mutating protected
+operation with the minimum permission needed for that exact deployment. The
+choice may be a subject, artifact, config, mode, or another provider operation
+only after its authorization and response contract are verified; none is a
+universal fallback. Do not grant administrative or broad read roles merely for
+diagnostics. `USAGE.md` must then state the exact provider/version/configuration,
+operation, and minimum role or permission required for ping. This future
+documentation lands with the supported authenticated Registry feature; current
+`USAGE.md` continues to describe only unauthenticated metadata connectivity.
 
 Keep a reviewed provider/version probe contract recording whether the endpoint
 authenticates, needs a role, or is public. Do not infer this from a product name
@@ -640,19 +236,20 @@ authentication gate. An anonymous 200 does not. Do not submit deliberately wrong
 passwords during normal ping, or add a user-controlled arbitrary probe URL.
 For mTLS use verified handshake evidence from the actual configured connection;
 never claim that optional client certificates were required by the server.
-If authentication cannot be established for a deployment, report `transport verified; authentication unverified` and return
-`1`. For `auth: none`, a validated provider response suffices for connectivity
-but says nothing about resource access. Never downgrade an authenticated
-profile to this result.
+If authentication cannot be established for a deployment, report `transport
+verified; authentication unverified` and return `1`. For `auth: none`, a
+validated provider response suffices for connectivity but says nothing about
+resource access. Never downgrade an authenticated profile to this result.
 
-An HTTP 401 is authentication failure. An HTTP 403 proves reachability; label
-it authenticated-but-denied only with a verified server contract guaranteeing
-that ordering. Such independent authentication evidence can satisfy ping even
-when resource authorization is denied. Otherwise it is inconclusive, not a
-bad-password claim or a success. Do not grant roles just to make ping green,
-and do not fall back to `/subjects`, `/search/artifacts`, `/config`, or `/mode`.
-Document that arbitrary proxies/authorization filters can make a universally
-role-independent authentication check impossible.
+An HTTP 401 is authentication failure. A 403 can identify insufficient
+authorization only when the pinned server contract establishes that ordering;
+it is still a failed ping, not authentication success. Any ambiguous 401/403 is
+inconclusive and must never be accepted as success or mislabeled as a bad
+password. For a minimum-permission protected probe, success requires the
+expected validated response, normally 200, from an identity granted exactly
+the documented permission. Document that arbitrary proxies and authorization
+filters can make a universally role-independent authentication check
+impossible.
 
 Disable redirects for authenticated and token requests; never forward
 Authorization to another origin or downgrade HTTPS. Ignore inherited HTTP
@@ -661,11 +258,16 @@ Bound reads and retries as well as connection time. Preserve partial service
 results: Kafka success plus Registry failure is an overall failure with both
 outcomes visible in normal mode. Quiet mode remains fully silent.
 
-**Acceptance:** real no-role identities, wrong credentials, public endpoint,
+**Acceptance:** test a real valid identity without a resource role wherever the
+selected endpoint supports it, and an identity with only the documented minimum
+permission wherever a protected fallback is required. Also test the same valid
+identity without that required permission, wrong credentials, public endpoint,
 401, verified and ambiguous 403, unsupported endpoint, invalid response,
-redirects, revoked/expired tokens, custom CA, and server-required mTLS. Current
-sandbox Registry role filters are not evidence of a role-free probe. Add
-separate test configurations and record any remaining deployment limitation.
+redirects, revoked/expired tokens, custom CA, and server-required mTLS. Assert
+distinct connectivity, authentication, and authorization outcomes; an
+ambiguous 401/403 never passes. Current sandbox Registry role filters are not
+evidence of a role-free probe. Add separate provider/version/security
+configurations and record every remaining deployment limitation.
 
 ## PR 3 — Properties and Strimzi input sources
 
@@ -755,7 +357,8 @@ and independent OAuth endpoint trust. Retain PKCS12 only as a clearly negative
 import fixture if still useful for external-client tests. All generated values
 stay under ignored mode-0700 `sandbox/.state`, files mode 0600.
 
-**Acceptance:** reuse section 1.5's mutation failure matrix after normalization;
+**Acceptance:** reuse the implemented mutation failure matrix in
+`DEVELOPMENT.md` after normalization;
 import is never a separate transaction path. Verify file and stdin forms,
 every supported auth source, escaped
 credentials/continuations, source-relative paths, missing terminal for a prompt,
@@ -825,7 +428,8 @@ PR; do not introduce a separate cleanup PR for each module or mechanism.
   identify who owns the maintenance lock, expected profile generation,
   credential journal stages, database commit, and post-commit cleanup. Do not
   move I/O into constructors or conceal lock acquisition in unrelated helpers.
-  Preserve the cross-store recovery and exit-status contract from section 1.5.
+  Preserve the cross-store recovery and exit-status contract in
+  `ARCHITECTURE.md`.
 - Consolidate duplicated connection-option rejection, child environment policy,
   capability decisions, and diagnostic classification at their shared seams.
   Keep shell-specific quoting and client-specific argument grammars separate.
@@ -863,7 +467,7 @@ Fill any remaining infrastructure gaps: PLAIN/SCRAM-SHA-256, authorizer-enabled
 Kafka with no-ACL principals, no-role and wrong-credential Registry identities,
 Registry TLS-only/mTLS, token expiry/revocation, and encrypted/realistic PEM
 keys. Include the transaction fault/race matrix and source-environment precedence
-checks from PR 1; record process-crash evidence separately from OS/store restart
+checks from the completed Kafka foundation; record process-crash evidence separately from OS/store restart
 and power-loss assumptions. These fixtures must be ready before their
 corresponding manual checks.
 Do not accept “not installed” as a pass for a required compatibility cell.
@@ -1204,7 +808,7 @@ with a non-secret value from the pinned fixture's setup instructions.
   failure, then replace it with the correct value and expect success. In the
   editor verify keep/replace/remove and cancellation without displaying existing
   values. Repeat creation/ping for `--auth plain` and `--auth scram-sha-256`
-  against PR 1's documented fixture endpoints; do not reuse port 9094 for these.
+  against the documented sandbox fixture endpoints; do not reuse port 9094 for these.
   Repeat mTLS with an encrypted key, incorrect key password, and mismatched
   certificate; invalid identity must fail before launching a client.
 
@@ -1236,7 +840,7 @@ with a non-secret value from the pinned fixture's setup instructions.
 
 ### QA 5 — ACL-independent Kafka ping and silent status
 
-- [ ] Follow PR 1's authorizer-enabled fixture instructions to create
+- [ ] Follow the authorizer-enabled sandbox instructions to create
   `qa-noacl` with valid credentials and no topic, group, or cluster permissions:
 
   ```bash
@@ -1397,7 +1001,7 @@ with a non-secret value from the pinned fixture's setup instructions.
 
 ### QA 10 — Sourced environment and shell startup precedence
 
-- [ ] After PR 1's namespace change, deliberately export a synthetic sandbox
+- [ ] Deliberately export a synthetic sandbox
   secret plus conflicting public connection values in a disposable subshell.
   This tests the hazardous `set -a` case without exposing real credentials:
 
@@ -1471,7 +1075,7 @@ with a non-secret value from the pinned fixture's setup instructions.
   `describe`/`ping`; the stored credential must remain available after unlock.
   Run only against laboratory accounts, not a production keychain/session.
 
-- [ ] Review the PR 1 fault-injection report and reproduce its documented
+- [ ] Review the automated fault-injection suite and reproduce its documented
   subprocess-crash cases in the isolated fixture. Inspect through `describe`,
   `list`, and `doctor` after each restart. A committed change with cleanup debt
   must report exit `3` and remain committed; an indeterminate commit reports `4`

@@ -18,15 +18,18 @@ from kantrip.adapters import (
     AdapterError,
     create_subshell_shims,
     prepare_command,
-    require_java_pem_support,
+    require_adapter_capability,
 )
 from kantrip.kafka import (
     CA_BUNDLE_FILENAME,
+    CLIENT_CERTIFICATE_FILENAME,
+    CLIENT_KEY_FILENAME,
     KafkaConnection,
     KafkaProfileError,
     java_properties,
     kafka_connection,
     librdkafka_properties,
+    resolve_kafka_connection,
 )
 from kantrip.registry import (
     APICURIO_PROVIDER,
@@ -40,8 +43,14 @@ from kantrip.runtime import (
     cleanup_abandoned_sessions,
     create_session_runtime,
 )
+from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
 from kantrip.shells import ShellError, prepare_interactive_shell, resolve_interactive_shell
 from kantrip.supervisor import SupervisorError, run_supervised_process
+
+_SCRUBBED_PREFIXES = ("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KANTRIP_SANDBOX_")
+_SCRUBBED_JAVA_VARIABLES = frozenset(
+    {"KAFKA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
+)
 
 
 class SessionError(RuntimeError):
@@ -61,6 +70,9 @@ def run_profile_session(
     command: Sequence[str],
     *,
     environment: Mapping[str, str] | None = None,
+    profile_revision: int = 1,
+    resolved_kafka: KafkaConnection | None = None,
+    secret_store: SecretStore | None = None,
 ) -> int:
     """Run a command or interactive shell in a temporary profile session."""
     env = dict(os.environ if environment is None else environment)
@@ -76,11 +88,11 @@ def run_profile_session(
         _validate_executable(executable, env)
     _validate_kcat_arguments(arguments)
     try:
-        kafka = kafka_connection(profile)
-    except KafkaProfileError as error:
+        kafka = resolved_kafka or kafka_connection(profile)
+        if kafka.requires_secrets and resolved_kafka is None:
+            kafka = resolve_kafka_connection(kafka, secret_store or load_secret_store())
+    except (KafkaProfileError, SecretStoreError) as error:
         raise SessionError(str(error)) from error
-    if kafka.requires_secrets:
-        raise SessionError("Kafka authentication is not yet supported for sessions")
     try:
         registry = plain_registry_connection(profile)
     except RegistryProfileError as error:
@@ -88,7 +100,10 @@ def run_profile_session(
 
     try:
         cleanup_abandoned_sessions(env)
-        runtime = create_session_runtime(env)
+        profile_id = profile.get("id")
+        if not isinstance(profile_id, str):
+            raise SessionError("profile identity is missing")
+        runtime = create_session_runtime(profile_id, profile_revision, env)
     except SessionRuntimeError as error:
         raise SessionError(str(error)) from error
     try:
@@ -126,8 +141,22 @@ def _run_in_runtime(
     if kafka.ca_certificates is not None:
         ca_path = session_directory / CA_BUNDLE_FILENAME
         write_exclusive_text(ca_path, kafka.ca_certificates, mode=0o600)
+    certificate_path: Path | None = None
+    private_key_path: Path | None = None
+    if kafka.auth_type == "mtls":
+        if kafka.client_certificate is None or kafka.private_key is None:
+            raise SessionError("Kafka mTLS credentials are not resolved")
+        certificate_path = session_directory / CLIENT_CERTIFICATE_FILENAME
+        private_key_path = session_directory / CLIENT_KEY_FILENAME
+        write_exclusive_text(certificate_path, kafka.client_certificate, mode=0o600)
+        write_exclusive_text(private_key_path, kafka.private_key, mode=0o600)
     try:
-        kcat_properties = librdkafka_properties(kafka, ca_location=ca_path)
+        kcat_properties = librdkafka_properties(
+            kafka,
+            ca_location=ca_path,
+            client_certificate_location=certificate_path,
+            private_key_location=private_key_path,
+        )
         java_config = java_properties(kafka, ca_location=ca_path)
     except KafkaProfileError as error:
         raise SessionError(str(error)) from error
@@ -137,7 +166,7 @@ def _run_in_runtime(
     kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
     registry_config_path = session_directory / "registry.properties"
     write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
-    write_exclusive_text(java_config_path, _render_properties(java_config), mode=0o600)
+    write_exclusive_text(java_config_path, _render_java_properties(java_config), mode=0o600)
     write_exclusive_text(
         kaskade_config_path,
         f"[kafka]\n{_render_properties(kcat_properties)}",
@@ -176,8 +205,12 @@ def _run_in_runtime(
                 kaskade_registry_config_path=kaskade_registry_config_path,
                 registry=registry,
             )
-            if kafka.ca_certificates is not None and Path(arguments[0]).name in KAFKA_EXECUTABLES:
-                require_java_pem_support(arguments[0], environment=environment)
+            require_adapter_capability(
+                arguments[0],
+                auth_type=kafka.auth_type,
+                custom_pem=kafka.ca_certificates is not None or kafka.auth_type == "mtls",
+                environment=environment,
+            )
         else:
             arguments = _prepare_subshell(
                 executable,
@@ -189,7 +222,7 @@ def _run_in_runtime(
                 kaskade_config_path,
                 kaskade_registry_config_path,
                 registry,
-                kafka.ca_certificates is not None,
+                kafka.ca_certificates is not None or kafka.auth_type == "mtls",
             )
     except (AdapterError, ShellError) as error:
         raise SessionError(str(error)) from error
@@ -229,23 +262,23 @@ def _child_environment(
     registry_config_path: Path,
     registry: RegistryConnection | None,
 ) -> dict[str, str]:
-    child_environment = dict(environment) | {
-        "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
-        "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
-        "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
-        "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
-        "KANTRIP_PROFILE": profile_name,
-        "KANTRIP_SESSION_DIR": str(runtime.path),
-        "KANTRIP_SESSION_ID": runtime.session_id,
-        "KCAT_CONFIG": str(kcat_config_path),
+    child_environment = {
+        name: value
+        for name, value in environment.items()
+        if not name.startswith(_SCRUBBED_PREFIXES) and name not in _SCRUBBED_JAVA_VARIABLES
     }
-    for name in (
-        "APICURIO_REGISTRY_CONFIG_FILE",
-        "APICURIO_REGISTRY_URL",
-        "SCHEMA_REGISTRY_CONFIG_FILE",
-        "SCHEMA_REGISTRY_URL",
-    ):
-        child_environment.pop(name, None)
+    child_environment.update(
+        {
+            "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
+            "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
+            "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
+            "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
+            "KANTRIP_PROFILE": profile_name,
+            "KANTRIP_SESSION_DIR": str(runtime.path),
+            "KANTRIP_SESSION_ID": runtime.session_id,
+            "KCAT_CONFIG": str(kcat_config_path),
+        }
+    )
     if registry is not None:
         prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
         child_environment.update(
@@ -273,6 +306,7 @@ def _prepare_subshell(
         session_directory / "bin",
         bootstrap_servers=kcat_properties["bootstrap.servers"],
         java_config_path=java_config_path,
+        kcat_config_path=Path(child_environment["KCAT_CONFIG"]),
         kaskade_config_path=kaskade_config_path,
         kaskade_registry_config_path=kaskade_registry_config_path,
         environment=environment,
@@ -285,6 +319,12 @@ def _prepare_subshell(
         session_directory,
         shim_directory,
         environment,
+        owned_environment={
+            name: value
+            for name, value in child_environment.items()
+            if name.startswith(("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KANTRIP_"))
+            or name == "KCAT_CONFIG"
+        },
     )
     child_environment.update(plan.environment_overrides)
     return list(plan.arguments)
@@ -336,6 +376,25 @@ def _render_properties(properties: Mapping[str, str]) -> str:
         if "\n" in value or "\r" in value:
             raise SessionError("client property values cannot contain line breaks")
     return "".join(f"{key}={value}\n" for key, value in sorted(properties.items()))
+
+
+def _render_java_properties(properties: Mapping[str, str]) -> str:
+    """Serialize Java properties without losing PEM or credential characters."""
+    rendered: list[str] = []
+    for key, value in sorted(properties.items()):
+        if any(character in key for character in ("=", ":", "\n", "\r")):
+            raise SessionError("Java property names contain unsupported characters")
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace("\t", "\\t")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\f", "\\f")
+        )
+        if escaped.startswith(" "):
+            escaped = f"\\{escaped}"
+        rendered.append(f"{key}={escaped}\n")
+    return "".join(rendered)
 
 
 __all__ = ["SessionError", "ensure_session_available", "run_profile_session"]

@@ -1,0 +1,99 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-provisioning
+  namespace: kantrip-sandbox
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: provision
+          image: quay.io/strimzi/kafka:${STRIMZI_VERSION}-kafka-${KAFKA_VERSION}
+          command:
+            - /bin/bash
+            - -ceu
+          args:
+            - |
+              umask 077
+              trap 'rm -f /tmp/admin.properties /tmp/scram-256.properties /tmp/kafka-configs.log' EXIT
+              {
+                printf '%s\n' 'security.protocol=SASL_SSL'
+                printf '%s\n' 'sasl.mechanism=SCRAM-SHA-512'
+                printf 'sasl.jaas.config='
+                cat /mnt/admin/sasl.jaas.config
+                printf '\n%s\n' 'ssl.truststore.type=PEM'
+                printf '%s\n' 'ssl.truststore.location=/mnt/cluster-ca/ca.crt'
+              } > /tmp/admin.properties
+
+              configure_scram_256() {
+                local username password
+                username="$(cat "$1")"
+                password="$(cat "$2")"
+                printf 'SCRAM-SHA-256=password=%s\n' "$password" \
+                  > /tmp/scram-256.properties
+                if ! /opt/kafka/bin/kafka-configs.sh \
+                    --bootstrap-server kantrip-kafka-bootstrap:9099 \
+                    --command-config /tmp/admin.properties \
+                    --alter --entity-type users --entity-name "$username" \
+                    --add-config-file /tmp/scram-256.properties \
+                    > /tmp/kafka-configs.log 2>&1; then
+                  printf '%s\n' 'SCRAM-SHA-256 provisioning failed' >&2
+                  return 1
+                fi
+                rm -f /tmp/kafka-configs.log
+              }
+
+              add_prefix_acls() {
+                local principal="$1" prefix="$2"
+                /opt/kafka/bin/kafka-acls.sh \
+                  --bootstrap-server kantrip-kafka-bootstrap:9099 \
+                  --command-config /tmp/admin.properties \
+                  --add --allow-principal "User:$principal" \
+                  --operation All --topic "$prefix" --resource-pattern-type prefixed
+                /opt/kafka/bin/kafka-acls.sh \
+                  --bootstrap-server kantrip-kafka-bootstrap:9099 \
+                  --command-config /tmp/admin.properties \
+                  --add --allow-principal "User:$principal" \
+                  --operation All --group "$prefix" --resource-pattern-type prefixed
+                /opt/kafka/bin/kafka-acls.sh \
+                  --bootstrap-server kantrip-kafka-bootstrap:9099 \
+                  --command-config /tmp/admin.properties \
+                  --add --allow-principal "User:$principal" \
+                  --operation Describe --cluster
+              }
+
+              configure_scram_256 \
+                /mnt/auth-users/scram-256-username \
+                /mnt/auth-users/scram-256-password
+              configure_scram_256 \
+                /mnt/auth-users/scram-256-no-acl-username \
+                /mnt/auth-users/scram-256-no-acl-password
+              add_prefix_acls ANONYMOUS kantrip-smoke-
+          volumeMounts:
+            - name: admin
+              mountPath: /mnt/admin
+              readOnly: true
+            - name: auth-users
+              mountPath: /mnt/auth-users
+              readOnly: true
+            - name: cluster-ca
+              mountPath: /mnt/cluster-ca
+              readOnly: true
+      volumes:
+        - name: admin
+          secret:
+            secretName: sandbox-admin
+            items:
+              - key: sasl.jaas.config
+                path: sasl.jaas.config
+        - name: auth-users
+          secret:
+            secretName: kafka-custom-users
+        - name: cluster-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items:
+              - key: ca.crt
+                path: ca.crt

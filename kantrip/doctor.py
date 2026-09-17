@@ -6,10 +6,13 @@ import os
 import shutil
 import stat
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+
+from cryptography import x509
 
 from kantrip import APP_VERSION
 from kantrip.adapters import (
@@ -20,11 +23,15 @@ from kantrip.adapters import (
     KAFKA_CONSOLE_CONSUMER_EXECUTABLES,
     KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
+    KAFKA_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
+    AdapterError,
+    require_adapter_capability,
 )
+from kantrip.kafka import KafkaProfileError, kafka_connection, resolve_kafka_connection
 from kantrip.profiles import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
@@ -43,7 +50,12 @@ from kantrip.runtime import (
     resolve_runtime_root,
     scan_sessions,
 )
-from kantrip.secret_store import SecretStoreError, load_secret_store
+from kantrip.secret_store import (
+    SecretNotFoundError,
+    SecretStore,
+    SecretStoreError,
+    load_secret_store,
+)
 from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
@@ -104,7 +116,12 @@ _SCHEMA_REGISTRY_COMMAND_GROUPS = tuple(
 )
 
 
-def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
+def run_doctor(
+    environment: Mapping[str, str] | None = None,
+    *,
+    profile_name: str | None = None,
+    include_sessions: bool = False,
+) -> DoctorReport:
     """Inspect Kantrip's local environment without contacting configured services."""
     env = os.environ if environment is None else environment
     system_checks = [
@@ -114,22 +131,42 @@ def run_doctor(environment: Mapping[str, str] | None = None) -> DoctorReport:
         _check_platform(),
         _check_shell(env),
     ]
-    profiles, profile_checks = _check_profile_database(env)
+    profiles, profile_checks = _check_profile_database(env, profile_name=profile_name)
+    credential_checks, store = _check_credentials(env)
+    profile_credential_checks = _check_profile_credentials(profiles, store)
+    profile_id = None
+    profile_revision = None
+    if profiles is not None and profile_name in profiles.profiles:
+        profile_id = str(profiles.profiles[profile_name]["id"])
+        profile_revision = profiles.revision(profile_name)
     checks = [
         *_assign_section("System", system_checks),
         *_assign_section("Profiles", profile_checks),
-        *_assign_section("Credentials", _check_credentials(env)),
+        *_assign_section("Credentials", [*credential_checks, *profile_credential_checks]),
         *_assign_section(
             "Session",
-            [*_check_session(profiles, env), *_check_runtime_sessions(env)],
+            [
+                *_check_session(profiles, env),
+                *_check_runtime_sessions(
+                    env,
+                    profile_id=profile_id,
+                    current_revision=profile_revision,
+                    include_details=include_sessions,
+                ),
+            ],
         ),
-        *_assign_section("Clients", _check_commands(env)),
+        *_assign_section(
+            "Clients", [*_check_commands(env), *_check_profile_clients(profiles, env)]
+        ),
     ]
     return DoctorReport(tuple(checks))
 
 
-def _check_credentials(environment: Mapping[str, str]) -> list[DoctorCheck]:
+def _check_credentials(
+    environment: Mapping[str, str],
+) -> tuple[list[DoctorCheck], SecretStore | None]:
     checks: list[DoctorCheck] = []
+    store: SecretStore | None = None
     try:
         store = load_secret_store()
     except SecretStoreError:
@@ -162,7 +199,112 @@ def _check_credentials(environment: Mapping[str, str]) -> list[DoctorCheck]:
         if count:
             message = f"{message}; run 'kantrip doctor --repair'"
         checks.append(DoctorCheck(status, message))
+    return checks, store
+
+
+def _check_profile_credentials(
+    profiles: ProfileCollection | None,
+    store: SecretStore | None,
+) -> list[DoctorCheck]:
+    if profiles is None or not profiles.profiles:
+        return []
+    checks: list[DoctorCheck] = []
+    for name, profile in profiles.profiles.items():
+        try:
+            connection = kafka_connection(profile)
+        except KafkaProfileError:
+            checks.append(DoctorCheck("error", f"Kafka profile '{name}' is not executable"))
+            continue
+        checks.extend(_check_certificate_validity(name, profile))
+        if not connection.requires_secrets:
+            checks.append(DoctorCheck("success", f"Profile '{name}' requires no credentials"))
+            continue
+        if store is None:
+            checks.append(DoctorCheck("error", f"Profile '{name}' credentials are unavailable"))
+            continue
+        checks.extend(_check_exact_references(name, profile, store))
+        try:
+            resolve_kafka_connection(connection, store)
+        except KafkaProfileError:
+            checks.append(DoctorCheck("error", f"Profile '{name}' credential identity is invalid"))
+        else:
+            checks.append(DoctorCheck("success", f"Profile '{name}' credentials are usable"))
     return checks
+
+
+def _check_exact_references(
+    name: str,
+    profile: Mapping[str, object],
+    store: SecretStore,
+) -> list[DoctorCheck]:
+    kafka = profile.get("kafka")
+    auth = kafka.get("auth") if isinstance(kafka, Mapping) else None
+    if not isinstance(auth, Mapping):
+        return [DoctorCheck("error", f"Profile '{name}' authentication is invalid")]
+    checks: list[DoctorCheck] = []
+    for property_name, label in (
+        ("passwordRef", "password"),
+        ("privateKeyRef", "private key"),
+        ("privateKeyPasswordRef", "private-key password"),
+    ):
+        reference = auth.get(property_name)
+        if not isinstance(reference, str):
+            continue
+        try:
+            store.get(reference)
+        except SecretNotFoundError:
+            checks.append(DoctorCheck("error", f"Profile '{name}' {label} is missing"))
+        except SecretStoreError:
+            checks.append(DoctorCheck("error", f"Profile '{name}' {label} is unavailable"))
+        else:
+            checks.append(DoctorCheck("success", f"Profile '{name}' {label} is stored"))
+    return checks
+
+
+def _check_certificate_validity(
+    name: str,
+    profile: Mapping[str, object],
+) -> list[DoctorCheck]:
+    kafka = profile.get("kafka")
+    if not isinstance(kafka, Mapping):
+        return []
+    certificates: list[tuple[str, x509.Certificate]] = []
+    tls = kafka.get("tls")
+    if isinstance(tls, Mapping) and isinstance(tls.get("caCertificates"), str):
+        try:
+            parsed = x509.load_pem_x509_certificates(tls["caCertificates"].encode())
+        except ValueError:
+            return [DoctorCheck("error", f"Profile '{name}' Kafka CA bundle is invalid")]
+        certificates.extend(("Kafka CA certificate", certificate) for certificate in parsed)
+    auth = kafka.get("auth")
+    if isinstance(auth, Mapping) and isinstance(auth.get("clientCertificate"), str):
+        try:
+            parsed = x509.load_pem_x509_certificates(auth["clientCertificate"].encode())
+        except ValueError:
+            return [DoctorCheck("error", f"Profile '{name}' client certificate is invalid")]
+        certificates.extend(("client certificate", certificate) for certificate in parsed)
+    return [
+        check
+        for label, certificate in certificates
+        if (check := _certificate_time_check(name, label, certificate)) is not None
+    ]
+
+
+def _certificate_time_check(
+    name: str,
+    label: str,
+    certificate: x509.Certificate,
+) -> DoctorCheck | None:
+    now = time.time()
+    not_before = certificate.not_valid_before_utc.timestamp()
+    not_after = certificate.not_valid_after_utc.timestamp()
+    if now < not_before:
+        return DoctorCheck("error", f"Profile '{name}' {label} is not yet valid")
+    if now >= not_after:
+        return DoctorCheck("error", f"Profile '{name}' {label} is expired")
+    if not_after - now <= 30 * 24 * 60 * 60:
+        return DoctorCheck("warning", f"Profile '{name}' {label} expires within 30 days")
+    return None
 
 
 def _assign_section(section: str, checks: Sequence[DoctorCheck]) -> list[DoctorCheck]:
@@ -201,6 +343,8 @@ def _check_shell(environment: Mapping[str, str]) -> DoctorCheck:
 
 def _check_profile_database(
     environment: Mapping[str, str],
+    *,
+    profile_name: str | None,
 ) -> tuple[ProfileCollection | None, list[DoctorCheck]]:
     path = resolve_database_path(environment)
     path_check = DoctorCheck("success", f"Profile database: {path}", verbose_only=True)
@@ -230,6 +374,18 @@ def _check_profile_database(
     except ProfileStoreError as error:
         return None, [DoctorCheck("error", str(error)), path_check]
 
+    if profile_name is not None:
+        profile = profiles.profiles.get(profile_name)
+        if profile is None:
+            return None, [
+                DoctorCheck("error", f"profile '{profile_name}' was not found"),
+                path_check,
+            ]
+        profiles = ProfileCollection(
+            profiles.path,
+            {profile_name: profile},
+            {profile_name: profiles.revision(profile_name)},
+        )
     profile_count = len(profiles.profiles)
     profile_label = "profile" if profile_count == 1 else "profiles"
     checks = [
@@ -301,7 +457,7 @@ def _check_private_database_file(path: Path, label: str) -> DoctorCheck:
 def _check_profiles(profiles: ProfileCollection) -> DoctorCheck:
     if not profiles.profiles:
         return DoctorCheck("warning", "No profiles are configured")
-    return DoctorCheck("success", "All configured Kafka profiles are executable")
+    return DoctorCheck("success", "Stored Kafka profile documents are valid")
 
 
 def _check_registry_profiles(profiles: ProfileCollection) -> list[DoctorCheck]:
@@ -380,7 +536,13 @@ def _check_session(
     return checks
 
 
-def _check_runtime_sessions(environment: Mapping[str, str]) -> list[DoctorCheck]:
+def _check_runtime_sessions(
+    environment: Mapping[str, str],
+    *,
+    profile_id: str | None,
+    current_revision: int | None,
+    include_details: bool,
+) -> list[DoctorCheck]:
     root = resolve_runtime_root(environment)
     path_check = DoctorCheck(
         "success",
@@ -394,12 +556,54 @@ def _check_runtime_sessions(environment: Mapping[str, str]) -> list[DoctorCheck]
     checks = [path_check]
     if not report.exists:
         return [DoctorCheck("success", "No stored session artifacts were found"), *checks]
-    checks.append(_runtime_count("active", report.active, "success"))
-    checks.append(_runtime_count("recent inactive", report.recent, "warning"))
-    checks.append(_runtime_count("stale", report.stale, "warning"))
+    observations = tuple(
+        observation
+        for observation in report.observations
+        if profile_id is None or observation.profile_id == profile_id
+    )
+    state_counts = {
+        state: sum(observation.state == state for observation in observations)
+        for state in ("active", "recent", "stale")
+    }
+    checks.append(_runtime_count("active", state_counts["active"], "success"))
+    checks.append(_runtime_count("recent inactive", state_counts["recent"], "warning"))
+    checks.append(_runtime_count("stale", state_counts["stale"], "warning"))
     checks.append(_runtime_count("invalid", report.invalid, "error"))
     if report.truncated:
         checks.append(DoctorCheck("error", "Session runtime scan reached its safety limit"))
+    if include_details:
+        now = int(time.time())
+        for observation in observations:
+            age = max(0, now - observation.created_at)
+            revision_note = ""
+            if current_revision is not None and observation.profile_revision < current_revision:
+                revision_note = f", older than current revision {current_revision}"
+            checks.append(
+                DoctorCheck(
+                    "warning" if observation.state != "active" else "success",
+                    f"Session {observation.state}: revision {observation.profile_revision}, "
+                    f"age {age}s{revision_note}",
+                )
+            )
+            checks.extend(
+                (
+                    DoctorCheck(
+                        "success",
+                        f"Session ID: {observation.session_id}",
+                        verbose_only=True,
+                    ),
+                    DoctorCheck(
+                        "success",
+                        f"Supervisor PID: {observation.supervisor_pid}",
+                        verbose_only=True,
+                    ),
+                    DoctorCheck(
+                        "success",
+                        f"Session path: {observation.path}",
+                        verbose_only=True,
+                    ),
+                )
+            )
     return checks
 
 
@@ -463,6 +667,60 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
         _check_command_group("Kaskade", (KASKADE_EXECUTABLES,), search_path),
         *_check_command_paths("Kaskade", (("executable", KASKADE_EXECUTABLES),), search_path),
     ]
+
+
+def _check_profile_clients(
+    profiles: ProfileCollection | None,
+    environment: Mapping[str, str],
+) -> list[DoctorCheck]:
+    """Report installed adapters that can execute each selected profile."""
+    if profiles is None:
+        return []
+    search_path = environment.get("PATH")
+    installed = (
+        ("kcat", _find_first(KCAT_EXECUTABLES, search_path)),
+        ("Kaskade", _find_first(KASKADE_EXECUTABLES, search_path)),
+        ("Apache/Confluent Java CLI", _find_first(KAFKA_EXECUTABLES, search_path)),
+    )
+    checks: list[DoctorCheck] = []
+    for name, profile in profiles.profiles.items():
+        try:
+            connection = kafka_connection(profile)
+        except KafkaProfileError:
+            continue
+        compatible: list[str] = []
+        rejected: list[str] = []
+        custom_pem = connection.ca_certificates is not None or connection.auth_type == "mtls"
+        for label, executable in installed:
+            if executable is None:
+                continue
+            try:
+                require_adapter_capability(
+                    executable,
+                    auth_type=connection.auth_type,
+                    custom_pem=custom_pem,
+                    environment=environment,
+                )
+            except AdapterError as error:
+                rejected.append(f"{label}: {error}")
+            else:
+                compatible.append(label)
+        if compatible:
+            checks.append(
+                DoctorCheck(
+                    "success",
+                    f"Profile '{name}' compatible installed clients: {', '.join(compatible)}",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck("warning", f"Profile '{name}' has no compatible client on PATH")
+            )
+        checks.extend(
+            DoctorCheck("warning", f"Profile '{name}' client rejected: {message}")
+            for message in rejected
+        )
+    return checks
 
 
 def _check_command_paths(

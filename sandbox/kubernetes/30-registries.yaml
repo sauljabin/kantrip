@@ -23,13 +23,26 @@ spec:
             - name: SCHEMA_REGISTRY_HOST_NAME
               value: schema-registry
             - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
-              value: PLAINTEXT://kantrip-kafka-bootstrap:9097
+              value: SASL_SSL://kantrip-kafka-bootstrap:9099
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
               value: schema-registry
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID
               value: schema-registry-baseline
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL
+              value: SASL_SSL
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM
+              value: SCRAM-SHA-512
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: schema-registry-kafka
+                  key: sasl.jaas.config
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_TYPE
+              value: PEM
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_LOCATION
+              value: /etc/kafka-ca/ca.crt
             - name: SCHEMA_REGISTRY_LISTENERS
               value: http://0.0.0.0:8081
           ports:
@@ -47,6 +60,17 @@ spec:
               memory: 384Mi
             limits:
               memory: 768Mi
+          volumeMounts:
+            - name: kafka-ca
+              mountPath: /etc/kafka-ca
+              readOnly: true
+      volumes:
+        - name: kafka-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: v1
 kind: Service
@@ -112,13 +136,26 @@ spec:
             - name: SCHEMA_REGISTRY_HOST_NAME
               value: schema-registry-secure
             - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
-              value: PLAINTEXT://kantrip-kafka-bootstrap:9097
+              value: SASL_SSL://kantrip-kafka-bootstrap:9099
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
               value: schema-registry-secure
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID
               value: schema-registry-secure
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL
+              value: SASL_SSL
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM
+              value: SCRAM-SHA-512
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: schema-registry-secure-kafka
+                  key: sasl.jaas.config
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_TYPE
+              value: PEM
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_LOCATION
+              value: /etc/kafka-ca/ca.crt
             - name: SCHEMA_REGISTRY_LISTENERS
               value: https://0.0.0.0:8081
             - name: SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL
@@ -169,6 +206,9 @@ spec:
             - name: keystore
               mountPath: /etc/registry-keystore
               readOnly: true
+            - name: kafka-ca
+              mountPath: /etc/kafka-ca
+              readOnly: true
       volumes:
         - name: auth
           secret:
@@ -184,6 +224,12 @@ spec:
             secretName: registries-tls
         - name: keystore
           emptyDir: {}
+        - name: kafka-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: v1
 kind: Service
@@ -249,13 +295,26 @@ spec:
             - name: SCHEMA_REGISTRY_HOST_NAME
               value: schema-registry-oauth
             - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
-              value: PLAINTEXT://kantrip-kafka-bootstrap:9097
+              value: SASL_SSL://kantrip-kafka-bootstrap:9099
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC
               value: schema-registry-oauth
             - name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID
               value: schema-registry-oauth
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL
+              value: SASL_SSL
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM
+              value: SCRAM-SHA-512
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: schema-registry-oauth-kafka
+                  key: sasl.jaas.config
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_TYPE
+              value: PEM
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_LOCATION
+              value: /etc/kafka-ca/ca.crt
             - name: SCHEMA_REGISTRY_LISTENERS
               value: https://0.0.0.0:8081
             - name: SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL
@@ -305,6 +364,9 @@ spec:
             - name: keystore
               mountPath: /etc/registry-keystore
               readOnly: true
+            - name: kafka-ca
+              mountPath: /etc/kafka-ca
+              readOnly: true
       volumes:
         - name: ca
           secret:
@@ -317,6 +379,12 @@ spec:
             secretName: registries-tls
         - name: keystore
           emptyDir: {}
+        - name: kafka-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: v1
 kind: Service
@@ -355,11 +423,24 @@ spec:
             - name: APICURIO_STORAGE_KIND
               value: kafkasql
             - name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS
-              value: kantrip-kafka-bootstrap:9097
+              value: kantrip-kafka-bootstrap:9099
             - name: APICURIO_KAFKASQL_TOPIC
               value: apicurio-journal
             - name: APICURIO_KAFKASQL_SNAPSHOTS_TOPIC
               value: apicurio-snapshots
+            - name: APICURIO_KAFKA_COMMON_SECURITY_PROTOCOL
+              value: SASL_SSL
+            - name: APICURIO_KAFKA_COMMON_SASL_MECHANISM
+              value: SCRAM-SHA-512
+            - name: APICURIO_KAFKA_COMMON_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: apicurio-kafka
+                  key: sasl.jaas.config
+            - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_TYPE
+              value: PEM
+            - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_LOCATION
+              value: /etc/kafka-ca/ca.crt
             - name: QUARKUS_HTTP_PORT
               value: "8080"
           ports:
@@ -379,6 +460,17 @@ spec:
               memory: 384Mi
             limits:
               memory: 768Mi
+          volumeMounts:
+            - name: kafka-ca
+              mountPath: /etc/kafka-ca
+              readOnly: true
+      volumes:
+        - name: kafka-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: v1
 kind: Service
@@ -441,11 +533,24 @@ spec:
             - name: APICURIO_STORAGE_KIND
               value: kafkasql
             - name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS
-              value: kantrip-kafka-bootstrap:9097
+              value: kantrip-kafka-bootstrap:9099
             - name: APICURIO_KAFKASQL_TOPIC
               value: apicurio-secure-journal
             - name: APICURIO_KAFKASQL_SNAPSHOTS_TOPIC
               value: apicurio-secure-snapshots
+            - name: APICURIO_KAFKA_COMMON_SECURITY_PROTOCOL
+              value: SASL_SSL
+            - name: APICURIO_KAFKA_COMMON_SASL_MECHANISM
+              value: SCRAM-SHA-512
+            - name: APICURIO_KAFKA_COMMON_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: apicurio-secure-kafka
+                  key: sasl.jaas.config
+            - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_TYPE
+              value: PEM
+            - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_LOCATION
+              value: /etc/kafka-ca/ca.crt
             - name: QUARKUS_HTTP_INSECURE_REQUESTS
               value: disabled
             - name: QUARKUS_HTTP_SSL_PORT
@@ -498,6 +603,9 @@ spec:
             - name: truststore
               mountPath: /etc/oidc-truststore
               readOnly: true
+            - name: kafka-ca
+              mountPath: /etc/kafka-ca
+              readOnly: true
       volumes:
         - name: ca
           secret:
@@ -510,6 +618,12 @@ spec:
         - name: tls
           secret:
             secretName: registries-tls
+        - name: kafka-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items:
+              - key: ca.crt
+                path: ca.crt
 ---
 apiVersion: v1
 kind: Service

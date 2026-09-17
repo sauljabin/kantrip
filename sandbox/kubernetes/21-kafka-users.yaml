@@ -1,7 +1,7 @@
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
-  name: kantrip-scram
+  name: sandbox-admin
   namespace: kantrip-sandbox
   labels:
     strimzi.io/cluster: kantrip
@@ -12,10 +12,208 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
-  name: kantrip-mtls
+  name: kantrip-plain
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: group, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: cluster}
+        operations: [Describe]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-scram-256
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: group, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: cluster}
+        operations: [Describe]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-scram
   namespace: kantrip-sandbox
   labels:
     strimzi.io/cluster: kantrip
 spec:
   authentication:
-    type: tls
+    type: scram-sha-512
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: group, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: cluster}
+        operations: [Describe]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-scram-no-acl
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-mtls
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: tls}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: group, name: kantrip-auth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: cluster}
+        operations: [Describe]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: kantrip-mtls-no-acl
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: tls}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: service-account-kantrip-kafka
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: kantrip-oauth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: group, name: kantrip-oauth-, patternType: prefix}
+        operations: [All]
+      - resource: {type: cluster}
+        operations: [Describe]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: schema-registry-kafka
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: schema-registry, patternType: literal}
+        operations: [All]
+      - resource: {type: group, name: schema-registry-baseline, patternType: literal}
+        operations: [All]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: schema-registry-secure-kafka
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: schema-registry-secure, patternType: literal}
+        operations: [All]
+      - resource: {type: group, name: schema-registry-secure, patternType: literal}
+        operations: [All]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: schema-registry-oauth-kafka
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: schema-registry-oauth, patternType: literal}
+        operations: [All]
+      - resource: {type: group, name: schema-registry-oauth, patternType: literal}
+        operations: [All]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: apicurio-kafka
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: apicurio-journal, patternType: literal}
+        operations: [All]
+      - resource: {type: topic, name: apicurio-snapshots, patternType: literal}
+        operations: [All]
+      - resource: {type: topic, name: registry-events, patternType: literal}
+        operations: [All]
+      - resource: {type: group, name: apicurio-, patternType: prefix}
+        operations: [All]
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaUser
+metadata:
+  name: apicurio-secure-kafka
+  namespace: kantrip-sandbox
+  labels:
+    strimzi.io/cluster: kantrip
+spec:
+  authentication: {type: scram-sha-512}
+  authorization:
+    type: simple
+    acls:
+      - resource: {type: topic, name: apicurio-secure-journal, patternType: literal}
+        operations: [All]
+      - resource: {type: topic, name: apicurio-secure-snapshots, patternType: literal}
+        operations: [All]
+      - resource: {type: topic, name: registry-events, patternType: literal}
+        operations: [All]
+      - resource: {type: group, name: apicurio-, patternType: prefix}
+        operations: [All]

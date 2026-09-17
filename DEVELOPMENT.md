@@ -151,18 +151,38 @@ switches the profile and advances its expected revision in SQLite, then retires
 the superseded reference. Profile removal commits the row deletion and cleanup
 records before it contacts the credential backend.
 
-Tests for this boundary must cover partial store writes, a failed or concurrent
-profile switch, failed superseded-secret deletion, idempotent retry, and the
-ordering of profile removal before credential deletion. Assertions may inspect
-references and journal rows, but must never include a real credential value in
-diagnostic output.
+Tests for this boundary use deterministic in-process failpoints and
+`tests/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
+new credential owner or input path is added:
+
+| Cut or race | Required invariant |
+| --- | --- |
+| Intent committed before the first store write | Old profile or absent add; exact cleanup record |
+| Store writes and then raises, including the second of several writes | Every possibly written immutable reference remains journaled |
+| Validation, CAS, or database failure before commit | Previous complete generation remains active; no old secret is retired |
+| Lost commit acknowledgement | Exact row and journal inspection yields committed (`3`), unchanged (`1`), or unknown (`4`) |
+| Secret deleted before journal-row removal | Committed generation survives; repair is idempotent |
+| Two adds, edit/edit, edit/remove, or stale remove after recreate | One serial valid outcome; no lost update or wrong-UUID deletion |
+| Repair versus staging or snapshot versus rotation | No live value is deleted; readers resolve one coherent generation |
+| Live reference appears in cleanup journal | Integrity error and no credential deletion |
+
+The subprocess suite uses pipe barriers and real `SIGKILL`, never timing sleeps,
+at durable intent, store readback, post-commit reload, and post-delete journal
+boundaries. It verifies exact journal/profile state, private permissions,
+idempotent repair, and secret-free output. These tests model process failure,
+not hardware power loss or an approved OS store restart; release QA records
+those platform boundaries separately. Assertions may inspect references and
+journal rows, but must never include a real credential value in diagnostic
+output.
 
 ## Sandbox services and smoke workflow
 
-The sandbox is a local Kind laboratory with one Strimzi Kafka cluster,
-Keycloak, Schema Registry, Apicurio Registry, and cert-manager. Install Docker,
-Kind, kubectl, and Helm before using it. Component versions are pinned in
-`sandbox/versions.env`.
+The sandbox is a local Kind laboratory with one operator-managed Strimzi Kafka
+cluster, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
+Install Docker, Kind, kubectl, and Helm before using it. Component versions are
+pinned in `sandbox/versions.env`. The topology decision, trust boundary, and
+non-production provisioning limits are canonical in
+[Sandbox verification topology](ARCHITECTURE.md#sandbox-verification-topology).
 
 Create, inspect, and delete the environment with:
 
@@ -178,7 +198,9 @@ and ignored below `sandbox/.state`. The lifecycle command does not print their
 values. The generated assignment file is a laboratory input, not Kantrip's
 child environment contract; manual checks source it without blanket `set -a`.
 See [manual environment setup](MANUAL_TESTING.md#source-sandbox-variables-without-blanket-export)
-for current inheritance limits. `down` removes the cluster but retains this private state so another
+for the precedence checks. Every generated source variable uses the
+`KANTRIP_SANDBOX_*` namespace, which supervised children scrub. `down` removes
+the cluster but retains this private state so another
 `up` can reuse the same credentials; remove that exact directory to rotate the
 local laboratory credentials.
 
@@ -189,6 +211,8 @@ The loopback-only endpoints are:
 - Kafka SCRAM-SHA-512 over TLS: `localhost:9094`
 - Kafka mTLS: `localhost:9095`
 - Kafka OAuth over TLS: `localhost:9096`
+- Kafka PLAIN over TLS (authorizer fixture): `localhost:9097`
+- Kafka SCRAM-SHA-256 over TLS (authorizer fixture): `localhost:9098`
 - Schema Registry baseline: `http://localhost:8081`
 - Apicurio baseline: `http://localhost:8082`
 - Schema Registry with HTTPS and Basic Auth: `https://localhost:8083`
@@ -201,12 +225,25 @@ executable. Schema Registry uses separate Basic and OAuth processes because its
 local JAAS property-file login and OAuth `AuthenticationHandler` are different
 server authentication paths; Apicurio accepts both mechanisms on one endpoint.
 These secure variants prepare authenticated Registry scenarios without claiming
-that those profile fields are already implemented. The Kafka cluster does not
-expose SASL/PLAIN: the name `plaintext` means no authentication and no
-encryption, while password authentication uses SCRAM-SHA-512 over TLS.
+that those profile fields are already implemented. The single Kafka cluster's
+`plaintext` listener means no authentication and no encryption. All other
+external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
+principals prove that `kantrip ping` does not depend on Kafka resource
+authorization. PLAIN JAAS is read from the mounted `kafka-custom-users` Secret.
+An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
+through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
+from a private temporary config file. `sandbox-admin` is the only superuser.
 
-Kafka uses a disposable persistent volume, so broker data survives pod restarts
-but is removed with the Kind cluster. Both Apicurio instances use KafkaSQL with
+Strimzi owns authenticated-client, OAuth, and Registry ACLs. The Job owns only
+the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe needed
+by the plaintext and server-only TLS smoke; `ANONYMOUS` is not a superuser. The
+laboratory does not claim Kubernetes network isolation or production hardening.
+
+The Kafka cluster uses a disposable persistent volume, so broker data, ACLs,
+and the SCRAM-SHA-256 credential survive pod restarts but are removed with the
+Kind cluster. A pre-unification laboratory containing `Kafka/auth-kantrip` is
+rejected with explicit `sandbox down` and `sandbox up` guidance rather than
+being deleted silently. Both Apicurio instances use KafkaSQL with
 separate journal and snapshot topics configured for delete cleanup and infinite
 retention. Their registry data therefore survives an Apicurio pod restart without
 leaking data between the baseline and authenticated variants.
@@ -226,6 +263,13 @@ Include the interactive shell adapters with:
 ```bash
 uv run --locked python -m scripts.smoke \
   --shell bash --shell zsh --shell fish
+```
+
+Run the authenticated lifecycle, direct producer/consumer/admin, all-shell,
+invalid-authorization, and no-ACL ping matrix with:
+
+```bash
+uv run --locked python -m scripts.auth_smoke
 ```
 
 The smoke workflow remains a pre-commit hook. It creates isolated temporary
