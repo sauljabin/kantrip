@@ -526,8 +526,8 @@ rmdir "$XDG_RUNTIME_DIR/kantrip/sessions/unexpected"
 
 ## Start and inspect the Kubernetes sandbox
 
-The sandbox is a loopback-only Kind cluster. It runs one Strimzi Kafka cluster
-with several listeners, an authorizer-enabled KRaft authentication fixture,
+The sandbox is a loopback-only Kind cluster. It runs a primary multi-listener
+Strimzi Kafka cluster, an isolated authorizer-enabled Strimzi authentication cluster,
 two baseline registries, authenticated endpoints for both registry products,
 Keycloak, and a cert-manager-issued local CA. It deliberately excludes Amazon
 MSK IAM and Confluent Cloud.
@@ -555,11 +555,12 @@ set +a
 
 ### Exercise
 
-List the preconfigured Strimzi users and inspect each declarative user without
-reading its generated Secret:
+List both Strimzi clusters, their persistent node pools, and the preconfigured
+native users without reading generated Secrets:
 
 ```bash
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox get kafkausers
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox get kafka,kafkanodepool
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
   get kafkauser kantrip-scram -o yaml
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
@@ -572,14 +573,15 @@ CA. A TLS error is a failure; do not use `--verify=no`:
 ```bash
 http --verify "$KANTRIP_SANDBOX_CA" \
   GET https://localhost:8443/realms/kantrip/.well-known/openid-configuration
-http GET http://localhost:8081/subjects
-http GET http://localhost:8082/apis/registry/v3/search/artifacts
+http GET http://localhost:8081/schemas/types
+http GET http://localhost:8082/apis/registry/v3/system/info
 ```
 
 ### Expected result
 
-- Kubernetes reports both `KafkaUser` resources as ready. Their YAML identifies
-  SCRAM-SHA-512 and TLS authentication but contains no credential value.
+- Kubernetes reports both Kafka clusters, both persistent node pools, and both
+  `KafkaUser` resources as ready. User YAML identifies SCRAM-SHA-512 and TLS
+  authentication but contains no credential value.
 - Keycloak discovery reports issuer `https://localhost:8443/realms/kantrip`.
 - Both baseline Registry requests return successful JSON responses.
 - Every exposed host port is bound to `127.0.0.1`, not all interfaces.
@@ -661,10 +663,11 @@ http GET \
 
 ## Exercise every Kafka listener
 
-The Strimzi broker cluster exposes plaintext, TLS, SCRAM-SHA-512, mTLS, and
+The primary Strimzi cluster exposes plaintext, TLS, SCRAM-SHA-512, mTLS, and
 OAuth connections. `PLAINTEXT` means no authentication and no encryption; it
-is not SASL/PLAIN. A disposable authorizer-enabled KRaft broker exposes PLAIN
-and SCRAM-SHA-256 over verified TLS on `localhost:9097` and `localhost:9098`.
+is not SASL/PLAIN. A second persistent Strimzi cluster with
+`StandardAuthorizer` exposes PLAIN and SCRAM-SHA-256 over verified TLS on
+`localhost:9097` and `localhost:9098`.
 
 ### Setup
 
@@ -747,6 +750,17 @@ KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8
   --command-config sandbox/.state/kafka-oauth.properties --list
 ```
 
+Prove that the isolated cluster is not reformatted on restart and that its
+SCRAM-SHA-256 user remains available:
+
+```bash
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  delete pod/auth-kantrip-auth-dual-role-0
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+  wait pod/auth-kantrip-auth-dual-role-0 --for=condition=Ready --timeout=5m
+uv run --locked python -m scripts.auth_smoke
+```
+
 ### Expected result
 
 - The smoke workflow continues to pass through plaintext `localhost:9092` and
@@ -759,6 +773,8 @@ KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8
   reaches PLAIN on `9097` and SCRAM-SHA-256 on `9098`.
 - Kafka `ping` reports the authenticated exchange without requiring topic or
   cluster ACLs; the subsequent topic command remains subject to broker ACLs.
+- After the isolated broker restart, the complete authenticated smoke still
+  passes without rerunning the provisioning Job.
 
 ## Exercise authenticated registries
 

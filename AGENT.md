@@ -104,10 +104,17 @@
   switch the validated profile with an expected revision, and retire only exact
   superseded references after the database commit. A failed switch leaves the
   old profile usable and the staged reference recoverable by reconciliation.
+- Track mutation outcomes explicitly as not committed, committed, or unknown.
+  A failed commit acknowledgement must be classified under the maintenance lock
+  by reopening and matching the exact profile UUID/revision/document and owned
+  journal records; never infer rollback from an exception or retry an unknown
+  outcome automatically. Treat reload, close, file-hardening, and stdout errors
+  after a confirmed commit as committed failures.
 - Keep exact pending credential deletions in `credential_reconciliation`.
-  Validate every record and reference, delete only that exact credential, and
-  remove its journal row only after deletion succeeds. Normal doctor reports
-  pending work; `doctor --repair` retries it under the maintenance lock.
+  Validate every record and live reference, reconcile only records owned by the
+  current operation during its completion, delete only that exact credential,
+  and remove its journal row only after deletion succeeds. Normal doctor reports
+  all pending work; `doctor --repair` retries it under the maintenance lock.
 - Inject the documented environment only into supervised children; never mutate
   the caller's environment or add a separate JSON schema for environment values.
 - Reject `kantrip exec` when `KANTRIP_SESSION_ID` identifies an active parent
@@ -202,10 +209,13 @@
   credential values from sandbox lifecycle commands.
 - `python -m sandbox up` reconciles the Kind laboratory; `status`, `credentials`,
   and `down` inspect or remove it. Keep plaintext, verified TLS, SCRAM-SHA-512,
-  mTLS, and OAuth listeners on one Strimzi cluster. Keep PLAIN and
-  SCRAM-SHA-256 over TLS on the disposable authorizer-enabled KRaft fixture;
+  mTLS, and OAuth listeners on the primary Strimzi cluster. Keep PLAIN and
+  SCRAM-SHA-256 over TLS on an isolated, persistent, authorizer-enabled Strimzi
+  cluster; provision SCRAM-SHA-256 with the idempotent in-cluster Job and keep
+  PLAIN credentials in its mounted Secret.
   `plaintext` means no authentication and no encryption.
-- Kafka uses a disposable persistent volume so data survives broker pod restarts.
+- Both Kafka clusters use disposable persistent volumes so data survives broker
+  pod restarts.
   Both Apicurio variants use KafkaSQL with isolated journal and snapshot topics,
   delete cleanup policy, and infinite retention so their data survives Apicurio
   pod restarts. Destroying the Kind cluster intentionally removes sandbox data.

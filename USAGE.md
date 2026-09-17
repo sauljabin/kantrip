@@ -77,16 +77,18 @@ not request topics, groups, schemas, or a cluster description. Plaintext proves
 reachability; server-only TLS proves server identity; SASL and mTLS report their
 configured authentication exchange. None proves application authorization.
 
-The current unauthenticated Registry probe requests `/subjects` from a
-Confluent-compatible registry or `/search/artifacts` from native Apicurio. It
-needs no external CLI and applies one five-second deadline across configured
-services, configurable with
+The current unauthenticated Registry probe validates provider metadata from
+`/schemas/types` on a Confluent-compatible registry or `/system/info` on native
+Apicurio. These endpoints avoid requiring subject/artifact-list permission, but
+current Registry profiles are plain HTTP with no authentication, so success
+proves only reachability and a valid provider response. It needs no external CLI
+and applies one five-second deadline across configured services, configurable with
 `--timeout SECONDS`. Colored terminals animate checks; plain output uses
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
 
-Registry requests can still depend on resource permissions. Kafka success does
-not prove topic, group, schema, cluster, or administrative access.
+Kafka success does not prove topic, group, schema, cluster, or administrative
+access. Registry success does not prove schema or subject access.
 
 For scripts that need only the exit status, suppress all output with:
 
@@ -235,6 +237,11 @@ change committed but cleanup or post-commit verification remains, and 4 when
 the commit outcome cannot be established. For 3, inspect `describe` and run
 `doctor --repair`; do not repeat the mutation blindly. For 4, stop automatic
 retries and inspect local storage first.
+
+A broken stdout pipe after persistence reports status 3 when the process can
+still return normally. A signal or `SIGKILL` can terminate the process before a
+CLI status is emitted; inspect the profile and `doctor` before retrying. Kantrip
+does not promise exactly-once command invocation across process termination.
 
 `kantrip list` succeeds without rows when no profiles exist. Kantrip validates
 every profile whenever it reads or updates the database.

@@ -190,6 +190,12 @@ Controls:
   exact superseded references afterward.
 - Write cleanup intent to a transactional non-secret database journal before a
   cross-store mutation can create an orphan.
+- Classify a failed commit acknowledgement by reopening the database under the
+  same maintenance lock and matching exact profile-generation and journal
+  evidence. Unknown outcomes retain evidence and prohibit automatic retry.
+- Validate the complete journal against live references before deletion, but
+  process only cleanup records owned by the current successful mutation; older
+  debt remains explicit for repair.
 
 Residual risk: standard keyring APIs cannot enumerate arbitrary entries. If the
 reconciliation journal is destroyed, Kantrip cannot prove that no orphaned
@@ -260,6 +266,9 @@ Controls:
   externally mutable CA path during later sessions.
 - Reject non-HTTP or credential-bearing Registry configurations until their
   secure execution paths are implemented.
+- Probe current unauthenticated registries only through fixed provider metadata
+  endpoints, never subject/artifact listings, and label the result as
+  reachability rather than authentication or authorization.
 
 Residual risk: plaintext Kafka and HTTP Registry connections provide neither
 transport confidentiality nor server authentication. A trusted CA can still

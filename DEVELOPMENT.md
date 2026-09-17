@@ -151,18 +151,36 @@ switches the profile and advances its expected revision in SQLite, then retires
 the superseded reference. Profile removal commits the row deletion and cleanup
 records before it contacts the credential backend.
 
-Tests for this boundary must cover partial store writes, a failed or concurrent
-profile switch, failed superseded-secret deletion, idempotent retry, and the
-ordering of profile removal before credential deletion. Assertions may inspect
-references and journal rows, but must never include a real credential value in
-diagnostic output.
+Tests for this boundary use deterministic in-process failpoints and
+`tests/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
+new credential owner or input path is added:
+
+| Cut or race | Required invariant |
+| --- | --- |
+| Intent committed before the first store write | Old profile or absent add; exact cleanup record |
+| Store writes and then raises, including the second of several writes | Every possibly written immutable reference remains journaled |
+| Validation, CAS, or database failure before commit | Previous complete generation remains active; no old secret is retired |
+| Lost commit acknowledgement | Exact row and journal inspection yields committed (`3`), unchanged (`1`), or unknown (`4`) |
+| Secret deleted before journal-row removal | Committed generation survives; repair is idempotent |
+| Two adds, edit/edit, edit/remove, or stale remove after recreate | One serial valid outcome; no lost update or wrong-UUID deletion |
+| Repair versus staging or snapshot versus rotation | No live value is deleted; readers resolve one coherent generation |
+| Live reference appears in cleanup journal | Integrity error and no credential deletion |
+
+The subprocess suite uses pipe barriers and real `SIGKILL`, never timing sleeps,
+at durable intent, store readback, post-commit reload, and post-delete journal
+boundaries. It verifies exact journal/profile state, private permissions,
+idempotent repair, and secret-free output. These tests model process failure,
+not hardware power loss or an approved OS store restart; release QA records
+those platform boundaries separately. Assertions may inspect references and
+journal rows, but must never include a real credential value in diagnostic
+output.
 
 ## Sandbox services and smoke workflow
 
-The sandbox is a local Kind laboratory with one Strimzi Kafka cluster,
-Keycloak, Schema Registry, Apicurio Registry, and cert-manager. Install Docker,
-Kind, kubectl, and Helm before using it. Component versions are pinned in
-`sandbox/versions.env`.
+The sandbox is a local Kind laboratory with two operator-managed Strimzi Kafka
+clusters, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
+Install Docker, Kind, kubectl, and Helm before using it. Component versions are
+pinned in `sandbox/versions.env`.
 
 Create, inspect, and delete the environment with:
 
@@ -205,14 +223,19 @@ executable. Schema Registry uses separate Basic and OAuth processes because its
 local JAAS property-file login and OAuth `AuthenticationHandler` are different
 server authentication paths; Apicurio accepts both mechanisms on one endpoint.
 These secure variants prepare authenticated Registry scenarios without claiming
-that those profile fields are already implemented. The Strimzi cluster's
+that those profile fields are already implemented. The primary Strimzi cluster's
 `plaintext` listener means no authentication and no encryption. A separate
-disposable KRaft broker exposes PLAIN and SCRAM-SHA-256 over verified TLS with
+Strimzi cluster exposes PLAIN and SCRAM-SHA-256 over verified TLS with
 `StandardAuthorizer`; its no-ACL principal proves that `kantrip ping` does not
-depend on Kafka resource authorization.
+depend on Kafka resource authorization. Isolation avoids changing the ACL and
+principal semantics of the primary cluster's plaintext, TLS, SCRAM-SHA-512,
+mTLS, OAuth, and Registry listeners. PLAIN JAAS is read from a mounted Secret;
+an idempotent Kubernetes Job provisions SCRAM-SHA-256 through the internal
+listener without putting credentials in host arguments or manifests.
 
-Kafka uses a disposable persistent volume, so broker data survives pod restarts
-but is removed with the Kind cluster. Both Apicurio instances use KafkaSQL with
+Both Kafka clusters use disposable persistent volumes, so broker data and the
+SCRAM-SHA-256 credential survive pod restarts but are removed with the Kind
+cluster. Both Apicurio instances use KafkaSQL with
 separate journal and snapshot topics configured for delete cleanup and infinite
 retention. Their registry data therefore survives an Apicurio pod restart without
 leaking data between the baseline and authenticated variants.

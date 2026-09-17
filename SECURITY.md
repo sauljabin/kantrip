@@ -19,7 +19,9 @@ from file-input and Registry support. The remaining security work and
 first-release verification requirements are tracked in [MVP.md](MVP.md).
 Kafka ping observes a completed broker connection without resource APIs; its
 transport/authentication proof does not establish application authorization.
-Current Registry resource-list probes can still depend on remote permissions.
+Current unauthenticated Registry probes validate fixed provider metadata without
+listing subjects or artifacts; they establish neither authentication nor
+resource authorization.
 
 ## Reporting a vulnerability
 

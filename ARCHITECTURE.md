@@ -58,7 +58,7 @@ from the executable user contract in `COMPATIBILITY.md`.
 | Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and connection-state ping |
 | PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | Supported by `add`, `edit`, `exec`, and `ping` |
 | Kafka OAuth | Unimplemented | Unsupported |
-| Registry | One explicit provider, HTTP without authentication | Provider-aware clients and resource ping only |
+| Registry | One explicit provider, HTTP without authentication | Provider-aware clients and provider-metadata ping |
 | External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
 
 Each stored Registry declares `provider: confluent` with
@@ -100,6 +100,13 @@ and FULL synchronization; supported macOS builds also verify `fullfsync`.
 Database and backup directory entries are synchronized before durable creation
 is acknowledged. This durability contract assumes a local filesystem, not a
 network or cloud-synchronized database directory.
+
+Migration backups use SQLite's online backup API to create one consistent,
+private, immutable database file before migration. They are recovery snapshots,
+not live databases: they have no active WAL/sidecar policy of their own, and an
+out-of-band restore still requires explicit operator handling. Newly created
+parent directories are created one level at a time and each parent entry is
+`fsync`ed before success is acknowledged.
 
 Long-lived secrets use immutable
 `profile/<profile-uuid>/<credential-uuid>/<field>` keys in macOS Keychain or a
@@ -210,6 +217,16 @@ backend to enumerate credentials:
 - Delete superseded secrets only after the profile switch, retaining failed
   cleanup work for idempotent retry by a mutation or `doctor --repair`; a normal
   `doctor` run only reports the pending record.
+
+Each mutation tracks one explicit durable state: not committed, committed, or
+unknown. If `COMMIT` raises, Kantrip rolls back any still-open transaction and,
+while retaining the maintenance lock, opens an independent read-only connection
+to compare the exact profile name, UUID, revision, canonical document, and
+operation-owned journal records. The same committed state governs later reload,
+connection-close, file-hardening, and CLI-output failures. Cleanup after a
+successful mutation processes only records created by that operation, while
+first validating the complete journal against all live references; older debt
+remains for `doctor --repair` and cannot change the new mutation's result.
 
 Mutation exit statuses distinguish definitely uncommitted (`1`), committed with
 cleanup or post-commit verification pending (`3`), and indeterminate commit
@@ -369,8 +386,11 @@ configured or learned, addressable broker reaches `UP` after the required
 TLS/SASL exchange. It does not call resource or cluster-description APIs.
 Plaintext proves reachability, server-only TLS proves server identity, SASL
 proves its configured exchange, and mTLS proves the configured client exchange;
-none proves application authorization. The current unauthenticated Registry
-probe remains provider-specific pending the secure Registry work.
+none proves application authorization. Current Registry profiles are
+unauthenticated HTTP only. Their provider-specific probe validates fixed
+non-resource metadata: Confluent-compatible `/schemas/types` or native Apicurio
+`/system/info`. This proves endpoint reachability and provider response shape,
+not server identity, user authentication, or schema/subject authorization.
 
 Kantrip writes results to stdout and diagnostics to stderr. Sensitive values
 are classified and redacted before presentation, and color never carries
