@@ -242,7 +242,7 @@ else:
 
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
-            patch("kantrip.ping.urlopen", return_value=response) as open_registry,
+            patch("kantrip.ping._open_request", return_value=response) as open_registry,
         ):
             result = ping_profile(profile, timeout=1.25)
 
@@ -258,7 +258,44 @@ else:
             "http://registry.invalid:8081/schemas/types",
             open_registry.call_args.args[0].full_url,
         )
-        self.assertLessEqual(open_registry.call_args.kwargs["timeout"], 1.25)
+        self.assertLessEqual(open_registry.call_args.args[1], 1.25)
+
+    def test_authenticated_registry_rejects_a_public_probe_endpoint(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        reference = secret_reference(profile_id, "registry/password")
+        profile = self._registry_profile("confluent")
+        profile["id"] = profile_id
+        registry = profile["registry"]
+        assert isinstance(registry, dict)
+        registry["schema.registry.url"] = "https://registry.invalid"
+        registry["auth"] = {
+            "type": "basic",
+            "username": "synthetic-user",
+            "passwordRef": reference,
+        }
+        authenticated = MagicMock()
+        authenticated.__enter__.return_value.read.return_value = b'["AVRO"]'
+        public = MagicMock()
+        public.__enter__.return_value.read.return_value = b'["AVRO"]'
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch(
+                "kantrip.ping._open_request",
+                side_effect=(authenticated, public),
+            ) as open_registry,
+            self.assertRaisesRegex(PingError, "endpoint is public"),
+        ):
+            ping_profile(
+                profile,
+                timeout=1,
+                secret_store=_Store({reference: "synthetic-password"}),
+            )
+
+        request = open_registry.call_args_list[0].args[0]
+        self.assertTrue(request.get_header("Authorization").startswith("Basic "))
+        anonymous_request = open_registry.call_args_list[1].args[0]
+        self.assertIsNone(anonymous_request.get_header("Authorization"))
 
     def test_profile_checks_configured_apicurio_registry(self) -> None:
         profile = self._registry_profile("apicurio")
@@ -269,7 +306,7 @@ else:
 
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
-            patch("kantrip.ping.urlopen", return_value=response) as open_registry,
+            patch("kantrip.ping._open_request", return_value=response) as open_registry,
         ):
             result = ping_profile(profile, timeout=1.25)
 
@@ -289,7 +326,7 @@ else:
     def test_profile_reports_registry_connectivity_failure(self) -> None:
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
-            patch("kantrip.ping.urlopen", side_effect=URLError("connection refused")),
+            patch("kantrip.ping._open_request", side_effect=URLError("connection refused")),
             self.assertRaisesRegex(PingError, "Confluent Schema Registry did not return") as raised,
         ):
             ping_profile(self._registry_profile("confluent"))
@@ -316,7 +353,7 @@ else:
         response.__enter__.return_value.read.return_value = b'{"name": "Apicurio"}'
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
-            patch("kantrip.ping.urlopen", return_value=response),
+            patch("kantrip.ping._open_request", return_value=response),
             self.assertRaisesRegex(PingError, "invalid system metadata"),
         ):
             ping_profile(self._registry_profile("apicurio"))
@@ -326,7 +363,7 @@ else:
         response.__enter__.return_value.read.return_value = b"[]"
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
-            patch("kantrip.ping.urlopen", return_value=response),
+            patch("kantrip.ping._open_request", return_value=response),
             self.assertRaisesRegex(PingError, "invalid schema-type metadata"),
         ):
             ping_profile(self._registry_profile("confluent"))

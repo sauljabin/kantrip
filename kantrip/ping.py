@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import ssl
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient
@@ -26,7 +28,8 @@ from kantrip.registry import (
     RegistryConnection,
     RegistryProfileError,
     RegistryProvider,
-    plain_registry_connection,
+    registry_connection,
+    resolve_registry_connection,
 )
 from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
 
@@ -35,6 +38,7 @@ _QUIET_KAFKA_LOGGER.addHandler(logging.NullHandler())
 _QUIET_KAFKA_LOGGER.propagate = False
 _QUIET_KAFKA_LOGGER.disabled = True
 _STATISTICS_INTERVAL_MS = 100
+_MAX_REGISTRY_RESPONSE_BYTES = 1024 * 1024
 KafkaProof = Literal["reachability", "server-tls", "sasl", "mtls"]
 
 
@@ -81,10 +85,15 @@ def ping_profile(
     """Verify one real broker connection and the current Registry endpoint."""
     deadline = time.monotonic() + timeout
     try:
-        registry = plain_registry_connection(profile)
+        registry = registry_connection(profile)
         connection = kafka or kafka_connection(profile)
+        selected_store = secret_store
         if connection.requires_secrets and kafka is None:
-            connection = resolve_kafka_connection(connection, secret_store or load_secret_store())
+            selected_store = selected_store or load_secret_store()
+            connection = resolve_kafka_connection(connection, selected_store)
+        if registry is not None and registry.requires_secrets:
+            selected_store = selected_store or load_secret_store()
+            registry = resolve_registry_connection(registry, selected_store)
     except (KafkaProfileError, RegistryProfileError, SecretStoreError) as error:
         raise PingError(str(error)) from error
 
@@ -184,23 +193,48 @@ def _registry_connectivity(
             f"the {registry_name} did not return registry metadata",
             detail=error,
         ) from error
+    if connection.auth_type not in {"none", "basic", "token"}:
+        raise PingError(
+            f"the {registry_name} transport was verified but authentication is unverified"
+        )
+    if connection.auth_type != "none" and connection.provider == "apicurio":
+        raise PingError(
+            "the Apicurio Registry transport was verified but authentication is unverified"
+        )
+    headers = _registry_auth_headers(connection)
+    context = _registry_ssl_context(connection)
     if connection.provider == "apicurio":
         _apicurio_system_info(connection.url, timeout)
     else:
-        _confluent_schema_types(connection.url, timeout)
+        probe_url = f"{connection.url.rstrip('/')}/schemas/types"
+        _confluent_schema_types(connection.url, timeout, headers=headers, context=context)
+        if connection.auth_type != "none":
+            _require_anonymous_rejection(probe_url, deadline, context=context)
     return RegistryPingResult(
         connection.provider,
-        "plaintext reachable",
-        "provider metadata validated",
+        "verified TLS" if connection.url.startswith("https://") else "plaintext reachable",
+        (
+            f"{connection.auth_type} authentication gate validated"
+            if connection.auth_type != "none"
+            else "provider metadata validated"
+        ),
     )
 
 
-def _confluent_schema_types(url: str, timeout: float) -> tuple[str, ...]:
+def _confluent_schema_types(
+    url: str,
+    timeout: float,
+    *,
+    headers: Mapping[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
+) -> tuple[str, ...]:
     body = _registry_json(
         f"{url.rstrip('/')}/schemas/types",
         timeout,
         "Confluent Schema Registry",
         "application/vnd.schemaregistry.v1+json",
+        headers=headers,
+        context=context,
     )
     if (
         not isinstance(body, list)
@@ -226,16 +260,88 @@ def _apicurio_system_info(url: str, timeout: float) -> str:
     return version
 
 
-def _registry_json(url: str, timeout: float, name: str, accept: str) -> object:
-    request = Request(url, headers={"Accept": accept})
+def _registry_json(
+    url: str,
+    timeout: float,
+    name: str,
+    accept: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
+) -> object:
+    request = Request(url, headers={"Accept": accept, **dict(headers or {})})
     try:
-        with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read())
+        with _open_request(request, timeout, context=context) as response:
+            payload = response.read(_MAX_REGISTRY_RESPONSE_BYTES + 1)
+            if len(payload) > _MAX_REGISTRY_RESPONSE_BYTES:
+                raise ValueError("Registry response exceeded the 1 MiB limit")
+            return json.loads(payload)
     except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError) as error:
         raise PingError(
             f"the {name} did not return registry metadata",
             detail=_exception_message(error),
         ) from error
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+
+def _open_request(
+    request: Request,
+    timeout: float,
+    *,
+    context: ssl.SSLContext | None,
+) -> Any:
+    opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context), _NoRedirect())
+    return opener.open(request, timeout=timeout)
+
+
+def _registry_ssl_context(connection: RegistryConnection) -> ssl.SSLContext | None:
+    if not connection.url.startswith("https://"):
+        return None
+    context = ssl.create_default_context()
+    if connection.ca_certificates is not None:
+        context.load_verify_locations(cadata=connection.ca_certificates)
+    return context
+
+
+def _registry_auth_headers(connection: RegistryConnection) -> dict[str, str]:
+    if connection.auth_type == "basic":
+        if connection.username is None or connection.password is None:
+            raise PingError("Registry basic credentials are unresolved")
+        credential = base64.b64encode(
+            f"{connection.username}:{connection.password}".encode()
+        ).decode("ascii")
+        return {"Authorization": f"Basic {credential}"}
+    if connection.auth_type == "token":
+        if connection.token is None:
+            raise PingError("Registry bearer token is unresolved")
+        return {"Authorization": f"Bearer {connection.token}"}
+    return {}
+
+
+def _require_anonymous_rejection(
+    url: str,
+    deadline: float,
+    *,
+    context: ssl.SSLContext | None,
+) -> None:
+    request = Request(url, headers={"Accept": "application/vnd.schemaregistry.v1+json"})
+    try:
+        with _open_request(request, _remaining(deadline), context=context) as response:
+            response.read(1)
+    except HTTPError as error:
+        if error.code == 401:
+            return
+        raise PingError(
+            "Registry authentication proof was inconclusive",
+            detail=f"anonymous control returned HTTP {error.code}",
+        ) from error
+    except (URLError, OSError, TimeoutError) as error:
+        raise PingError("Registry authentication proof was inconclusive", detail=error) from error
+    raise PingError("Registry endpoint is public; configured authentication was not proven")
 
 
 def _remaining(deadline: float) -> float:

@@ -35,7 +35,7 @@ from kantrip.registry import (
     APICURIO_PROVIDER,
     RegistryConnection,
     RegistryProfileError,
-    plain_registry_connection,
+    registry_connection,
 )
 from kantrip.runtime import (
     SessionRuntime,
@@ -235,7 +235,7 @@ def _run_in_runtime(
 
 def _profile_registry(profile: Mapping[str, Any]) -> RegistryConnection | None:
     try:
-        registry = plain_registry_connection(profile)
+        registry = registry_connection(profile)
     except RegistryProfileError as error:
         raise SessionError(str(error)) from error
     if registry is not None and registry.requires_secrets:

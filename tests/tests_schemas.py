@@ -77,6 +77,33 @@ class TestProfileSchema(unittest.TestCase):
                 }
                 self.assertFalse(self._validator().is_valid(profile))
 
+    def test_registry_schema_enforces_transport_and_provider_auth_constraints(self) -> None:
+        profile_id = _profile_configuration()["id"]
+        credential_id = "018f8f13-7c21-7cee-8000-000000000011"
+        password_reference = f"profile/{profile_id}/{credential_id}/registry/password"
+        token_reference = f"profile/{profile_id}/{credential_id}/registry/token"
+        registries = (
+            {
+                "provider": "confluent",
+                "schema.registry.url": "http://registry.example.com",
+                "auth": {
+                    "type": "basic",
+                    "username": "synthetic",
+                    "passwordRef": password_reference,
+                },
+            },
+            {
+                "provider": "apicurio",
+                "apicurio.registry.url": "https://registry.example.com",
+                "auth": {"type": "token", "tokenRef": token_reference},
+            },
+        )
+        for registry in registries:
+            profile = _profile_configuration()
+            profile["registry"] = registry
+            with self.subTest(registry=registry):
+                self.assertFalse(self._validator().is_valid(profile))
+
     def test_legacy_schema_registry_contract_is_rejected(self) -> None:
         profile = _profile_configuration()
         profile["schemaRegistry"] = {

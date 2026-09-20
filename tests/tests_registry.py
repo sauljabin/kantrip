@@ -1,11 +1,26 @@
 import unittest
 
-from kantrip.registry import RegistryProfileError, display_registry, plain_registry_connection
+from kantrip.registry import (
+    RegistryProfileError,
+    display_registry,
+    registry_connection,
+    resolve_registry_connection,
+)
+from kantrip.secret_store import secret_reference
+from tests.pki import KEY_PASSWORD, synthetic_pki
+
+
+class _Store:
+    def __init__(self, values: dict[str, str]) -> None:
+        self.values = values
+
+    def get(self, reference: str) -> str:
+        return self.values[reference]
 
 
 class TestRegistry(unittest.TestCase):
     def test_resolves_confluent(self) -> None:
-        connection = plain_registry_connection(
+        connection = registry_connection(
             {
                 "registry": {
                     "provider": "confluent",
@@ -21,12 +36,12 @@ class TestRegistry(unittest.TestCase):
 
     def test_rejects_a_missing_provider(self) -> None:
         with self.assertRaisesRegex(RegistryProfileError, "registry.provider must"):
-            plain_registry_connection(
+            registry_connection(
                 {"registry": {"schema.registry.url": "http://registry.invalid:8081"}}
             )
 
     def test_resolves_native_apicurio(self) -> None:
-        connection = plain_registry_connection(
+        connection = registry_connection(
             {
                 "registry": {
                     "provider": "apicurio",
@@ -42,7 +57,7 @@ class TestRegistry(unittest.TestCase):
 
     def test_rejects_provider_specific_property_mismatches(self) -> None:
         with self.assertRaisesRegex(RegistryProfileError, "incompatible with provider apicurio"):
-            plain_registry_connection(
+            registry_connection(
                 {
                     "registry": {
                         "provider": "apicurio",
@@ -52,7 +67,7 @@ class TestRegistry(unittest.TestCase):
             )
 
     def test_accepts_https_without_auth_and_rejects_embedded_metadata(self) -> None:
-        secure = plain_registry_connection(
+        secure = registry_connection(
             {
                 "registry": {
                     "provider": "confluent",
@@ -68,13 +83,13 @@ class TestRegistry(unittest.TestCase):
             "http://registry.invalid:70000",
         ):
             with self.subTest(url=url), self.assertRaises(RegistryProfileError):
-                plain_registry_connection(
+                registry_connection(
                     {"registry": {"provider": "confluent", "schema.registry.url": url}}
                 )
 
     def test_rejects_authenticated_http_registry(self) -> None:
         with self.assertRaisesRegex(RegistryProfileError, "require an https"):
-            plain_registry_connection(
+            registry_connection(
                 {
                     "id": "018f8f13-7c21-7cee-8000-000000000010",
                     "registry": {
@@ -102,6 +117,41 @@ class TestRegistry(unittest.TestCase):
         )
 
         self.assertEqual("Confluent: http://registry.invalid:8081/path", rendered)
+
+    def test_resolves_a_multiline_encrypted_mtls_private_key(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        key_reference = secret_reference(profile_id, "registry/tls/private-key")
+        password_reference = secret_reference(profile_id, "registry/tls/private-key-password")
+        pki = synthetic_pki()
+        parsed = registry_connection(
+            {
+                "id": profile_id,
+                "registry": {
+                    "provider": "confluent",
+                    "schema.registry.url": "https://registry.invalid",
+                    "tls": {"clientCertificate": pki.client_certificate},
+                    "auth": {
+                        "type": "mtls",
+                        "privateKeyRef": key_reference,
+                        "privateKeyPasswordRef": password_reference,
+                    },
+                },
+            }
+        )
+        assert parsed is not None
+
+        resolved = resolve_registry_connection(
+            parsed,
+            _Store(
+                {
+                    key_reference: pki.encrypted_client_key,
+                    password_reference: KEY_PASSWORD,
+                }
+            ),
+        )
+
+        self.assertEqual(pki.encrypted_client_key, resolved.private_key)
+        self.assertEqual(KEY_PASSWORD, resolved.private_key_password)
 
 
 if __name__ == "__main__":

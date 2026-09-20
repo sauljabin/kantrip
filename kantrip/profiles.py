@@ -61,7 +61,7 @@ from kantrip.reconciliation import (
 from kantrip.registry import (
     CONFLUENT_PROVIDER,
     RegistryProfileError,
-    plain_registry_connection,
+    registry_connection,
 )
 from kantrip.secret_store import (
     SecretStore,
@@ -1680,7 +1680,7 @@ def _new_profile(
             "auth": {"type": "none"},
         }
         try:
-            plain_registry_connection(profile)
+            registry_connection(profile)
         except RegistryProfileError as error:
             raise ProfileStoreError(str(error)) from error
     return profile
@@ -2031,7 +2031,7 @@ def _load_profile_rows(
 
 def _validate_stored_registry(profile: Mapping[str, Any]) -> None:
     try:
-        plain_registry_connection(profile)
+        registry_connection(profile)
     except RegistryProfileError as error:
         raise ProfileStoreError(f"stored registry profile is not executable: {error}") from error
 

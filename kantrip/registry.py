@@ -7,7 +7,12 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from kantrip.kafka import KafkaProfileError, validate_ca_bundle, validate_client_certificate
+from kantrip.kafka import (
+    KafkaProfileError,
+    validate_ca_bundle,
+    validate_client_certificate,
+    validate_client_identity,
+)
 from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
 
 RegistryProvider = Literal["apicurio", "confluent"]
@@ -129,11 +134,6 @@ def _registry_basics(
     return provider, property_name, url, auth, selected_auth
 
 
-def plain_registry_connection(profile: Mapping[str, Any]) -> RegistryConnection | None:
-    """Backward-compatible name for parsing a Registry connection."""
-    return registry_connection(profile)
-
-
 def _with_authentication(
     connection: RegistryConnection,
     auth: Mapping[str, Any],
@@ -182,17 +182,7 @@ def resolve_registry_connection(
             assert connection.token_reference is not None
             return replace(connection, token=_secret(store, connection.token_reference))
         if connection.auth_type == "mtls":
-            assert connection.private_key_reference is not None
-            password = (
-                _secret(store, connection.private_key_password_reference)
-                if connection.private_key_password_reference
-                else None
-            )
-            return replace(
-                connection,
-                private_key=_secret(store, connection.private_key_reference),
-                private_key_password=password,
-            )
+            return _resolve_mtls_connection(connection, store)
         if connection.auth_type == "oauth":
             assert connection.oauth is not None
             return replace(
@@ -205,6 +195,28 @@ def resolve_registry_connection(
     except SecretStoreError as error:
         raise RegistryProfileError("Registry credentials could not be resolved") from error
     return connection
+
+
+def _resolve_mtls_connection(
+    connection: RegistryConnection,
+    store: SecretStore,
+) -> RegistryConnection:
+    assert connection.private_key_reference is not None
+    key = store.get(connection.private_key_reference)
+    password = (
+        _secret(store, connection.private_key_password_reference)
+        if connection.private_key_password_reference
+        else None
+    )
+    try:
+        validate_client_identity(
+            connection.client_certificate or "",
+            key,
+            password=password,
+        )
+    except KafkaProfileError as error:
+        raise RegistryProfileError("Registry mTLS identity is invalid") from error
+    return replace(connection, private_key=key, private_key_password=password)
 
 
 def display_registry(profile: Mapping[str, Any]) -> str:
@@ -410,7 +422,6 @@ __all__ = [
     "RegistryProfileError",
     "RegistryProvider",
     "display_registry",
-    "plain_registry_connection",
     "registry_connection",
     "resolve_registry_connection",
 ]
