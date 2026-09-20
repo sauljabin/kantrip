@@ -45,6 +45,7 @@ from kantrip.profile_output import (
 from kantrip.profiles import (
     KafkaAuthInput,
     ProfileStoreError,
+    RegistryAuthInput,
     add_profile,
     edit_profile,
     load_profiles,
@@ -291,6 +292,71 @@ def _auth_input(
     if replace_fields or username or certificate_path is not None or key_path is not None:
         raise click.UsageError("Kafka auth none cannot include credential options")
     return KafkaAuthInput("none")
+
+
+def _registry_auth_input(
+    auth_type: str,
+    username: str | None,
+    *,
+    registry_url: str | None,
+    ca_certificates: str | None = None,
+    oauth_token_url: str | None = None,
+    oauth_client_id: str | None = None,
+    oauth_scopes: tuple[str, ...] = (),
+) -> RegistryAuthInput | None:
+    """Collect Registry secrets only from the controlling terminal."""
+    requested = any(
+        (
+            auth_type != "none",
+            username is not None,
+            ca_certificates is not None,
+            oauth_token_url is not None,
+            oauth_client_id is not None,
+            bool(oauth_scopes),
+        )
+    )
+    if not requested:
+        return None
+    if registry_url is None:
+        raise click.UsageError("Registry authentication options require --registry-url")
+    if auth_type == "none":
+        if username is not None or oauth_token_url is not None or oauth_client_id is not None:
+            raise click.UsageError("Registry auth none cannot include credential options")
+        return RegistryAuthInput("none", ca_certificates=ca_certificates)
+    if auth_type == "basic":
+        if not username:
+            raise click.UsageError("Registry basic authentication requires --registry-username")
+        return RegistryAuthInput(
+            "basic",
+            ca_certificates=ca_certificates,
+            username=username,
+            password=_required_secret_prompt("Registry password"),
+        )
+    if auth_type == "token":
+        return RegistryAuthInput(
+            "token",
+            ca_certificates=ca_certificates,
+            token=_required_secret_prompt("Registry token"),
+        )
+    if auth_type == "oauth":
+        if not oauth_token_url or not oauth_client_id:
+            raise click.UsageError("Registry OAuth requires token URL and client ID")
+        return RegistryAuthInput(
+            "oauth",
+            ca_certificates=ca_certificates,
+            oauth_token_url=oauth_token_url,
+            oauth_client_id=oauth_client_id,
+            oauth_scopes=oauth_scopes,
+            oauth_client_secret=_required_secret_prompt("Registry OAuth client secret"),
+        )
+    raise click.UsageError("Registry mTLS requires client identity options not yet available")
+
+
+def _required_secret_prompt(label: str) -> str:
+    value = _secret_prompt(label)
+    if not value:
+        raise click.ClickException(f"{label} must not be empty")
+    return value
 
 
 def _password_auth_input(
@@ -577,7 +643,27 @@ def _interactive_auth_input(current_auth: dict[str, Any]) -> KafkaAuthInput:
 )
 @cloup.option(
     "--registry-url",
-    help="Optional plain registry URL.",
+    help="Optional Registry URL without embedded credentials.",
+)
+@cloup.option(
+    "--registry-auth",
+    type=cloup.Choice(("none", "basic", "token", "mtls", "oauth")),
+    default="none",
+    show_default=True,
+    help="Registry authentication mechanism.",
+)
+@cloup.option("--registry-username", help="Registry Basic authentication username.")
+@cloup.option(
+    "--registry-ca-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    callback=_read_ca_file,
+    metavar="PATH",
+    help="Copy a PEM CA bundle for Registry TLS verification.",
+)
+@cloup.option("--registry-oauth-token-url", help="HTTPS Registry OAuth token endpoint.")
+@cloup.option("--registry-oauth-client-id", help="Registry OAuth client identifier.")
+@cloup.option(
+    "--registry-oauth-scope", multiple=True, help="Registry OAuth scope; repeat as needed."
 )
 def add_configured_profile(
     profile_name: str,
@@ -592,6 +678,12 @@ def add_configured_profile(
     client_key_file: Path | None,
     registry_provider: str | None,
     registry_url: str | None,
+    registry_auth: str,
+    registry_username: str | None,
+    registry_ca_file: str | None,
+    registry_oauth_token_url: str | None,
+    registry_oauth_client_id: str | None,
+    registry_oauth_scope: tuple[str, ...],
 ) -> None:
     """Add a profile."""
     try:
@@ -601,6 +693,15 @@ def add_configured_profile(
             client_certificate_file,
             client_key_file,
             password_required=auth_type in {"plain", "scram-sha-256", "scram-sha-512"},
+        )
+        selected_registry_auth = _registry_auth_input(
+            registry_auth,
+            registry_username,
+            registry_url=registry_url,
+            ca_certificates=registry_ca_file,
+            oauth_token_url=registry_oauth_token_url,
+            oauth_client_id=registry_oauth_client_id,
+            oauth_scopes=registry_oauth_scope,
         )
         profiles = add_profile(
             profile_name,
@@ -612,6 +713,7 @@ def add_configured_profile(
             auth=auth,
             registry_provider=registry_provider,
             registry_url=registry_url,
+            registry_auth=selected_registry_auth,
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
@@ -693,7 +795,23 @@ def add_configured_profile(
     type=cloup.Choice(("confluent", "apicurio")),
     help="Replace the Registry provider.",
 )
-@cloup.option("--registry-url", help="Add or replace the plain Registry URL.")
+@cloup.option("--registry-url", help="Add or replace the Registry URL.")
+@cloup.option(
+    "--registry-auth",
+    type=cloup.Choice(("none", "basic", "token", "mtls", "oauth")),
+    help="Replace Registry authentication.",
+)
+@cloup.option("--registry-username", help="Replace Registry Basic username.")
+@cloup.option(
+    "--registry-ca-file",
+    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
+    callback=_read_ca_file,
+    metavar="PATH",
+    help="Replace Registry TLS trust with a PEM CA bundle.",
+)
+@cloup.option("--registry-oauth-token-url", help="Replace Registry OAuth token endpoint.")
+@cloup.option("--registry-oauth-client-id", help="Replace Registry OAuth client identifier.")
+@cloup.option("--registry-oauth-scope", multiple=True, help="Replace Registry OAuth scopes.")
 @cloup.option("--remove-registry", is_flag=True, help="Remove the complete Registry connection.")
 def edit_configured_profile(
     profile_name: str,
@@ -712,6 +830,12 @@ def edit_configured_profile(
     replace_secrets: tuple[str, ...],
     registry_provider: str | None,
     registry_url: str | None,
+    registry_auth: str | None,
+    registry_username: str | None,
+    registry_ca_file: str | None,
+    registry_oauth_token_url: str | None,
+    registry_oauth_client_id: str | None,
+    registry_oauth_scope: tuple[str, ...],
     remove_registry: bool,
 ) -> None:
     """Edit explicit fields of an existing profile."""
@@ -737,6 +861,12 @@ def edit_configured_profile(
                 bool(replace_secrets),
                 registry_provider is not None,
                 registry_url is not None,
+                registry_auth is not None,
+                registry_username is not None,
+                registry_ca_file is not None,
+                registry_oauth_token_url is not None,
+                registry_oauth_client_id is not None,
+                bool(registry_oauth_scope),
                 remove_registry,
             )
         )
@@ -777,6 +907,38 @@ def edit_configured_profile(
                     ),
                     replace_fields=replace_secrets,
                 )
+        registry_input: RegistryAuthInput | None = None
+        registry_requested = any(
+            (
+                registry_auth is not None,
+                registry_username is not None,
+                registry_ca_file is not None,
+                registry_oauth_token_url is not None,
+                registry_oauth_client_id is not None,
+                bool(registry_oauth_scope),
+            )
+        )
+        if registry_requested:
+            current_registry = current_profile.get("registry")
+            stored_url = None
+            if isinstance(current_registry, dict):
+                url_key = (
+                    "apicurio.registry.url"
+                    if current_registry.get("provider") == "apicurio"
+                    else "schema.registry.url"
+                )
+                stored_url = current_registry.get(url_key)
+            registry_input = _registry_auth_input(
+                registry_auth or "none",
+                registry_username,
+                registry_url=registry_url or stored_url,
+                ca_certificates=registry_ca_file,
+                oauth_token_url=registry_oauth_token_url,
+                oauth_client_id=registry_oauth_client_id,
+                oauth_scopes=registry_oauth_scope,
+            )
+            if registry_input is None and registry_auth == "none":
+                registry_input = RegistryAuthInput("none")
         profiles = edit_profile(
             profile_name,
             bootstrap_servers=bootstrap_servers,
@@ -790,6 +952,7 @@ def edit_configured_profile(
             auth=auth,
             registry_provider=registry_provider,
             registry_url=registry_url,
+            registry_auth=registry_input,
             remove_registry=remove_registry,
             expected_profile_id=str(current_profile["id"]),
             expected_revision=expected_revision,

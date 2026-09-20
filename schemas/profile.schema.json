@@ -16,7 +16,7 @@
     },
     "secretReference": {
       "type": "string",
-      "pattern": "^profile/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:kafka/password|kafka/oauth/client-secret|kafka/tls/private-key|kafka/tls/private-key-password|registry/password|registry/token|registry/oauth/client-secret)$"
+      "pattern": "^profile/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:kafka/password|kafka/oauth/client-secret|kafka/tls/private-key|kafka/tls/private-key-password|registry/password|registry/token|registry/oauth/client-secret|registry/tls/private-key|registry/tls/private-key-password)$"
     },
     "passwordAuth": {
       "type": "object",
@@ -148,7 +148,24 @@
     "registryUrl": {
       "type": "string",
       "format": "uri",
-      "pattern": "^http://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
+      "pattern": "^https?://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
+    },
+    "registryTls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caCertificates": { "$ref": "#/$defs/kafkaTls/properties/caCertificates" },
+        "clientCertificate": { "$ref": "#/$defs/mtlsAuth/properties/clientCertificate" }
+      }
+    },
+    "registryAuth": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["type"], "properties": { "type": { "const": "none" } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "username", "passwordRef"], "properties": { "type": { "const": "basic" }, "username": { "type": "string", "minLength": 1 }, "passwordRef": { "allOf": [{ "$ref": "#/$defs/secretReference" }, { "pattern": "/registry/password$" }] } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "tokenRef"], "properties": { "type": { "const": "token" }, "tokenRef": { "allOf": [{ "$ref": "#/$defs/secretReference" }, { "pattern": "/registry/token$" }] } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "privateKeyRef"], "properties": { "type": { "const": "mtls" }, "privateKeyRef": { "allOf": [{ "$ref": "#/$defs/secretReference" }, { "pattern": "/registry/tls/private-key$" }] }, "privateKeyPasswordRef": { "allOf": [{ "$ref": "#/$defs/secretReference" }, { "pattern": "/registry/tls/private-key-password$" }] } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "tokenUrl", "clientId", "scopes", "clientSecretRef"], "properties": { "type": { "const": "oauth" }, "tokenUrl": { "type": "string", "pattern": "^https://" }, "clientId": { "type": "string", "minLength": 1 }, "scopes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }, "clientSecretRef": { "allOf": [{ "$ref": "#/$defs/secretReference" }, { "pattern": "/registry/oauth/client-secret$" }] }, "caCertificates": { "$ref": "#/$defs/kafkaTls/properties/caCertificates" }, "logicalCluster": { "type": "string", "minLength": 1 }, "identityPoolId": { "type": "string", "minLength": 1 } } }
+      ]
     },
     "registry": {
       "oneOf": [
@@ -162,7 +179,9 @@
             },
             "schema.registry.url": {
               "$ref": "#/$defs/registryUrl"
-            }
+            },
+            "tls": { "$ref": "#/$defs/registryTls" },
+            "auth": { "$ref": "#/$defs/registryAuth" }
           }
         },
         {
@@ -175,7 +194,9 @@
             },
             "apicurio.registry.url": {
               "$ref": "#/$defs/registryUrl"
-            }
+            },
+            "tls": { "$ref": "#/$defs/registryTls" },
+            "auth": { "$ref": "#/$defs/registryAuth" }
           }
         }
       ]

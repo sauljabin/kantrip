@@ -80,8 +80,9 @@ configured authentication exchange. None proves application authorization.
 The current unauthenticated Registry probe validates provider metadata from
 `/schemas/types` on a Confluent-compatible registry or `/system/info` on native
 Apicurio. These endpoints avoid requiring subject/artifact-list permission, but
-current Registry profiles are plain HTTP with no authentication, so success
-proves only reachability and a valid provider response. It needs no external CLI
+current Registry profiles may use plain HTTP or HTTPS with the default system
+trust store and no authentication, so success proves only reachability and a
+valid provider response. It needs no external CLI
 and applies one five-second deadline across configured services, configurable with
 `--timeout SECONDS`. Colored terminals animate checks; plain output uses
 `[running]`. Failures include a sanitized message from the underlying client or

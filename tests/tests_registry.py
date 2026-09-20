@@ -51,9 +51,17 @@ class TestRegistry(unittest.TestCase):
                 }
             )
 
-    def test_rejects_non_plain_or_embedded_registry_metadata(self) -> None:
+    def test_accepts_https_without_auth_and_rejects_embedded_metadata(self) -> None:
+        secure = plain_registry_connection(
+            {
+                "registry": {
+                    "provider": "confluent",
+                    "schema.registry.url": "https://registry.invalid",
+                }
+            }
+        )
+        self.assertIsNotNone(secure)
         for url in (
-            "https://registry.invalid",
             "http://user:secret@registry.invalid",
             "http://registry.invalid?token=synthetic",
             "http://registry.invalid#fragment",
@@ -63,6 +71,23 @@ class TestRegistry(unittest.TestCase):
                 plain_registry_connection(
                     {"registry": {"provider": "confluent", "schema.registry.url": url}}
                 )
+
+    def test_rejects_authenticated_http_registry(self) -> None:
+        with self.assertRaisesRegex(RegistryProfileError, "require an https"):
+            plain_registry_connection(
+                {
+                    "id": "018f8f13-7c21-7cee-8000-000000000010",
+                    "registry": {
+                        "provider": "confluent",
+                        "schema.registry.url": "http://registry.invalid",
+                        "auth": {
+                            "type": "basic",
+                            "username": "synthetic",
+                            "passwordRef": "profile/018f8f13-7c21-7cee-8000-000000000010/018f8f13-7c21-7cee-8000-000000000011/registry/password",
+                        },
+                    },
+                }
+            )
 
     def test_display_redacts_credentials_query_and_fragment(self) -> None:
         rendered = display_registry(

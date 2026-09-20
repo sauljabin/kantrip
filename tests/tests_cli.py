@@ -146,6 +146,7 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "confluent",
                 "schema.registry.url": "http://registry.example.com:8081",
             },

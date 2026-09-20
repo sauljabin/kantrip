@@ -56,9 +56,15 @@ class TestProfileSchema(unittest.TestCase):
                 profile["registry"] = registry
                 self.assertFalse(self._validator().is_valid(profile))
 
-    def test_secure_or_credentialed_registry_urls_are_rejected(self) -> None:
+    def test_https_registry_and_credentialed_urls_are_distinguished(self) -> None:
+        secure = _profile_configuration()
+        secure["registry"] = {
+            "provider": "confluent",
+            "schema.registry.url": "https://registry.example.com",
+            "auth": {"type": "none"},
+        }
+        self.assertTrue(self._validator().is_valid(secure))
         for url in (
-            "https://registry.example.com",
             "http://user:secret@registry.example.com",
             "http://registry.example.com?token=synthetic",
             "http://registry.example.com#fragment",

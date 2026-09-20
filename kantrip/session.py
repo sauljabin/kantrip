@@ -93,10 +93,7 @@ def run_profile_session(
             kafka = resolve_kafka_connection(kafka, secret_store or load_secret_store())
     except (KafkaProfileError, SecretStoreError) as error:
         raise SessionError(str(error)) from error
-    try:
-        registry = plain_registry_connection(profile)
-    except RegistryProfileError as error:
-        raise SessionError(str(error)) from error
+    registry = _profile_registry(profile)
 
     try:
         cleanup_abandoned_sessions(env)
@@ -234,6 +231,18 @@ def _run_in_runtime(
         interactive=not has_command,
     )
     return result.returncode
+
+
+def _profile_registry(profile: Mapping[str, Any]) -> RegistryConnection | None:
+    try:
+        registry = plain_registry_connection(profile)
+    except RegistryProfileError as error:
+        raise SessionError(str(error)) from error
+    if registry is not None and registry.requires_secrets:
+        raise SessionError(
+            "authenticated Registry client execution requires a verified adapter mapping"
+        )
+    return registry
 
 
 def _run_child(

@@ -23,6 +23,7 @@ from kantrip.profiles import (
     DATABASE_SCHEMA_VERSION,
     KafkaAuthInput,
     ProfileStoreError,
+    RegistryAuthInput,
     add_profile,
     database_maintenance_lock,
     edit_profile,
@@ -641,6 +642,7 @@ class TestProfiles(unittest.TestCase):
 
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "confluent",
                 "schema.registry.url": "http://localhost:8081",
             },
@@ -658,11 +660,65 @@ class TestProfiles(unittest.TestCase):
 
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "apicurio",
                 "apicurio.registry.url": "http://localhost:8082/apis/registry/v3",
             },
             profiles.profile("local")["registry"],
         )
+
+    def test_add_stages_registry_basic_secret_with_the_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            profiles = add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="synthetic-password"
+                ),
+                secret_store=store,
+            )
+
+        auth = profiles.profile("local")["registry"]["auth"]
+        self.assertEqual("basic", auth["type"])
+        self.assertEqual("synthetic-user", auth["username"])
+        self.assertNotIn("synthetic-password", json.dumps(profiles.profiles))
+        self.assertEqual("synthetic-password", store.values[auth["passwordRef"]])
+
+    def test_edit_rotates_and_removes_registry_credentials_recoverably(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="first-password"
+                ),
+                secret_store=store,
+            )
+            rotated = edit_profile(
+                "local",
+                path,
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="second-password"
+                ),
+                secret_store=store,
+            ).profile("local")
+            reference = rotated["registry"]["auth"]["passwordRef"]
+            self.assertEqual("second-password", store.values[reference])
+            cleared = edit_profile(
+                "local",
+                path,
+                registry_auth=RegistryAuthInput("none"),
+                secret_store=store,
+            ).profile("local")
+
+        self.assertEqual({"type": "none"}, cleared["registry"]["auth"])
+        self.assertIn(reference, store.deleted)
 
     def test_edits_plain_profile_fields_and_advances_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -695,6 +751,7 @@ class TestProfiles(unittest.TestCase):
             self.assertEqual({"environment": "development", "owner": "platform"}, updated["labels"])
             self.assertEqual(
                 {
+                    "auth": {"type": "none"},
                     "provider": "apicurio",
                     "apicurio.registry.url": "http://localhost:8082/apis/registry/v3",
                 },
@@ -913,6 +970,7 @@ class TestProfiles(unittest.TestCase):
 
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "confluent",
                 "schema.registry.url": "http://localhost:8081",
             },
@@ -1000,7 +1058,10 @@ class TestProfiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
             cases = (
-                ({"registry_url": "https://registry.example.com"}, "supports only an http://"),
+                (
+                    {"registry_url": "http://user:secret@registry.example.com"},
+                    "must not contain credentials",
+                ),
                 ({"registry_provider": "apicurio"}, "requires --registry-url"),
             )
             for arguments, message in cases:

@@ -153,7 +153,7 @@ class TestDoctor(unittest.TestCase):
             )
         )
 
-    def test_unsupported_registry_profile_is_unhealthy(self) -> None:
+    def test_https_registry_profile_is_healthy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             _create_profile_database(database_path)
@@ -175,8 +175,7 @@ class TestDoctor(unittest.TestCase):
             with patch("kantrip.doctor.shutil.which", side_effect=_installed_tool):
                 report = run_doctor(environment)
 
-        self.assertFalse(report.healthy)
-        self.assertTrue(any("does not match schema" in check.message for check in report.checks))
+        self.assertTrue(report.healthy)
 
     def test_names_a_missing_schema_registry_console_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

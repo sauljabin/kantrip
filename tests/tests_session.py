@@ -498,7 +498,7 @@ class TestProfileSession(unittest.TestCase):
             )
         run.assert_not_called()
 
-    def test_secure_registry_profile_is_rejected_before_launch(self) -> None:
+    def test_secure_registry_profile_uses_the_selected_client_before_launch(self) -> None:
         self.profile["registry"] = {
             "provider": "confluent",
             "schema.registry.url": "https://registry.invalid",
@@ -506,12 +506,11 @@ class TestProfileSession(unittest.TestCase):
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
             patch("kantrip.session._run_child") as run,
-            self.assertRaisesRegex(SessionError, "supports only an http:// registry URL"),
         ):
             run_profile_session(
                 "local", self.profile, ["kafka-protobuf-console-consumer"], environment={}
             )
-        run.assert_not_called()
+        run.assert_called_once()
 
     def test_registry_shims_reject_missing_and_native_profiles_without_launching_clients(
         self,
@@ -741,22 +740,13 @@ class TestProfileSession(unittest.TestCase):
                 run_profile_session("local", self.profile, command, environment={})
             run.assert_not_called()
 
-    def test_registry_deserializers_require_a_plain_profile_registry(self) -> None:
+    def test_registry_deserializers_require_a_configured_profile_registry(self) -> None:
         commands = (
             ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
             ["kaskade", "consumer", "-t", "orders", "-v", "registry"],
         )
         for command in commands:
-            for registry, expected in (
-                (None, "requires a registry section"),
-                (
-                    {
-                        "provider": "confluent",
-                        "schema.registry.url": "https://registry.invalid",
-                    },
-                    "supports only an http:// registry URL",
-                ),
-            ):
+            for registry, expected in ((None, "requires a registry section"),):
                 with (
                     self.subTest(command=command, registry=registry),
                     patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
