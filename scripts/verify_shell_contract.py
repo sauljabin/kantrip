@@ -171,7 +171,8 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     self.assertEqual(0o600, record["registry_config_mode"])
                     self.assertEqual("http://registry.invalid:8081", record["registry_url"])
                     self.assertIn(
-                        "schema.registry.url=http://registry.invalid:8081", record["argv"]
+                        "schema.registry.url=http://registry.invalid:8081\n",
+                        record["config_contents"],
                     )
                 if record["name"] in KCAT_EXECUTABLES and "-s" in record["argv"]:
                     self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
