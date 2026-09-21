@@ -61,6 +61,13 @@ _SCRUBBED_PREFIXES = ("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KANTRIP_SANDBO
 _SCRUBBED_JAVA_VARIABLES = frozenset(
     {"KAFKA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
 )
+_PLATFORM_CA_BUNDLE_CANDIDATES = (
+    Path("/etc/ssl/cert.pem"),
+    Path("/etc/ssl/certs/ca-certificates.crt"),
+    Path("/etc/pki/tls/certs/ca-bundle.crt"),
+    Path("/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"),
+    Path("/etc/ssl/ca-bundle.pem"),
+)
 
 
 class SessionError(RuntimeError):
@@ -445,14 +452,28 @@ def _prepare_subshell(
 
 
 def _oauth_trust_bundle(profile_ca: str) -> str:
-    default_path = ssl.get_default_verify_paths().openssl_cafile
-    if default_path is None:
-        raise SessionError("the platform default CA bundle could not be located")
-    try:
-        default_roots = Path(default_path).read_text(encoding="utf-8")
-    except OSError as error:
-        raise SessionError("the platform default CA bundle could not be read") from error
+    default_roots = _platform_default_ca_bundle()
     return f"{default_roots.rstrip()}\n{profile_ca.strip()}\n"
+
+
+def _platform_default_ca_bundle() -> str:
+    compiled_path = ssl.get_default_verify_paths().openssl_cafile
+    candidates = (
+        *((Path(compiled_path),) if compiled_path is not None else ()),
+        *_PLATFORM_CA_BUNDLE_CANDIDATES,
+    )
+    visited: set[Path] = set()
+    for path in candidates:
+        if path in visited:
+            continue
+        visited.add(path)
+        try:
+            contents = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if contents.strip():
+            return contents
+    raise SessionError("the platform default CA bundle could not be located or read")
 
 
 def _registry_client_environment(

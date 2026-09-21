@@ -18,7 +18,7 @@ from kantrip.oauth import OAuthConnection
 from kantrip.registry import RegistryConnection
 from kantrip.runtime import create_session_runtime
 from kantrip.secret_store import secret_reference
-from kantrip.session import SessionError, run_profile_session
+from kantrip.session import SessionError, _oauth_trust_bundle, run_profile_session
 from tests.pki import synthetic_pki
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
@@ -77,6 +77,39 @@ class TestProfileSession(unittest.TestCase):
                 connection,
                 environment={"PATH": "/opt/bin"},
             )
+
+    def test_oauth_trust_bundle_uses_a_portable_system_path_not_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            trusted_path = root_path / "system.pem"
+            inherited_path = root_path / "inherited.pem"
+            trusted_path.write_text("SYSTEM ROOT\n", encoding="utf-8")
+            inherited_path.write_text("INHERITED ROOT\n", encoding="utf-8")
+            paths = Mock(
+                openssl_cafile=str(root_path / "missing-compiled.pem"),
+                cafile=str(inherited_path),
+            )
+
+            with (
+                patch("kantrip.session.ssl.get_default_verify_paths", return_value=paths),
+                patch(
+                    "kantrip.session._PLATFORM_CA_BUNDLE_CANDIDATES",
+                    (trusted_path,),
+                ),
+            ):
+                bundle = _oauth_trust_bundle("PROFILE ROOT\n")
+
+        self.assertEqual("SYSTEM ROOT\nPROFILE ROOT\n", bundle)
+        self.assertNotIn("INHERITED ROOT", bundle)
+
+    def test_oauth_trust_bundle_fails_when_system_roots_are_unavailable(self) -> None:
+        paths = Mock(openssl_cafile=None)
+        with (
+            patch("kantrip.session.ssl.get_default_verify_paths", return_value=paths),
+            patch("kantrip.session._PLATFORM_CA_BUNDLE_CANDIDATES", ()),
+            self.assertRaisesRegex(SessionError, "could not be located or read"),
+        ):
+            _oauth_trust_bundle("PROFILE ROOT\n")
 
     def test_kaskade_apicurio_official_shared_ca_needs_no_new_release(self) -> None:
         connection = RegistryConnection(
