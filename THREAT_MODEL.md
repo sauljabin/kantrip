@@ -290,11 +290,22 @@ Controls:
   `/search/versions?limit=1`. Authenticated probes repeat the same URL without
   credentials and accept only an explicit 401/403 or the expected mTLS
   client-certificate rejection; unrelated transport failures prove nothing.
+- Keep Kaskade's native Apicurio Registry and token endpoint in separate HTTP/TLS
+  contexts. Both use the official shared CA bundle, but Registry mTLS identity
+  never enters the IdP client.
+- Scope Confluent Python token trust to the Kaskade child. Its private
+  `SSL_CERT_FILE` combines platform default roots with the profile IdP CA and
+  overrides inherited SSL environment only in that process.
 
 Residual risk: plaintext Kafka and HTTP Registry connections provide neither
 transport confidentiality nor server authentication. A trusted CA can still
 validate a malicious endpoint. Remote authorization and child handling of data
-remain outside Kantrip's control.
+remain outside Kantrip's control. The corrected native Apicurio mapping is
+blocked until Kaskade publishes a release containing PR 139; its exact
+development commit is not treated as a stable compatibility promise. Shared CA
+contracts broaden trust to both destinations. `SSL_CERT_FILE` is process-wide,
+not hostname-specific, so other environment-aware HTTP clients inside the same
+Kaskade process also receive that bundle.
 
 ### Abandoned runtime artifacts and process escape
 

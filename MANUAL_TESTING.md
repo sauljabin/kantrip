@@ -192,8 +192,9 @@ plaintext and server-only TLS; Bash, Zsh, and Fish; invalid passwords and client
 certificate; wrong CA and hostname; and an unavailable broker. It also creates
 Kantrip profiles for Confluent and Apicurio Basic/OAuth plus Confluent mTLS,
 proves the configured read query and authentication gate, rejects invalid
-credentials, and verifies OAuth
-revocation. Allowed Kafka identities can use only `kantrip-auth-`, OAuth can use
+credentials, and verifies that a new OAuth token acquisition fails after client
+revocation. That Registry check is not long-lived native refresh evidence.
+Allowed Kafka identities can use only `kantrip-auth-`, OAuth can use
 only `kantrip-oauth-`, and unauthenticated smoke clients can use only
 `kantrip-smoke-`. Each no-ACL identity must complete `ping` and then receive a
 resource authorization denial.
@@ -905,6 +906,35 @@ openssl s_client -connect localhost:8086 -servername localhost \
   credential values; re-enabling each client restores a successful probe.
 - The Apicurio service account has the standard `sr-readonly` realm role;
   authenticated-read bypass and anonymous read access remain disabled.
+
+### Native Registry OAuth refresh matrix
+
+Run the expiry/revocation sequence once for each distinct implementation, not
+for every equivalent format, direct command, or shell shim:
+
+1. Confluent's Java Schema Registry client through one console consumer. The
+   Avro, JSON Schema, and Protobuf console wrappers share this OAuth client and
+   private property mapping.
+2. Confluent's Python `SchemaRegistryClient` through Kaskade's Confluent
+   provider.
+3. Kaskade's native `ApicurioClient` through its Apicurio provider. Until a
+   stable Kaskade release contains PR 139, perform development evidence only
+   against exact commit `28cd379dded2cc0923edf35c028a34d93101cbfc`; do not
+   change Kantrip's release gate.
+
+For each case, use its own IdP client and the 15-second access-token lifetime.
+Read a real schema, wait for expiry, then read a different uncached schema or
+reference in the same still-running process. The second read must obtain a new
+token and return the correct schema. Disable that IdP client, allow the current
+token to expire, and request a third uncached schema. The next refresh must fail
+cleanly without exposing the secret or token. Re-enable the client afterward.
+Do not require an already issued token to become invalid immediately unless the
+IdP explicitly guarantees that behavior.
+
+Keep short adapter coverage for all six Confluent console wrappers, Kaskade's
+two providers, and Bash/Zsh/Fish. Those checks prove argument/configuration
+routing only; they must not add duplicate token-expiry waits. Basic, mTLS, and
+fixed bearer modes have no OAuth renewal case.
 
 ## Remove or rotate the sandbox
 

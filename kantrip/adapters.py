@@ -144,7 +144,12 @@ ADAPTER_CAPABILITIES = (
 
 
 _CLIENT_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.\d+)?")
+_KASKADE_VERSION_PATTERN = re.compile(
+    r"\bkaskade,\s+version\s+(\d+)\.(\d+)\.(\d+)([^\s]*)",
+    re.IGNORECASE,
+)
 _JAVA_PEM_VERSION_TIMEOUT_SECONDS = 5
+_KASKADE_APICURIO_SECURITY_MIN_VERSION: tuple[int, int, int] | None = None
 
 
 def require_java_pem_support(
@@ -183,6 +188,7 @@ def require_adapter_capability(
     auth_type: str,
     custom_pem: bool,
     environment: Mapping[str, str],
+    registry: RegistryConnection | None = None,
 ) -> None:
     """Apply the same mechanism and installed-version decision to direct clients."""
     name = Path(executable).name
@@ -200,6 +206,67 @@ def require_adapter_capability(
         require_java_pem_support(executable, environment=environment)
     if auth_type == "oauth" and capability.oauth_version_gate:
         require_java_oauth_support(executable, environment=environment)
+    if name == "kaskade" and registry is not None:
+        require_kaskade_apicurio_security_support(
+            executable,
+            registry,
+            environment=environment,
+        )
+
+
+def require_kaskade_apicurio_security_support(
+    executable: str,
+    registry: RegistryConnection,
+    *,
+    environment: Mapping[str, str],
+) -> None:
+    """Gate Apicurio mappings added by the pending Kaskade security release."""
+    if not _requires_new_kaskade_apicurio_security(registry):
+        return
+    version, suffix, rendered = _kaskade_client_version(executable, environment)
+    minimum = _KASKADE_APICURIO_SECURITY_MIN_VERSION
+    if minimum is not None and not suffix and version >= minimum:
+        return
+    raise AdapterError(
+        f"kaskade {rendered} cannot safely map this Apicurio security profile; "
+        "a published Kaskade release containing kaskade#139 is required"
+    )
+
+
+def _requires_new_kaskade_apicurio_security(connection: RegistryConnection) -> bool:
+    if connection.provider != "apicurio":
+        return False
+    if connection.auth_type != "oauth" or connection.oauth is None:
+        return False
+    return bool(connection.oauth.scopes)
+
+
+def _kaskade_client_version(
+    executable: str,
+    environment: Mapping[str, str],
+) -> tuple[tuple[int, int, int], str, str]:
+    resolved = shutil.which(executable, path=environment.get("PATH"))
+    if resolved is None:
+        raise AdapterError(f"command '{Path(executable).name}' was not found")
+    try:
+        result = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
+            check=False,
+            env=dict(environment),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError("could not verify Kaskade Apicurio security support") from error
+    match = _KASKADE_VERSION_PATTERN.search(f"{result.stdout}\n{result.stderr}")
+    if result.returncode != 0 or match is None:
+        raise AdapterError("could not verify Kaskade Apicurio security support")
+    version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    suffix = match.group(4)
+    rendered = ".".join(str(part) for part in version) + suffix
+    return version, suffix, rendered
 
 
 def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
@@ -354,6 +421,7 @@ def create_subshell_shims(  # noqa: C901
     require_java_pem: bool = False,
     kafka_auth_type: str = "none",
     schema_registry_java_config_path: Path | None = None,
+    registry_oauth_ssl_cert_file: Path | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     search_path = environment.get("PATH", os.defpath)
@@ -404,6 +472,16 @@ def create_subshell_shims(  # noqa: C901
         )
         _write_executable(directory / name, contents)
     if kaskade_executable is not None:
+        kaskade_capability_error: str | None = None
+        if registry is not None:
+            try:
+                require_kaskade_apicurio_security_support(
+                    kaskade_executable,
+                    registry,
+                    environment=environment,
+                )
+            except AdapterError as error:
+                kaskade_capability_error = str(error)
         _write_executable(
             directory / "kaskade",
             _render_kaskade_shim(
@@ -411,6 +489,8 @@ def create_subshell_shims(  # noqa: C901
                 kaskade_config_path,
                 kaskade_registry_config_path,
                 registry,
+                capability_error=kaskade_capability_error,
+                oauth_ssl_cert_file=registry_oauth_ssl_cert_file,
             ),
         )
     for name, executable in kcat_executables.items():
@@ -508,42 +588,34 @@ def _require_registry_authentication(name: str, connection: RegistryConnection) 
         raise AdapterError("kaskade Registry decoding does not support fixed bearer tokens")
     if connection.auth_type == "oauth" and connection.oauth is not None:
         _require_registry_oauth_mapping(name, connection)
-    if (
-        name == "kaskade"
-        and connection.provider == "apicurio"
-        and connection.auth_type == "mtls"
-        and connection.private_key_password is not None
-    ):
-        raise AdapterError("kaskade Apicurio does not expose a client-key password")
 
 
 def _require_registry_oauth_mapping(name: str, connection: RegistryConnection) -> None:
     assert connection.oauth is not None
-    if name in SCHEMA_REGISTRY_EXECUTABLES and connection.oauth.ca_certificates is not None:
+    if (
+        name in SCHEMA_REGISTRY_EXECUTABLES
+        or name == "kaskade"
+        and connection.provider == CONFLUENT_PROVIDER
+    ) and connection.oauth_logical_cluster is None:
+        raise AdapterError(f"{name} Confluent Registry OAuth requires a logical cluster identifier")
+    if name in SCHEMA_REGISTRY_EXECUTABLES and (
+        connection.oauth.ca_certificates is not None
+        and connection.oauth.ca_certificates != connection.ca_certificates
+    ):
         raise AdapterError(
-            f"{name} Registry OAuth does not expose independent token-endpoint PEM trust"
+            f"{name} Confluent Registry OAuth uses one ssl.* trust configuration for "
+            "Registry and token endpoint; independent CA bundles are not supported"
         )
     if (
         name == "kaskade"
-        and connection.provider == "confluent"
+        and connection.provider == "apicurio"
         and connection.oauth.ca_certificates is not None
+        and connection.oauth.ca_certificates != connection.ca_certificates
     ):
         raise AdapterError(
-            "kaskade Confluent Registry OAuth does not expose independent "
-            "token-endpoint PEM trust"
+            "kaskade Apicurio OAuth uses apicurio.registry.tls.certificates for Registry "
+            "and token endpoint; independent CA bundles are not supported"
         )
-    if name != "kaskade" or connection.provider != "apicurio":
-        return
-    if connection.ca_certificates is not None:
-        raise AdapterError(
-            "kaskade Apicurio OAuth cannot keep Registry and token-endpoint PEM trust independent"
-        )
-    if connection.oauth.ca_certificates is not None:
-        raise AdapterError(
-            "kaskade Apicurio OAuth does not expose independent token-endpoint PEM trust"
-        )
-    if connection.oauth.scopes:
-        raise AdapterError("kaskade Apicurio OAuth does not expose a scope property")
 
 
 def _reject_kafka_overrides(
@@ -676,8 +748,18 @@ def _render_kaskade_shim(
     config_path: Path,
     registry_config_path: Path,
     registry: RegistryConnection | None,
+    *,
+    capability_error: str | None = None,
+    oauth_ssl_cert_file: Path | None = None,
 ) -> str:
     registry_guard = _render_registry_shim_guard("kaskade", registry)
+    if capability_error is not None:
+        registry_guard += f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
+    oauth_tls_environment = ""
+    if registry is not None and registry.auth_type == "oauth":
+        oauth_tls_environment = "unset SSL_CERT_FILE SSL_CERT_DIR\n"
+    if oauth_tls_environment and oauth_ssl_cert_file is not None:
+        oauth_tls_environment += f"export SSL_CERT_FILE={shlex.quote(str(oauth_ssl_cert_file))}\n"
     return f"""#!/bin/sh
 unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
 case "${{1-}}" in
@@ -707,7 +789,7 @@ case "${{1-}}" in
     done
     selected_config={shlex.quote(str(config_path))}
     if [ "$command" = consumer ] && [ -n "$registry_deserializer" ]; then
-      {registry_guard}      selected_config={shlex.quote(str(registry_config_path))}
+      {registry_guard}      {oauth_tls_environment}      selected_config={shlex.quote(str(registry_config_path))}
     fi
     exec {shlex.quote(executable)} "$command" --config-file "$selected_config" "$@"
     ;;

@@ -155,8 +155,9 @@
   explicit. `kantrip add --registry-url` selects and persists `confluent` when
   `--registry-provider` is omitted. Confluent uses the official
   `schema.registry.url` serializer/deserializer property and native Apicurio
-  uses `apicurio.registry.url`. The providers are mutually exclusive and only
-  plain `http://` URLs are supported.
+  uses `apicurio.registry.url`. The providers are mutually exclusive. Plain
+  `http://` requires no authentication or TLS material; secure profiles use
+  verified HTTPS with typed Basic, fixed-token, mTLS, or OAuth variants.
 - Confluent's Avro, JSON Schema, and Protobuf console producers and consumers
   are unsuffixed. They receive the matching Kafka producer/consumer config file
   and a Confluent-compatible `schema.registry.url`; connection overrides and
@@ -166,6 +167,15 @@
   provider-specific `[registry]` section. Kaskade alone supports native
   Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
   environment variable until Kaskade implements that contract.
+- Preserve Apicurio's official shared `apicurio.registry.tls.certificates`
+  trust contract for Registry and OAuth. Kaskade PR 139 separates the HTTP/TLS
+  contexts so Registry client identity does not reach the IdP, and adds the
+  official scope plus cleanup contract. Version-gate scopes until a containing
+  stable Kaskade release is published; never invent a minimum version.
+- Confluent Java uses one official `ssl.*` trust configuration for Registry and
+  OAuth. Confluent Python has no token-CA property; only for a Kaskade Registry
+  OAuth child, provide a private `SSL_CERT_FILE` containing platform default
+  roots plus the profile's IdP CA. Never mutate the parent or system trust.
 - Bash, Zsh, and Fish sessions preserve startup files and history, neutralize
   adapter shadows, scrub reserved Kafka/Registry/sandbox and JVM injection
   variables, and restore the owned environment and private shim path. Never
@@ -173,11 +183,13 @@
 - Adapters must reject connection arguments that override the selected profile.
 - `kantrip ping` polls Confluent Kafka's `AdminClient` statistics and error
   callbacks for a configured/learned addressable broker reaching `UP`; never use
-  topic/group/schema/cluster resource APIs for Kafka success. It checks
-  `/schemas/types` for Confluent-compatible registries and `/system/info` for
-  native Apicurio. These current unauthenticated probes prove provider-shaped
-  connectivity only. Apply one bounded deadline and never overstate
-  authentication or authorization.
+  topic/group/schema/cluster resource APIs for Kafka success. Registry ping uses
+  `GET /subjects?limit=1` for Confluent-compatible endpoints and
+  `GET /search/versions?limit=1` for native Apicurio v3. It validates empty or
+  non-empty provider shapes and, for authenticated profiles, requires the same
+  anonymous request to fail with explicit authentication evidence. Apply one
+  bounded deadline and never claim schema-specific read, write access, or
+  long-lived OAuth refresh.
 
 ## Sensitive Values and Output
 

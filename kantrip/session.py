@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import ssl
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -34,9 +35,11 @@ from kantrip.kafka import (
 )
 from kantrip.registry import (
     APICURIO_PROVIDER,
+    CONFLUENT_PROVIDER,
     REGISTRY_CA_BUNDLE_FILENAME,
     REGISTRY_CLIENT_CERTIFICATE_FILENAME,
     REGISTRY_CLIENT_KEY_FILENAME,
+    REGISTRY_OAUTH_CA_BUNDLE_FILENAME,
     RegistryConnection,
     RegistryProfileError,
     confluent_console_properties,
@@ -161,11 +164,24 @@ def _run_in_runtime(  # noqa: C901
         oauth_ca_path = session_directory / OAUTH_CA_BUNDLE_FILENAME
         write_exclusive_text(oauth_ca_path, kafka.oauth.ca_certificates, mode=0o600)
     registry_ca_path: Path | None = None
+    registry_oauth_ca_path: Path | None = None
     registry_certificate_path: Path | None = None
     registry_key_path: Path | None = None
     if registry is not None and registry.ca_certificates is not None:
         registry_ca_path = session_directory / REGISTRY_CA_BUNDLE_FILENAME
         write_exclusive_text(registry_ca_path, registry.ca_certificates, mode=0o600)
+    if (
+        registry is not None
+        and registry.provider == CONFLUENT_PROVIDER
+        and registry.oauth is not None
+        and registry.oauth.ca_certificates is not None
+    ):
+        registry_oauth_ca_path = session_directory / REGISTRY_OAUTH_CA_BUNDLE_FILENAME
+        write_exclusive_text(
+            registry_oauth_ca_path,
+            _oauth_trust_bundle(registry.oauth.ca_certificates),
+            mode=0o600,
+        )
     if registry is not None and registry.auth_type == "mtls":
         if registry.client_certificate is None or registry.private_key is None:
             raise SessionError("Registry mTLS credentials are not resolved")
@@ -269,6 +285,7 @@ def _run_in_runtime(  # noqa: C901
                 auth_type=kafka.auth_type,
                 custom_pem=kafka.ca_certificates is not None or kafka.auth_type == "mtls",
                 environment=environment,
+                registry=registry,
             )
         else:
             arguments = _prepare_subshell(
@@ -282,15 +299,22 @@ def _run_in_runtime(  # noqa: C901
                 kaskade_config_path,
                 kaskade_registry_config_path,
                 registry,
+                registry_oauth_ca_path,
                 kafka.ca_certificates is not None or kafka.auth_type == "mtls",
                 kafka.auth_type,
             )
     except (AdapterError, ShellError) as error:
         raise SessionError(str(error)) from error
     runtime.mark_running()
+    execution_environment = _registry_client_environment(
+        arguments,
+        child_environment,
+        registry,
+        registry_oauth_ca_path,
+    )
     result = _run_child(
         arguments,
-        env=child_environment,
+        env=execution_environment,
         check=False,
         interactive=not has_command,
     )
@@ -385,6 +409,7 @@ def _prepare_subshell(
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     registry: RegistryConnection | None,
+    registry_oauth_ca_path: Path | None,
     require_java_pem: bool,
     kafka_auth_type: str,
 ) -> list[str]:
@@ -398,6 +423,7 @@ def _prepare_subshell(
         kaskade_registry_config_path=kaskade_registry_config_path,
         environment=environment,
         registry=registry,
+        registry_oauth_ssl_cert_file=registry_oauth_ca_path,
         require_java_pem=require_java_pem,
         kafka_auth_type=kafka_auth_type,
     )
@@ -416,6 +442,53 @@ def _prepare_subshell(
     )
     child_environment.update(plan.environment_overrides)
     return list(plan.arguments)
+
+
+def _oauth_trust_bundle(profile_ca: str) -> str:
+    default_path = ssl.get_default_verify_paths().openssl_cafile
+    if default_path is None:
+        raise SessionError("the platform default CA bundle could not be located")
+    try:
+        default_roots = Path(default_path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise SessionError("the platform default CA bundle could not be read") from error
+    return f"{default_roots.rstrip()}\n{profile_ca.strip()}\n"
+
+
+def _registry_client_environment(
+    arguments: Sequence[str],
+    environment: Mapping[str, str],
+    registry: RegistryConnection | None,
+    oauth_ca_path: Path | None,
+) -> dict[str, str]:
+    result = dict(environment)
+    if not _is_kaskade_registry_oauth(arguments, registry):
+        return result
+    result.pop("SSL_CERT_FILE", None)
+    result.pop("SSL_CERT_DIR", None)
+    if oauth_ca_path is not None:
+        result["SSL_CERT_FILE"] = str(oauth_ca_path)
+    return result
+
+
+def _is_kaskade_registry_oauth(
+    arguments: Sequence[str], registry: RegistryConnection | None
+) -> bool:
+    if (
+        registry is None
+        or registry.auth_type != "oauth"
+        or not arguments
+        or Path(arguments[0]).name != "kaskade"
+        or len(arguments) < 2
+        or arguments[1] != "consumer"
+    ):
+        return False
+    return any(
+        value.lower() == "registry"
+        or value.lower().endswith("=registry")
+        or value.lower() in {"-kregistry", "-vregistry"}
+        for value in arguments[2:]
+    )
 
 
 def _validate_executable(executable: str, environment: Mapping[str, str]) -> None:

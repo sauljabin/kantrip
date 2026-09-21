@@ -237,6 +237,20 @@ creates typed Kantrip profiles for every secure variant. The single Kafka cluste
 external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
 principals prove that `kantrip ping` does not depend on Kafka resource
 authorization. PLAIN JAAS is read from the mounted `kafka-custom-users` Secret.
+
+Registry OAuth pings in this workflow request one token in a new bounded process.
+Disabling the Keycloak client proves that a later acquisition fails; it does not
+prove refresh inside a long-lived Registry client. Native refresh acceptance is
+grouped by implementation rather than wrapper: one Confluent Java console case,
+one Kaskade Confluent Python case, and one Kaskade native Apicurio case.
+
+The native Apicurio OAuth contract is verified against Kaskade commit
+`28cd379dded2cc0923edf35c028a34d93101cbfc` from
+[`kaskade#139`](https://github.com/sauljabin/kaskade/pull/139). It reports the
+development version `5.0.1.dev5`; that value is evidence for the exact checkout,
+not a supported minimum. Keep Kantrip's capability gate closed until Kaskade
+publishes a stable release containing the change, then record and test that
+actual release version.
 An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
 through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
 from a private temporary config file. `sandbox-admin` is the only superuser.

@@ -1,8 +1,12 @@
 import unittest
+from pathlib import Path
 
+from kantrip.oauth import OAuthConnection
 from kantrip.registry import (
+    RegistryConnection,
     RegistryProfileError,
     display_registry,
+    kaskade_registry_properties,
     registry_connection,
     resolve_registry_connection,
 )
@@ -19,6 +23,52 @@ class _Store:
 
 
 class TestRegistry(unittest.TestCase):
+    def test_renders_official_shared_apicurio_oauth_security(self) -> None:
+        connection = RegistryConnection(
+            provider="apicurio",
+            url="https://registry.invalid/apis/registry/v3",
+            property_name="apicurio.registry.url",
+            auth_type="oauth",
+            ca_certificates="registry-ca",
+            oauth=OAuthConnection(
+                token_url="https://idp.invalid/token",
+                client_id="registry-client",
+                scopes=("registry.read", "profile"),
+                client_secret_reference="secret-reference",
+                ca_certificates="registry-ca",
+                client_secret="client-secret",
+            ),
+        )
+
+        properties = kaskade_registry_properties(
+            connection,
+            ca_location=Path("registry-ca.pem"),
+        )
+
+        self.assertEqual("registry-ca.pem", properties["apicurio.registry.tls.certificates"])
+        self.assertEqual(
+            "registry.read profile",
+            properties["apicurio.registry.auth.client.scope"],
+        )
+
+    def test_rejects_apicurio_encrypted_client_key(self) -> None:
+        connection = RegistryConnection(
+            provider="apicurio",
+            url="https://registry.invalid/apis/registry/v3",
+            property_name="apicurio.registry.url",
+            auth_type="mtls",
+            client_certificate="certificate",
+            private_key="private-key",
+            private_key_password="key-password",
+        )
+
+        with self.assertRaisesRegex(RegistryProfileError, "encrypted PEM"):
+            kaskade_registry_properties(
+                connection,
+                client_certificate_location=Path("registry-client.crt"),
+                private_key_location=Path("registry-client.key"),
+            )
+
     def test_resolves_confluent(self) -> None:
         connection = registry_connection(
             {

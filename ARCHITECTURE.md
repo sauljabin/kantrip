@@ -260,10 +260,30 @@ PEM trust-store support. Older or unidentifiable Java clients fail before the
 Kafka operation instead of attempting an incompatible or weaker configuration.
 
 Kafka OAuth acquisition and refresh are delegated to the verified Apache Java
-callback or librdkafka OIDC support. Registry clients receive only mappings
-with proven native refresh; the bounded Registry ping obtains one in-memory
-client-credentials token and discards it after the provider probe. Broker,
-Registry, and token-endpoint trust remain independent.
+callback or librdkafka OIDC support. Registry OAuth remains native to three
+distinct implementations: the Confluent Java client used by all Registry
+console wrappers, the Confluent Python `SchemaRegistryClient` used by Kaskade,
+and Kaskade's native `ApicurioClient`. Acceptance repeats expiry and revocation
+once per implementation and trust path, not once per equivalent shell or data
+format. A bounded Registry ping obtains one in-memory client-credentials token
+and discards it after the provider probe; it is initial acquisition evidence,
+not native refresh evidence.
+
+Kaskade's native Apicurio mapping uses the official shared
+`apicurio.registry.tls.certificates` bundle for Registry and token endpoint, but
+keeps separate HTTP/TLS contexts so Registry client identity never reaches the
+IdP. OAuth scopes require the stable Kaskade release that contains PR 139.
+Confluent Java likewise uses one official `ssl.*` trust configuration for both
+destinations. Distinct CA profiles are rejected for those shared contracts.
+
+Confluent Python 2.15.1 applies `ssl.ca.location` only to Registry while its
+Authlib token client uses HTTPX environment trust. For Kaskade Registry OAuth,
+Kantrip supplies `SSL_CERT_FILE` only to that direct child or shim process. The
+mode-0600 session bundle contains platform default roots plus the profile IdP CA;
+inherited `SSL_CERT_FILE` and `SSL_CERT_DIR` cannot override it. This variable is
+process-scoped, not hostname-scoped, so every environment-aware HTTP client in
+that Kaskade process sees the same bundle. The parent shell, unrelated clients,
+system stores, and later sessions remain unchanged.
 
 ## Client adapters
 

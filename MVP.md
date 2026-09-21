@@ -187,7 +187,10 @@ credential rotation/recovery/removal, wrong endpoint trust, invalid secret,
 expired fixed token, and no leakage from wrapped HTTP errors. Keep a real Java
 and librdkafka session alive across token expiry and demonstrate successful
 refresh and later revocation failure. Repeat native Registry refresh for each
-advertised client. A successful short ping is not refresh evidence.
+distinct implementation and credential/trust path: Confluent Java, Confluent
+Python, and native Apicurio. Equivalent console formats, direct commands, and
+shell shims keep short adapter coverage but do not repeat the same expiry wait.
+A successful short ping is not refresh evidence.
 
 ### 2.3 Registry authentication probes with minimum authorization
 

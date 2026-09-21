@@ -29,6 +29,7 @@ CONFLUENT_PROVIDER: RegistryProvider = "confluent"
 APICURIO_URL_PROPERTY = "apicurio.registry.url"
 CONFLUENT_URL_PROPERTY = "schema.registry.url"
 REGISTRY_CA_BUNDLE_FILENAME = "registry-ca.pem"
+REGISTRY_OAUTH_CA_BUNDLE_FILENAME = "registry-oauth-ca.pem"
 REGISTRY_CLIENT_CERTIFICATE_FILENAME = "registry-client.crt"
 REGISTRY_CLIENT_KEY_FILENAME = "registry-client.key"
 
@@ -268,6 +269,7 @@ def kaskade_registry_properties(
         ca_location,
         client_certificate_location,
         private_key_location,
+        allow_independent_oauth_ca=True,
     )
     return properties
 
@@ -299,6 +301,8 @@ def _add_confluent_registry_security(
     ca_location: Path | None,
     client_certificate_location: Path | None,
     private_key_location: Path | None,
+    *,
+    allow_independent_oauth_ca: bool = False,
 ) -> None:
     _add_registry_tls_files(
         properties,
@@ -331,9 +335,14 @@ def _add_confluent_registry_security(
         )
         return
     oauth = _resolved_registry_oauth(connection)
-    if oauth.ca_certificates is not None:
+    if (
+        not allow_independent_oauth_ca
+        and oauth.ca_certificates is not None
+        and oauth.ca_certificates != connection.ca_certificates
+    ):
         raise RegistryProfileError(
-            "Confluent Registry OAuth clients do not expose independent token-endpoint PEM trust"
+            "Confluent Java uses one ssl.* trust configuration for Registry and OAuth; "
+            "independent CA bundles are not supported"
         )
     properties.update(
         {
@@ -357,10 +366,6 @@ def _add_apicurio_registry_security(
     client_certificate_location: Path | None,
     private_key_location: Path | None,
 ) -> None:
-    if connection.auth_type == "oauth" and connection.ca_certificates is not None:
-        raise RegistryProfileError(
-            "Kaskade Apicurio OAuth cannot keep Registry and token-endpoint PEM trust independent"
-        )
     _add_registry_tls_files(
         properties,
         connection,
@@ -381,12 +386,11 @@ def _add_apicurio_registry_security(
     if connection.auth_type == "token":
         raise RegistryProfileError("Apicurio does not support fixed Registry tokens")
     oauth = _resolved_registry_oauth(connection)
-    if oauth.ca_certificates is not None:
+    if oauth.ca_certificates is not None and oauth.ca_certificates != connection.ca_certificates:
         raise RegistryProfileError(
-            "Kaskade Apicurio OAuth does not expose independent token-endpoint PEM trust"
+            "Apicurio uses apicurio.registry.tls.certificates for both Registry and OAuth; "
+            "independent CA bundles are not supported"
         )
-    if oauth.scopes:
-        raise RegistryProfileError("Kaskade Apicurio OAuth does not expose a scope property")
     properties.update(
         {
             "apicurio.registry.auth.service.token.endpoint": oauth.token_url,
@@ -394,6 +398,8 @@ def _add_apicurio_registry_security(
             "apicurio.registry.auth.client.secret": oauth.client_secret or "",
         }
     )
+    if oauth.scopes:
+        properties["apicurio.registry.auth.client.scope"] = " ".join(oauth.scopes)
 
 
 def _add_registry_tls_files(
@@ -425,8 +431,11 @@ def _add_registry_tls_files(
     properties[f"{prefix}{key_name}"] = str(private_key_location)
     if connection.private_key_password is not None:
         if apicurio:
-            raise RegistryProfileError("Kaskade Apicurio does not expose a client-key password")
-        properties["ssl.key.password"] = connection.private_key_password
+            raise RegistryProfileError(
+                "Kaskade Apicurio does not support encrypted PEM client keys"
+            )
+        else:
+            properties["ssl.key.password"] = connection.private_key_password
 
 
 def _resolved_registry_oauth(connection: RegistryConnection) -> OAuthConnection:
@@ -614,6 +623,7 @@ __all__ = [
     "REGISTRY_CA_BUNDLE_FILENAME",
     "REGISTRY_CLIENT_CERTIFICATE_FILENAME",
     "REGISTRY_CLIENT_KEY_FILENAME",
+    "REGISTRY_OAUTH_CA_BUNDLE_FILENAME",
     "OAuthConnection",
     "RegistryAuthType",
     "RegistryConnection",
