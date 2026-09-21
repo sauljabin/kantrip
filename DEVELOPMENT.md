@@ -166,6 +166,11 @@ new credential owner or input path is added:
 | Repair versus staging or snapshot versus rotation | No live value is deleted; readers resolve one coherent generation |
 | Live reference appears in cleanup journal | Integrity error and no credential deletion |
 
+The multi-value rows apply to one combined Kafka/Registry mutation as well as
+to multiple fields owned by one service. Tests stage both owners together and
+fail before and after either store write; the active row remains one complete
+generation and every possibly written reference remains journaled.
+
 The subprocess suite uses pipe barriers and real `SIGKILL`, never timing sleeps,
 at durable intent, store readback, post-commit reload, and post-delete journal
 boundaries. It verifies exact journal/profile state, private permissions,
@@ -218,14 +223,16 @@ The loopback-only endpoints are:
 - Schema Registry with HTTPS and Basic Auth: `https://localhost:8083`
 - Apicurio with HTTPS and Basic/OAuth: `https://localhost:8084`
 - Schema Registry with HTTPS and OAuth: `https://localhost:8085`
+- Schema Registry with HTTPS and mTLS: `https://localhost:8086`
 - Keycloak: `https://localhost:8443`
 
-The baseline registry endpoints keep today's unauthenticated Kantrip adapters
-executable. Schema Registry uses separate Basic and OAuth processes because its
-local JAAS property-file login and OAuth `AuthenticationHandler` are different
-server authentication paths; Apicurio accepts both mechanisms on one endpoint.
-These secure variants prepare authenticated Registry scenarios without claiming
-that those profile fields are already implemented. The single Kafka cluster's
+The baseline Registry endpoints retain unauthenticated adapter coverage. Schema
+Registry uses separate Basic and OAuth processes because its local JAAS
+property-file login and OAuth `AuthenticationHandler` are different server
+authentication paths; Apicurio accepts both mechanisms on one endpoint and
+assigns its service account the standard `sr-readonly` realm role.
+`scripts.auth_smoke`
+creates typed Kantrip profiles for every secure variant. The single Kafka cluster's
 `plaintext` listener means no authentication and no encryption. All other
 external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
 principals prove that `kantrip ping` does not depend on Kafka resource

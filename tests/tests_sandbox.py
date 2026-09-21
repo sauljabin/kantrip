@@ -70,7 +70,22 @@ class TestSandbox(unittest.TestCase):
         self.assertTrue(mappings)
         self.assertTrue(all(mapping["listenAddress"] == "127.0.0.1" for mapping in mappings))
         self.assertEqual(
-            {9092, 9093, 9094, 9095, 9096, 9097, 9098, 8081, 8082, 8083, 8084, 8085, 8443},
+            {
+                9092,
+                9093,
+                9094,
+                9095,
+                9096,
+                9097,
+                9098,
+                8081,
+                8082,
+                8083,
+                8084,
+                8085,
+                8086,
+                8443,
+            },
             {mapping["hostPort"] for mapping in mappings},
         )
 
@@ -197,12 +212,19 @@ class TestSandbox(unittest.TestCase):
 
         self.assertTrue(certificates["sandbox-root-ca"]["spec"]["isCA"])
         self.assertEqual(
-            {"sandbox-root-ca", "keycloak-tls", "kafka-listeners-tls", "registries-tls"},
+            {
+                "sandbox-root-ca",
+                "keycloak-tls",
+                "kafka-listeners-tls",
+                "registries-tls",
+                "registry-mtls-client",
+            },
             set(certificates),
         )
         for name in ("keycloak-tls", "kafka-listeners-tls", "registries-tls"):
             self.assertIn("localhost", certificates[name]["spec"]["dnsNames"])
         self.assertNotIn("ipAddresses", certificates["kafka-listeners-tls"]["spec"])
+        self.assertEqual(["client auth"], certificates["registry-mtls-client"]["spec"]["usages"])
 
     def test_plain_and_secure_registry_variants_are_explicit(self) -> None:
         deployments = {
@@ -215,6 +237,7 @@ class TestSandbox(unittest.TestCase):
             {
                 "schema-registry",
                 "schema-registry-secure",
+                "schema-registry-mtls",
                 "schema-registry-oauth",
                 "apicurio",
                 "apicurio-secure",
@@ -243,6 +266,8 @@ class TestSandbox(unittest.TestCase):
         self.assertEqual(
             "true", secure_apicurio_env["APICURIO_AUTHN_BASIC_CLIENT_CREDENTIALS_ENABLED"]
         )
+        self.assertEqual("token", secure_apicurio_env["APICURIO_AUTH_ROLE_SOURCE"])
+        self.assertNotIn("APICURIO_AUTH_AUTHENTICATED_READ_ACCESS_ENABLED", secure_apicurio_env)
         secure_schema_env = _environment(deployments["schema-registry-secure"])
         plain_schema_env = _environment(deployments["schema-registry"])
         self.assertEqual(
@@ -253,6 +278,8 @@ class TestSandbox(unittest.TestCase):
         )
         self.assertEqual("BASIC", secure_schema_env["SCHEMA_REGISTRY_AUTHENTICATION_METHOD"])
         self.assertNotIn("SCHEMA_REGISTRY_OAUTHBEARER_JWKS_ENDPOINT_URL", secure_schema_env)
+        mtls_schema_env = _environment(deployments["schema-registry-mtls"])
+        self.assertEqual("true", mtls_schema_env["SCHEMA_REGISTRY_SSL_CLIENT_AUTH"])
         oauth_schema_env = _environment(deployments["schema-registry-oauth"])
         self.assertEqual(
             "SASL_SSL", oauth_schema_env["SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL"]

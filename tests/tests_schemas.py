@@ -140,6 +140,7 @@ class TestProfileSchema(unittest.TestCase):
         credential_id = "018f8f13-7c21-7cee-8000-000000000011"
         password_reference = f"profile/{profile_id}/{credential_id}/kafka/password"
         key_reference = f"profile/{profile_id}/{credential_id}/kafka/tls/private-key"
+        oauth_reference = f"profile/{profile_id}/{credential_id}/kafka/oauth/client-secret"
         for auth in (
             {"type": "plain", "username": "synthetic", "passwordRef": password_reference},
             {
@@ -156,6 +157,14 @@ class TestProfileSchema(unittest.TestCase):
                 "type": "mtls",
                 "clientCertificate": synthetic_pki().client_certificate,
                 "privateKeyRef": key_reference,
+            },
+            {
+                "type": "oauth",
+                "tokenUrl": "https://idp.invalid/oauth/token",
+                "clientId": "synthetic-client",
+                "scopes": ["openid", "profile"],
+                "clientSecretRef": oauth_reference,
+                "caCertificates": synthetic_pki().ca,
             },
         ):
             with self.subTest(auth=auth["type"]):

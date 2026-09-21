@@ -24,6 +24,7 @@ from kantrip.kafka import (
     CA_BUNDLE_FILENAME,
     CLIENT_CERTIFICATE_FILENAME,
     CLIENT_KEY_FILENAME,
+    OAUTH_CA_BUNDLE_FILENAME,
     KafkaConnection,
     KafkaProfileError,
     java_properties,
@@ -33,9 +34,15 @@ from kantrip.kafka import (
 )
 from kantrip.registry import (
     APICURIO_PROVIDER,
+    REGISTRY_CA_BUNDLE_FILENAME,
+    REGISTRY_CLIENT_CERTIFICATE_FILENAME,
+    REGISTRY_CLIENT_KEY_FILENAME,
     RegistryConnection,
     RegistryProfileError,
+    confluent_console_properties,
+    kaskade_registry_properties,
     registry_connection,
+    resolve_registry_connection,
 )
 from kantrip.runtime import (
     SessionRuntime,
@@ -89,11 +96,13 @@ def run_profile_session(
     _validate_kcat_arguments(arguments)
     try:
         kafka = resolved_kafka or kafka_connection(profile)
+        selected_store = secret_store
         if kafka.requires_secrets and resolved_kafka is None:
-            kafka = resolve_kafka_connection(kafka, secret_store or load_secret_store())
+            selected_store = selected_store or load_secret_store()
+            kafka = resolve_kafka_connection(kafka, selected_store)
     except (KafkaProfileError, SecretStoreError) as error:
         raise SessionError(str(error)) from error
-    registry = _profile_registry(profile)
+    registry = _profile_registry(profile, selected_store)
 
     try:
         cleanup_abandoned_sessions(env)
@@ -123,7 +132,7 @@ def run_profile_session(
             raise SessionError(str(error)) from error
 
 
-def _run_in_runtime(
+def _run_in_runtime(  # noqa: C901
     runtime: SessionRuntime,
     profile_name: str,
     executable: str,
@@ -147,14 +156,36 @@ def _run_in_runtime(
         private_key_path = session_directory / CLIENT_KEY_FILENAME
         write_exclusive_text(certificate_path, kafka.client_certificate, mode=0o600)
         write_exclusive_text(private_key_path, kafka.private_key, mode=0o600)
+    oauth_ca_path: Path | None = None
+    if kafka.oauth is not None and kafka.oauth.ca_certificates is not None:
+        oauth_ca_path = session_directory / OAUTH_CA_BUNDLE_FILENAME
+        write_exclusive_text(oauth_ca_path, kafka.oauth.ca_certificates, mode=0o600)
+    registry_ca_path: Path | None = None
+    registry_certificate_path: Path | None = None
+    registry_key_path: Path | None = None
+    if registry is not None and registry.ca_certificates is not None:
+        registry_ca_path = session_directory / REGISTRY_CA_BUNDLE_FILENAME
+        write_exclusive_text(registry_ca_path, registry.ca_certificates, mode=0o600)
+    if registry is not None and registry.auth_type == "mtls":
+        if registry.client_certificate is None or registry.private_key is None:
+            raise SessionError("Registry mTLS credentials are not resolved")
+        registry_certificate_path = session_directory / REGISTRY_CLIENT_CERTIFICATE_FILENAME
+        registry_key_path = session_directory / REGISTRY_CLIENT_KEY_FILENAME
+        write_exclusive_text(registry_certificate_path, registry.client_certificate, mode=0o600)
+        write_exclusive_text(registry_key_path, registry.private_key, mode=0o600)
     try:
         kcat_properties = librdkafka_properties(
             kafka,
             ca_location=ca_path,
             client_certificate_location=certificate_path,
             private_key_location=private_key_path,
+            oauth_ca_location=oauth_ca_path,
         )
-        java_config = java_properties(kafka, ca_location=ca_path)
+        java_config = java_properties(
+            kafka,
+            ca_location=ca_path,
+            oauth_ca_location=oauth_ca_path,
+        )
     except KafkaProfileError as error:
         raise SessionError(str(error)) from error
     kcat_config_path = session_directory / "kcat.conf"
@@ -162,6 +193,7 @@ def _run_in_runtime(
     kaskade_config_path = session_directory / "kaskade.ini"
     kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
     registry_config_path = session_directory / "registry.properties"
+    schema_registry_java_config_path = session_directory / "schema-registry-kafka.properties"
     write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
     write_exclusive_text(java_config_path, _render_java_properties(java_config), mode=0o600)
     write_exclusive_text(
@@ -170,15 +202,42 @@ def _run_in_runtime(
         mode=0o600,
     )
     if registry is not None:
+        try:
+            kaskade_registry = kaskade_registry_properties(
+                registry,
+                ca_location=registry_ca_path,
+                client_certificate_location=registry_certificate_path,
+                private_key_location=registry_key_path,
+            )
+        except RegistryProfileError:
+            kaskade_registry = {}
+        try:
+            console_registry = (
+                confluent_console_properties(
+                    registry,
+                    ca_location=registry_ca_path,
+                    client_certificate_location=registry_certificate_path,
+                    private_key_location=registry_key_path,
+                )
+                if registry.provider != APICURIO_PROVIDER
+                else {}
+            )
+        except RegistryProfileError:
+            console_registry = {}
         write_exclusive_text(
             kaskade_registry_config_path,
             f"[kafka]\n{_render_properties(kcat_properties)}"
-            f"\n[registry]\n{_render_kaskade_registry(registry)}",
+            f"\n[registry]\n{_render_properties(kaskade_registry)}",
             mode=0o600,
         )
         write_exclusive_text(
             registry_config_path,
-            _render_properties({registry.property_name: registry.url}),
+            _render_properties(kaskade_registry),
+            mode=0o600,
+        )
+        write_exclusive_text(
+            schema_registry_java_config_path,
+            _render_java_properties(java_config | console_registry),
             mode=0o600,
         )
 
@@ -188,8 +247,10 @@ def _run_in_runtime(
         environment,
         kcat_properties,
         java_config_path,
+        schema_registry_java_config_path,
         kcat_config_path,
         registry_config_path,
+        kafka,
         registry,
     )
     try:
@@ -198,6 +259,7 @@ def _run_in_runtime(
                 arguments,
                 bootstrap_servers=kcat_properties["bootstrap.servers"],
                 java_config_path=java_config_path,
+                schema_registry_java_config_path=schema_registry_java_config_path,
                 kaskade_config_path=kaskade_config_path,
                 kaskade_registry_config_path=kaskade_registry_config_path,
                 registry=registry,
@@ -216,10 +278,12 @@ def _run_in_runtime(
                 child_environment,
                 kcat_properties,
                 java_config_path,
+                schema_registry_java_config_path,
                 kaskade_config_path,
                 kaskade_registry_config_path,
                 registry,
                 kafka.ca_certificates is not None or kafka.auth_type == "mtls",
+                kafka.auth_type,
             )
     except (AdapterError, ShellError) as error:
         raise SessionError(str(error)) from error
@@ -233,15 +297,18 @@ def _run_in_runtime(
     return result.returncode
 
 
-def _profile_registry(profile: Mapping[str, Any]) -> RegistryConnection | None:
+def _profile_registry(
+    profile: Mapping[str, Any], secret_store: SecretStore | None
+) -> RegistryConnection | None:
     try:
         registry = registry_connection(profile)
     except RegistryProfileError as error:
         raise SessionError(str(error)) from error
     if registry is not None and registry.requires_secrets:
-        raise SessionError(
-            "authenticated Registry client execution requires a verified adapter mapping"
-        )
+        try:
+            registry = resolve_registry_connection(registry, secret_store or load_secret_store())
+        except (RegistryProfileError, SecretStoreError) as error:
+            raise SessionError(str(error)) from error
     return registry
 
 
@@ -267,8 +334,10 @@ def _child_environment(
     environment: Mapping[str, str],
     kcat_properties: Mapping[str, str],
     java_config_path: Path,
+    schema_registry_java_config_path: Path,
     kcat_config_path: Path,
     registry_config_path: Path,
+    kafka: KafkaConnection,
     registry: RegistryConnection | None,
 ) -> dict[str, str]:
     child_environment = {
@@ -280,6 +349,7 @@ def _child_environment(
         {
             "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
             "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
+            "SCHEMA_REGISTRY_KAFKA_CONFIG_FILE": str(schema_registry_java_config_path),
             "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
             "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
             "KANTRIP_PROFILE": profile_name,
@@ -296,6 +366,11 @@ def _child_environment(
                 f"{prefix}_REGISTRY_URL": registry.url,
             }
         )
+    if kafka.auth_type == "oauth":
+        assert kafka.oauth is not None
+        child_environment["KAFKA_OPTS"] = (
+            "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=" f"{kafka.oauth.token_url}"
+        )
     return child_environment
 
 
@@ -306,21 +381,25 @@ def _prepare_subshell(
     child_environment: dict[str, str],
     kcat_properties: Mapping[str, str],
     java_config_path: Path,
+    schema_registry_java_config_path: Path,
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     registry: RegistryConnection | None,
     require_java_pem: bool,
+    kafka_auth_type: str,
 ) -> list[str]:
     shim_directory = create_subshell_shims(
         session_directory / "bin",
         bootstrap_servers=kcat_properties["bootstrap.servers"],
         java_config_path=java_config_path,
+        schema_registry_java_config_path=schema_registry_java_config_path,
         kcat_config_path=Path(child_environment["KCAT_CONFIG"]),
         kaskade_config_path=kaskade_config_path,
         kaskade_registry_config_path=kaskade_registry_config_path,
         environment=environment,
         registry=registry,
         require_java_pem=require_java_pem,
+        kafka_auth_type=kafka_auth_type,
     )
     child_environment["PATH"] = f"{shim_directory}{os.pathsep}{environment.get('PATH', os.defpath)}"
     plan = prepare_interactive_shell(
@@ -370,12 +449,6 @@ def _validate_kcat_arguments(arguments: Sequence[str]) -> None:
         return
     if any(argument == "-F" or argument.startswith("-F") for argument in arguments[1:]):
         raise SessionError("kcat's -F option cannot override the selected Kantrip profile")
-
-
-def _render_kaskade_registry(registry: RegistryConnection) -> str:
-    if registry.provider == APICURIO_PROVIDER:
-        return f"provider=apicurio\napicurio.registry.url={registry.url}\n"
-    return f"provider=confluent\nurl={registry.url}\n"
 
 
 def _render_properties(properties: Mapping[str, str]) -> str:

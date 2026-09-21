@@ -178,7 +178,7 @@ uv run --locked kantrip exec tls-manual -- sh -c \
 - Replacing the disposable CA with malformed text causes `add` to fail without
   creating the profile.
 
-## Exercise authenticated Kafka lifecycle
+## Exercise authenticated Kafka and Registry lifecycle
 
 Start the sandbox, then run its disposable authenticated acceptance matrix:
 
@@ -186,23 +186,28 @@ Start the sandbox, then run its disposable authenticated acceptance matrix:
 uv run --locked python -m scripts.auth_smoke
 ```
 
-The authenticated script exercises allowed and no-ACL identities for PLAIN,
-SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; native OAuth; unauthenticated plaintext
-and server-only TLS; Bash, Zsh, and Fish; invalid passwords and client
-certificate; wrong CA and hostname; and an unavailable broker. Allowed
-identities can use only `kantrip-auth-`, OAuth can use only `kantrip-oauth-`,
-and unauthenticated smoke clients can use only `kantrip-smoke-`. Each no-ACL
-identity must complete `ping` and then receive a resource authorization denial.
+The authenticated script exercises allowed and no-ACL Kafka identities for
+PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; native OAuth; unauthenticated
+plaintext and server-only TLS; Bash, Zsh, and Fish; invalid passwords and client
+certificate; wrong CA and hostname; and an unavailable broker. It also creates
+Kantrip profiles for Confluent and Apicurio Basic/OAuth plus Confluent mTLS,
+proves the configured read query and authentication gate, rejects invalid
+credentials, and verifies OAuth
+revocation. Allowed Kafka identities can use only `kantrip-auth-`, OAuth can use
+only `kantrip-oauth-`, and unauthenticated smoke clients can use only
+`kantrip-smoke-`. Each no-ACL identity must complete `ping` and then receive a
+resource authorization denial.
 
 The matrix uses verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and
 mTLS. For each mechanism it creates the profile through the no-echo prompt,
 runs `ping`, exercises direct producer, consumer, admin and kcat operations,
-and invokes adapters through Bash, Zsh, and Fish. Its authorizer-enabled
-auxiliary broker also proves that a no-ACL principal passes Kafka `ping` while
-resource creation fails. It uses an isolated profile database and removes the
-temporary profiles and keyring entries on completion. Inspect process argv
-during a run when performing the release secrecy check; no credential should
-appear there or in terminal output.
+and invokes adapters through Bash, Zsh, and Fish. OAuth consumers stay alive
+past the 15-second access-token lifetime and consume a second record after
+native refresh. Its authorizer-enabled broker also proves that a no-ACL
+principal passes Kafka `ping` while resource creation fails. It uses an isolated
+profile database and removes the temporary profiles and keyring entries on
+completion. Inspect process argv during a run when performing the release
+secrecy check; no credential should appear there or in terminal output.
 
 Rotate `kafka/password` with:
 
@@ -741,8 +746,9 @@ uv run --locked kantrip exec sandbox-mtls -- kafka-topics --list
 
 At the SCRAM password prompt, enter the generated
 `KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD` through a secure terminal paste without
-printing it. OAuth is not yet represented by the profile schema, so its native
-client check below remains infrastructure-only.
+printing it. `scripts.auth_smoke` creates the equivalent OAuth profile through
+Kantrip's no-echo client-secret prompt and exercises both Java and librdkafka;
+the property command below remains an independent fixture check.
 
 Exercise the prepared authenticated listeners directly with the official Kafka
 CLI. These property files contain credentials and must remain private:
@@ -811,9 +817,8 @@ set +a
 . sandbox/.state/credentials.env
 ```
 
-Create profiles for the two baseline Registry endpoints. These profiles contain
-only non-authenticated `http://` Registry URLs, which is the Registry contract
-currently supported by Kantrip:
+Create profiles for the two baseline Registry endpoints, then run the complete
+authenticated profile matrix:
 
 ```bash
 export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
@@ -827,6 +832,7 @@ uv run --locked kantrip add sandbox-apicurio \
   --registry-url http://localhost:8082/apis/registry/v3
 uv run --locked kantrip describe sandbox-schema-registry
 uv run --locked kantrip describe sandbox-apicurio
+uv run --locked python -m scripts.auth_smoke
 ```
 
 Refresh the short-lived OAuth bearer sessions without printing either client
@@ -845,7 +851,7 @@ First confirm that anonymous requests are rejected:
 http --verify "$KANTRIP_SANDBOX_CA" GET https://localhost:8083/subjects
 http --verify "$KANTRIP_SANDBOX_CA" GET https://localhost:8085/subjects
 http --verify "$KANTRIP_SANDBOX_CA" \
-  GET https://localhost:8084/apis/registry/v3/search/artifacts
+  GET 'https://localhost:8084/apis/registry/v3/search/versions?limit=1'
 ```
 
 Then exercise Basic and OAuth independently with read-only HTTPie sessions:
@@ -853,17 +859,17 @@ Then exercise Basic and OAuth independently with read-only HTTPie sessions:
 ```bash
 http --verify "$KANTRIP_SANDBOX_CA" \
   --session-read-only sandbox/.state/schema-registry-basic.json \
-  GET https://localhost:8083/subjects
+  GET 'https://localhost:8083/subjects?limit=1'
 http --verify "$KANTRIP_SANDBOX_CA" \
   --session-read-only sandbox/.state/schema-registry-oauth.json \
-  GET https://localhost:8085/subjects
+  GET 'https://localhost:8085/subjects?limit=1'
 
 http --verify "$KANTRIP_SANDBOX_CA" \
   --session-read-only sandbox/.state/apicurio-basic.json \
-  GET https://localhost:8084/apis/registry/v3/search/artifacts
+  GET 'https://localhost:8084/apis/registry/v3/search/versions?limit=1'
 http --verify "$KANTRIP_SANDBOX_CA" \
   --session-read-only sandbox/.state/apicurio-oauth.json \
-  GET https://localhost:8084/apis/registry/v3/search/artifacts
+  GET 'https://localhost:8084/apis/registry/v3/search/versions?limit=1'
 ```
 
 Inspect the public certificate chain without disabling verification:
@@ -875,20 +881,30 @@ openssl s_client -connect localhost:8085 -servername localhost \
   -CAfile "$KANTRIP_SANDBOX_CA" </dev/null
 openssl s_client -connect localhost:8084 -servername localhost \
   -CAfile "$KANTRIP_SANDBOX_CA" </dev/null
+openssl s_client -connect localhost:8086 -servername localhost \
+  -CAfile "$KANTRIP_SANDBOX_CA" \
+  -cert "$KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE" \
+  -key "$KANTRIP_SANDBOX_REGISTRY_MTLS_KEY" </dev/null
 ```
 
 ### Expected result
 
 - Anonymous secure Registry requests return HTTP 401.
 - Basic and OAuth requests return successful JSON responses from both products.
-- OpenSSL reports `Verify return code: 0 (ok)` for all three TLS endpoints.
+- OpenSSL reports `Verify return code: 0 (ok)` for all four TLS endpoints; the
+  mTLS endpoint rejects a connection that omits its client certificate.
 - No credential or bearer token appears in process arguments, command output, or
   committed files.
 - `sandbox-schema-registry` and `sandbox-apicurio` describe the two baseline
   Registry URLs without embedding credentials.
 - The baseline Registry profiles are visible through `kantrip describe`.
-- The authenticated Registry variants are HTTPie readiness checks until the
-  corresponding Kantrip profile fields and adapters are implemented.
+- Kantrip `ping` validates Confluent's protected `/subjects?limit=1` and native
+  Apicurio's `/search/versions?limit=1`, plus an anonymous 401/403 control on
+  the same URL. Empty valid result sets succeed.
+- Invalid Registry credentials and disabled OAuth clients fail without exposing
+  credential values; re-enabling each client restores a successful probe.
+- The Apicurio service account has the standard `sr-readonly` realm role;
+  authenticated-read bypass and anonymous read access remain disabled.
 
 ## Remove or rotate the sandbox
 

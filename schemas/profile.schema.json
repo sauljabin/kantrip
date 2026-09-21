@@ -94,6 +94,55 @@
         }
       }
     },
+    "oauthAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "tokenUrl",
+        "clientId",
+        "scopes",
+        "clientSecretRef"
+      ],
+      "properties": {
+        "type": {
+          "const": "oauth"
+        },
+        "tokenUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
+        },
+        "clientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\r\\n\\u0000]+$"
+        },
+        "scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000]+$"
+          }
+        },
+        "clientSecretRef": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/secretReference"
+            },
+            {
+              "pattern": "/kafka/oauth/client-secret$"
+            }
+          ]
+        },
+        "caCertificates": {
+          "$ref": "#/$defs/kafkaTls/properties/caCertificates"
+        }
+      }
+    },
     "kafkaTls": {
       "type": "object",
       "additionalProperties": false,
@@ -141,7 +190,8 @@
                       "plain",
                       "scram-sha-256",
                       "scram-sha-512",
-                      "mtls"
+                      "mtls",
+                      "oauth"
                     ]
                   }
                 }
@@ -183,6 +233,9 @@
             },
             {
               "$ref": "#/$defs/mtlsAuth"
+            },
+            {
+              "$ref": "#/$defs/oauthAuth"
             }
           ]
         },

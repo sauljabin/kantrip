@@ -1,9 +1,10 @@
 import json
+import ssl
 import subprocess
 import sys
 import unittest
 from unittest.mock import MagicMock, Mock, patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from confluent_kafka import KafkaError, KafkaException
 
@@ -13,6 +14,7 @@ from kantrip.ping import (
     RegistryPingResult,
     _client_configuration,
     _has_connected_broker,
+    _NoRedirect,
     ping_profile,
 )
 from kantrip.secret_store import secret_reference
@@ -238,7 +240,7 @@ else:
     def test_profile_checks_configured_confluent_registry(self) -> None:
         profile = self._registry_profile("confluent")
         response = MagicMock()
-        response.__enter__.return_value.read.return_value = b'["AVRO", "JSON"]'
+        response.__enter__.return_value.read.return_value = b'["orders-value"]'
 
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
@@ -250,15 +252,27 @@ else:
             RegistryPingResult(
                 "confluent",
                 "plaintext reachable",
-                "provider metadata validated",
+                "read query validated",
             ),
             result.registry,
         )
         self.assertEqual(
-            "http://registry.invalid:8081/schemas/types",
+            "http://registry.invalid:8081/subjects?limit=1",
             open_registry.call_args.args[0].full_url,
         )
         self.assertLessEqual(open_registry.call_args.args[1], 1.25)
+
+    def test_confluent_empty_subject_result_is_valid(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"[]"
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch("kantrip.ping._open_request", return_value=response),
+        ):
+            result = ping_profile(self._registry_profile("confluent"), timeout=1)
+
+        self.assertEqual("read query validated", result.registry.proof)
 
     def test_authenticated_registry_rejects_a_public_probe_endpoint(self) -> None:
         profile_id = "018f8f13-7c21-7cee-8000-000000000010"
@@ -274,9 +288,9 @@ else:
             "passwordRef": reference,
         }
         authenticated = MagicMock()
-        authenticated.__enter__.return_value.read.return_value = b'["AVRO"]'
+        authenticated.__enter__.return_value.read.return_value = b'["orders-value"]'
         public = MagicMock()
-        public.__enter__.return_value.read.return_value = b'["AVRO"]'
+        public.__enter__.return_value.read.return_value = b'["orders-value"]'
 
         with (
             patch("kantrip.ping._probe_kafka"),
@@ -301,7 +315,7 @@ else:
         profile = self._registry_profile("apicurio")
         response = MagicMock()
         response.__enter__.return_value.read.return_value = (
-            b'{"name": "Apicurio", "version": "3.3.3"}'
+            b'{"count":1,"versions":[{"groupId":"default","artifactId":"orders"}]}'
         )
 
         with (
@@ -314,13 +328,289 @@ else:
             RegistryPingResult(
                 "apicurio",
                 "plaintext reachable",
-                "provider metadata validated",
+                "read query validated",
             ),
             result.registry,
         )
         self.assertEqual(
-            "http://registry.invalid/apis/registry/v3/system/info",
+            "http://registry.invalid/apis/registry/v3/search/versions?limit=1",
             open_registry.call_args.args[0].full_url,
+        )
+
+    def test_apicurio_empty_version_result_is_valid(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"count":0,"versions":[]}'
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch("kantrip.ping._open_request", return_value=response),
+        ):
+            result = ping_profile(self._registry_profile("apicurio"), timeout=1)
+
+        self.assertEqual("read query validated", result.registry.proof)
+
+    def test_apicurio_basic_requires_read_query_and_anonymous_rejection(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        reference = secret_reference(profile_id, "registry/password")
+        profile = self._registry_profile("apicurio")
+        profile["id"] = profile_id
+        registry = profile["registry"]
+        assert isinstance(registry, dict)
+        registry["apicurio.registry.url"] = "https://registry.invalid/apis/registry/v3"
+        registry["auth"] = {
+            "type": "basic",
+            "username": "synthetic-user",
+            "passwordRef": reference,
+        }
+        readable = MagicMock()
+        readable.__enter__.return_value.read.return_value = b'{"count":0,"versions":[]}'
+        anonymous = HTTPError(
+            "https://registry.invalid/apis/registry/v3/search/versions?limit=1",
+            403,
+            "Forbidden",
+            None,
+            None,
+        )
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch("kantrip.ping._open_request", side_effect=(readable, anonymous)) as opened,
+        ):
+            result = ping_profile(
+                profile,
+                timeout=1,
+                secret_store=_Store({reference: "synthetic-password"}),
+            )
+
+        self.assertEqual("basic authenticated read query validated", result.registry.proof)
+        self.assertTrue(
+            opened.call_args_list[0].args[0].get_header("Authorization").startswith("Basic ")
+        )
+        self.assertEqual(2, opened.call_count)
+        self.assertIsNone(opened.call_args_list[1].args[0].get_header("Authorization"))
+
+    def test_synthetic_proxy_allows_only_selected_registry_probe_routes(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        reference = secret_reference(profile_id, "registry/password")
+        cases = (
+            (
+                "confluent",
+                "/subjects?limit=1",
+                b"[]",
+            ),
+            (
+                "apicurio",
+                "/apis/registry/v3/search/versions?limit=1",
+                b'{"count":0,"versions":[]}',
+            ),
+        )
+        for provider, allowed_path, payload in cases:
+            with self.subTest(provider=provider):
+                profile = self._registry_profile(provider)
+                profile["id"] = profile_id
+                registry = profile["registry"]
+                assert isinstance(registry, dict)
+                url_field = (
+                    "apicurio.registry.url" if provider == "apicurio" else "schema.registry.url"
+                )
+                registry[url_field] = (
+                    "https://registry.invalid/apis/registry/v3"
+                    if provider == "apicurio"
+                    else "https://registry.invalid"
+                )
+                registry["auth"] = {
+                    "type": "basic",
+                    "username": "synthetic-readonly",
+                    "passwordRef": reference,
+                }
+                seen: list[str] = []
+
+                def synthetic_proxy(
+                    request: object,
+                    *_args: object,
+                    _seen: list[str] = seen,
+                    _allowed_path: str = allowed_path,
+                    _payload: bytes = payload,
+                    **_kwargs: object,
+                ) -> object:
+                    full_url = request.full_url
+                    path = full_url.removeprefix("https://registry.invalid")
+                    _seen.append(path)
+                    if path != _allowed_path:
+                        raise HTTPError(full_url, 404, "blocked by synthetic proxy", None, None)
+                    if request.get_header("Authorization") is None:
+                        raise HTTPError(full_url, 403, "Forbidden", None, None)
+                    response = MagicMock()
+                    response.__enter__.return_value.read.return_value = _payload
+                    return response
+
+                with (
+                    patch("kantrip.ping._probe_kafka"),
+                    patch("kantrip.ping._open_request", side_effect=synthetic_proxy),
+                ):
+                    result = ping_profile(
+                        profile,
+                        timeout=1,
+                        secret_store=_Store({reference: "synthetic-password"}),
+                    )
+
+                self.assertEqual("basic authenticated read query validated", result.registry.proof)
+                self.assertEqual([allowed_path, allowed_path], seen)
+
+    def test_registry_oauth_uses_bounded_token_then_proves_registry_gate(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        reference = secret_reference(profile_id, "registry/oauth/client-secret")
+        profile = self._registry_profile("confluent")
+        profile["id"] = profile_id
+        registry = profile["registry"]
+        assert isinstance(registry, dict)
+        registry["schema.registry.url"] = "https://registry.invalid"
+        registry["auth"] = {
+            "type": "oauth",
+            "tokenUrl": "https://idp.invalid/oauth/token",
+            "clientId": "registry-client",
+            "scopes": ["registry.read"],
+            "clientSecretRef": reference,
+        }
+        token = MagicMock()
+        token.__enter__.return_value.read.return_value = (
+            b'{"access_token":"short-lived-token","token_type":"Bearer","expires_in":60}'
+        )
+        authenticated = MagicMock()
+        authenticated.__enter__.return_value.read.return_value = b'["orders-value"]'
+        anonymous = HTTPError(
+            "https://registry.invalid/subjects?limit=1", 401, "Unauthorized", None, None
+        )
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch(
+                "kantrip.ping._open_request",
+                side_effect=(token, authenticated, anonymous),
+            ) as opened,
+        ):
+            result = ping_profile(
+                profile,
+                timeout=1,
+                secret_store=_Store({reference: "synthetic-client-secret"}),
+            )
+
+        token_request = opened.call_args_list[0].args[0]
+        self.assertEqual("POST", token_request.method)
+        self.assertEqual(b"grant_type=client_credentials&scope=registry.read", token_request.data)
+        registry_request = opened.call_args_list[1].args[0]
+        self.assertEqual("Bearer short-lived-token", registry_request.get_header("Authorization"))
+        self.assertEqual("oauth authenticated read query validated", result.registry.proof)
+
+    def test_registry_oauth_rejects_invalid_token_without_leaking_secret(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        reference = secret_reference(profile_id, "registry/oauth/client-secret")
+        profile = self._registry_profile("confluent")
+        profile["id"] = profile_id
+        registry = profile["registry"]
+        assert isinstance(registry, dict)
+        registry["schema.registry.url"] = "https://registry.invalid"
+        registry["auth"] = {
+            "type": "oauth",
+            "tokenUrl": "https://idp.invalid/oauth/token",
+            "clientId": "registry-client",
+            "scopes": [],
+            "clientSecretRef": reference,
+        }
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"access_token":"bad","token_type":"Bearer","expires_in":0}'
+        )
+
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch("kantrip.ping._open_request", return_value=response),
+            self.assertRaisesRegex(PingError, "token response is invalid") as raised,
+        ):
+            ping_profile(
+                profile,
+                timeout=1,
+                secret_store=_Store({reference: "never-print-this-secret"}),
+            )
+
+        self.assertNotIn("never-print-this-secret", str(raised.exception))
+
+    def test_registry_mtls_requires_client_exchange_and_anonymous_rejection(self) -> None:
+        profile_id = "018f8f13-7c21-7cee-8000-000000000010"
+        key_reference = secret_reference(profile_id, "registry/tls/private-key")
+        pki = synthetic_pki()
+        profile = self._registry_profile("confluent")
+        profile["id"] = profile_id
+        registry = profile["registry"]
+        assert isinstance(registry, dict)
+        registry["schema.registry.url"] = "https://registry.invalid"
+        registry["tls"] = {
+            "caCertificates": pki.ca,
+            "clientCertificate": pki.client_certificate,
+        }
+        registry["auth"] = {
+            "type": "mtls",
+            "privateKeyRef": key_reference,
+        }
+        authenticated = MagicMock()
+        authenticated.__enter__.return_value.read.return_value = b'["orders-value"]'
+        for rejected in (
+            URLError(ssl.SSLError("peer did not return a certificate")),
+            ssl.SSLError("certificate required"),
+        ):
+            with (
+                self.subTest(rejected=type(rejected).__name__),
+                patch("kantrip.ping._probe_kafka"),
+                patch("kantrip.ping._open_request", side_effect=(authenticated, rejected)),
+            ):
+                result = ping_profile(
+                    profile,
+                    timeout=1,
+                    secret_store=_Store({key_reference: pki.client_key}),
+                )
+
+            self.assertEqual(
+                "mTLS read query and anonymous rejection validated",
+                result.registry.proof,
+            )
+
+    def test_registry_rejects_html_and_distinguishes_401_from_403(self) -> None:
+        profile = self._registry_profile("confluent")
+        html = MagicMock()
+        html.__enter__.return_value.headers.get_content_type.return_value = "text/html"
+        html.__enter__.return_value.read.return_value = b"<html>login</html>"
+        with (
+            patch("kantrip.ping._probe_kafka"),
+            patch("kantrip.ping._open_request", return_value=html),
+            self.assertRaisesRegex(PingError, "non-JSON"),
+        ):
+            ping_profile(profile, timeout=1)
+
+        for status, message in (
+            (401, "authentication"),
+            (403, "authorization"),
+            (404, "did not return registry metadata"),
+        ):
+            error = HTTPError(
+                "http://registry.invalid:8081/subjects?limit=1",
+                status,
+                "rejected",
+                None,
+                None,
+            )
+            with (
+                self.subTest(status=status),
+                patch("kantrip.ping._probe_kafka"),
+                patch("kantrip.ping._open_request", side_effect=error),
+                self.assertRaisesRegex(PingError, message),
+            ):
+                ping_profile(profile, timeout=1)
+
+    def test_registry_redirect_handler_never_forwards_a_request(self) -> None:
+        self.assertIsNone(
+            _NoRedirect().redirect_request(
+                MagicMock(), MagicMock(), 302, "Found", {}, "https://other.invalid"
+            )
         )
 
     def test_profile_reports_registry_connectivity_failure(self) -> None:
@@ -348,23 +638,23 @@ else:
 
         self.assertEqual("network deadline exhausted", raised.exception.detail)
 
-    def test_profile_rejects_invalid_apicurio_system_metadata(self) -> None:
+    def test_profile_rejects_invalid_apicurio_version_search_metadata(self) -> None:
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"name": "Apicurio"}'
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
             patch("kantrip.ping._open_request", return_value=response),
-            self.assertRaisesRegex(PingError, "invalid system metadata"),
+            self.assertRaisesRegex(PingError, "invalid version-search metadata"),
         ):
             ping_profile(self._registry_profile("apicurio"))
 
-    def test_profile_rejects_invalid_confluent_schema_type_metadata(self) -> None:
+    def test_profile_rejects_invalid_confluent_subject_search_metadata(self) -> None:
         response = MagicMock()
-        response.__enter__.return_value.read.return_value = b"[]"
+        response.__enter__.return_value.read.return_value = b"[1]"
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
             patch("kantrip.ping._open_request", return_value=response),
-            self.assertRaisesRegex(PingError, "invalid schema-type metadata"),
+            self.assertRaisesRegex(PingError, "invalid subject-search metadata"),
         ):
             ping_profile(self._registry_profile("confluent"))
 

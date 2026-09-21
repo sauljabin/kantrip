@@ -113,9 +113,12 @@ class AdapterCapability:
     kafka_authentication: frozenset[str]
     registry_providers: frozenset[str]
     pem_version_gate: bool = False
+    oauth_version_gate: bool = False
 
 
-_KAFKA_AUTHENTICATION = frozenset({"none", "plain", "scram-sha-256", "scram-sha-512", "mtls"})
+_KAFKA_AUTHENTICATION = frozenset(
+    {"none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth"}
+)
 ADAPTER_CAPABILITIES = (
     AdapterCapability(
         "Apache/Confluent Java CLI",
@@ -123,6 +126,7 @@ ADAPTER_CAPABILITIES = (
         _KAFKA_AUTHENTICATION,
         frozenset({CONFLUENT_PROVIDER}),
         pem_version_gate=True,
+        oauth_version_gate=True,
     ),
     AdapterCapability(
         "kcat",
@@ -149,30 +153,27 @@ def require_java_pem_support(
     environment: Mapping[str, str],
 ) -> None:
     """Reject Java clients whose version cannot safely consume a PEM trust store."""
-    resolved = shutil.which(executable, path=environment.get("PATH"))
-    if resolved is None:
-        raise AdapterError(f"command '{Path(executable).name}' was not found")
-    try:
-        result = subprocess.run(
-            [resolved, "--version"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
-            check=False,
-            env=dict(environment),
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise AdapterError(_java_pem_unknown_version_message(Path(executable).name)) from error
-
-    version = _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
-    if result.returncode != 0 or version is None:
-        raise AdapterError(_java_pem_unknown_version_message(Path(executable).name))
+    version = _java_client_version(executable, environment, capability="PEM trust-store")
     if not _java_client_supports_pem(version):
         rendered_version = ".".join(str(part) for part in version)
         raise AdapterError(
             f"{Path(executable).name} {rendered_version} does not support PEM trust stores; "
             "custom CA profiles require Apache Kafka 2.7+ or Confluent Platform 6.1+"
+        )
+
+
+def require_java_oauth_support(
+    executable: str,
+    *,
+    environment: Mapping[str, str],
+) -> None:
+    """Require the verified Apache Kafka 4.x native client-credentials callback."""
+    version = _java_client_version(executable, environment, capability="OAuth")
+    if version[0] < 4:
+        rendered_version = ".".join(str(part) for part in version)
+        raise AdapterError(
+            f"{Path(executable).name} {rendered_version} does not support Kantrip's native "
+            "OAuth mapping; install Apache Kafka 4.0+"
         )
 
 
@@ -197,6 +198,8 @@ def require_adapter_capability(
         )
     if custom_pem and capability.pem_version_gate:
         require_java_pem_support(executable, environment=environment)
+    if auth_type == "oauth" and capability.oauth_version_gate:
+        require_java_oauth_support(executable, environment=environment)
 
 
 def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
@@ -206,6 +209,35 @@ def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
         if version[0] in {2, 3, 4, 5, 6, 7, 8}:
             recognized = version
     return recognized
+
+
+def _java_client_version(
+    executable: str,
+    environment: Mapping[str, str],
+    *,
+    capability: str,
+) -> tuple[int, int]:
+    resolved = shutil.which(executable, path=environment.get("PATH"))
+    if resolved is None:
+        raise AdapterError(f"command '{Path(executable).name}' was not found")
+    try:
+        result = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
+            check=False,
+            env=dict(environment),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError(
+            f"could not verify {capability} support for {Path(executable).name}"
+        ) from error
+    version = _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
+    if result.returncode != 0 or version is None:
+        raise AdapterError(f"could not verify {capability} support for {Path(executable).name}")
+    return version
 
 
 def _java_client_supports_pem(version: tuple[int, int]) -> bool:
@@ -234,6 +266,7 @@ def prepare_command(
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     registry: RegistryConnection | None = None,
+    schema_registry_java_config_path: Path | None = None,
 ) -> list[str]:
     """Inject profile connection options for a supported explicit command."""
     prepared = list(arguments)
@@ -245,17 +278,21 @@ def prepare_command(
     if kafka_options is not None:
         bootstrap_option, config_option = kafka_options
         _reject_kafka_overrides(executable, prepared[1:], kafka_options)
-        registry_arguments: list[str] = []
+        selected_config_path = java_config_path
         if executable in SCHEMA_REGISTRY_EXECUTABLES:
             connection = _require_confluent_registry(executable, registry)
-            registry_arguments = ["--property", f"schema.registry.url={connection.url}"]
+            _require_registry_authentication(executable, connection)
+            if schema_registry_java_config_path is None:
+                raise AdapterError(
+                    f"{executable} requires a private Schema Registry client configuration"
+                )
+            selected_config_path = schema_registry_java_config_path
         return [
             prepared[0],
             bootstrap_option,
             bootstrap_servers,
             config_option,
-            str(java_config_path),
-            *registry_arguments,
+            str(selected_config_path),
             *prepared[1:],
         ]
     if executable in KCAT_EXECUTABLES:
@@ -275,6 +312,7 @@ def _prepare_kcat(prepared: list[str], registry: RegistryConnection | None) -> l
     _reject_kcat_overrides(executable, prepared[1:])
     if _kcat_uses_schema_registry(prepared[1:]):
         connection = _require_confluent_registry(executable, registry)
+        _require_registry_authentication(executable, connection)
         return [prepared[0], "-r", connection.url, *prepared[1:]]
     return prepared
 
@@ -291,7 +329,8 @@ def _prepare_kaskade(
     _reject_kaskade_overrides(prepared[2:])
     selected_config_path = config_path
     if command == "consumer" and _kaskade_uses_schema_registry(prepared[2:]):
-        _require_registry("kaskade", registry)
+        connection = _require_registry("kaskade", registry)
+        _require_registry_authentication("kaskade", connection)
         selected_config_path = registry_config_path
     return [
         prepared[0],
@@ -302,7 +341,7 @@ def _prepare_kaskade(
     ]
 
 
-def create_subshell_shims(
+def create_subshell_shims(  # noqa: C901
     directory: Path,
     *,
     bootstrap_servers: str,
@@ -313,6 +352,8 @@ def create_subshell_shims(
     environment: Mapping[str, str],
     registry: RegistryConnection | None = None,
     require_java_pem: bool = False,
+    kafka_auth_type: str = "none",
+    schema_registry_java_config_path: Path | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     search_path = environment.get("PATH", os.defpath)
@@ -338,17 +379,28 @@ def create_subshell_shims(
                 java_pem_errors[executable_directory] = str(error)
             else:
                 java_pem_errors[executable_directory] = None
+        if kafka_auth_type == "oauth" and executable_directory not in java_pem_errors:
+            try:
+                require_java_oauth_support(executable, environment=environment)
+            except AdapterError as error:
+                java_pem_errors[executable_directory] = str(error)
+            else:
+                java_pem_errors[executable_directory] = None
         bootstrap_option, config_option = KAFKA_EXECUTABLE_OPTIONS[name]
+        selected_java_config = java_config_path
+        if name in SCHEMA_REGISTRY_EXECUTABLES and schema_registry_java_config_path is not None:
+            selected_java_config = schema_registry_java_config_path
         contents = _render_kafka_shim(
             name,
             executable,
             bootstrap_servers=bootstrap_servers,
-            java_config_path=java_config_path,
+            java_config_path=selected_java_config,
             bootstrap_option=bootstrap_option,
             config_option=config_option,
             registry=registry if name in SCHEMA_REGISTRY_EXECUTABLES else None,
             schema_registry_required=name in SCHEMA_REGISTRY_EXECUTABLES,
             capability_error=java_pem_errors.get(executable_directory),
+            preserve_kafka_opts=kafka_auth_type == "oauth",
         )
         _write_executable(directory / name, contents)
     if kaskade_executable is not None:
@@ -446,6 +498,54 @@ def _require_confluent_registry(
     return connection
 
 
+def _require_registry_authentication(name: str, connection: RegistryConnection) -> None:
+    if name in KCAT_EXECUTABLES and connection.auth_type != "none":
+        raise AdapterError(
+            f"{name} Registry decoding does not expose Kantrip's safe "
+            f"'{connection.auth_type}' credential mapping"
+        )
+    if name == "kaskade" and connection.auth_type == "token":
+        raise AdapterError("kaskade Registry decoding does not support fixed bearer tokens")
+    if connection.auth_type == "oauth" and connection.oauth is not None:
+        _require_registry_oauth_mapping(name, connection)
+    if (
+        name == "kaskade"
+        and connection.provider == "apicurio"
+        and connection.auth_type == "mtls"
+        and connection.private_key_password is not None
+    ):
+        raise AdapterError("kaskade Apicurio does not expose a client-key password")
+
+
+def _require_registry_oauth_mapping(name: str, connection: RegistryConnection) -> None:
+    assert connection.oauth is not None
+    if name in SCHEMA_REGISTRY_EXECUTABLES and connection.oauth.ca_certificates is not None:
+        raise AdapterError(
+            f"{name} Registry OAuth does not expose independent token-endpoint PEM trust"
+        )
+    if (
+        name == "kaskade"
+        and connection.provider == "confluent"
+        and connection.oauth.ca_certificates is not None
+    ):
+        raise AdapterError(
+            "kaskade Confluent Registry OAuth does not expose independent "
+            "token-endpoint PEM trust"
+        )
+    if name != "kaskade" or connection.provider != "apicurio":
+        return
+    if connection.ca_certificates is not None:
+        raise AdapterError(
+            "kaskade Apicurio OAuth cannot keep Registry and token-endpoint PEM trust independent"
+        )
+    if connection.oauth.ca_certificates is not None:
+        raise AdapterError(
+            "kaskade Apicurio OAuth does not expose independent token-endpoint PEM trust"
+        )
+    if connection.oauth.scopes:
+        raise AdapterError("kaskade Apicurio OAuth does not expose a scope property")
+
+
 def _reject_kafka_overrides(
     executable: str,
     arguments: Sequence[str],
@@ -500,6 +600,7 @@ def _render_kafka_shim(
     registry: RegistryConnection | None,
     schema_registry_required: bool,
     capability_error: str | None,
+    preserve_kafka_opts: bool,
 ) -> str:
     rejected_options = (
         bootstrap_option,
@@ -534,12 +635,15 @@ for argument in "$@"; do
 done
 """
         if registry is not None and registry.provider == CONFLUENT_PROVIDER:
-            registry_arguments = " --property " + shlex.quote(f"schema.registry.url={registry.url}")
+            registry_arguments = ""
     capability_guard = ""
     if capability_error is not None:
         capability_guard = f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
+    java_environment = "unset JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS"
+    if not preserve_kafka_opts:
+        java_environment = f"unset KAFKA_OPTS\n{java_environment}"
     return f"""#!/bin/sh
-unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
+{java_environment}
 {registry_guard}{capability_guard}{property_guard}for argument in "$@"; do
   case "$argument" in
     {rejected_patterns})
@@ -556,10 +660,12 @@ def _render_registry_shim_guard(
     name: str, registry: RegistryConnection | None, *, confluent_only: bool = False
 ) -> str:
     try:
-        if confluent_only:
+        connection = (
             _require_confluent_registry(name, registry)
-        else:
-            _require_registry(name, registry)
+            if confluent_only
+            else _require_registry(name, registry)
+        )
+        _require_registry_authentication(name, connection)
     except AdapterError as error:
         return f"printf '%s\\n' {shlex.quote(str(error))} >&2\nexit 2\n"
     return ""
@@ -688,4 +794,5 @@ __all__ = [
     "create_subshell_shims",
     "prepare_command",
     "require_adapter_capability",
+    "require_java_oauth_support",
 ]

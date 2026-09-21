@@ -51,6 +51,7 @@ from kantrip.migrations import (
     apply_migrations,
     inspect_migrations,
 )
+from kantrip.oauth import OAuthProfileError, validate_oauth_endpoint, validate_oauth_identity
 from kantrip.reconciliation import (
     CleanupRecord,
     ReconciliationError,
@@ -138,6 +139,12 @@ class KafkaAuthInput:
     client_certificate: str | None = None
     private_key: str | None = None
     private_key_password: str | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_scopes: tuple[str, ...] | None = None
+    oauth_client_secret: str | None = None
+    oauth_ca_certificates: str | None = None
+    oauth_default_trust: bool = False
 
 
 @dataclass(frozen=True)
@@ -154,7 +161,7 @@ class RegistryAuthInput:
     private_key_password: str | None = None
     oauth_token_url: str | None = None
     oauth_client_id: str | None = None
-    oauth_scopes: tuple[str, ...] = ()
+    oauth_scopes: tuple[str, ...] | None = None
     oauth_client_secret: str | None = None
     oauth_ca_certificates: str | None = None
     oauth_logical_cluster: str | None = None
@@ -169,6 +176,10 @@ class _AuthPlan:
     retained_references: Mapping[str, str]
     replacements: tuple[SecretReplacement, ...]
     retire_references: tuple[str, ...]
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_scopes: tuple[str, ...] = ()
+    oauth_ca_certificates: str | None = None
 
 
 @dataclass(frozen=True)
@@ -734,24 +745,14 @@ def edit_profile(
                 registry_url=registry_url,
                 remove_registry=remove_registry,
             )
-            registry_result = _commit_requested_registry_authentication(
-                connection,
-                database_path,
-                profile_name,
-                current,
-                current_revision,
-                updated,
-                registry_auth,
-                auth,
-                secret_store,
-                before,
-                mutation,
-            )
-            if registry_result is not None:
-                return registry_result
+            kafka_plan: _AuthPlan | None = None
             if auth is not None:
-                plan = _plan_authentication(current["id"], current["kafka"]["auth"], auth)
-                _validate_auth_transport(plan.auth_type, updated["kafka"]["transport"])
+                kafka_plan = _plan_authentication(current["id"], current["kafka"]["auth"], auth)
+                _validate_auth_transport(kafka_plan.auth_type, updated["kafka"]["transport"])
+            registry_plan = _requested_registry_edit_plan(
+                str(current["id"]), current, updated, registry_auth
+            )
+            if kafka_plan is not None or registry_plan is not None:
                 return _commit_authenticated_edit(
                     connection,
                     database_path,
@@ -759,7 +760,8 @@ def edit_profile(
                     current,
                     current_revision,
                     updated,
-                    plan,
+                    kafka_plan,
+                    registry_plan,
                     secret_store,
                     before,
                     mutation,
@@ -837,13 +839,14 @@ def _commit_authenticated_edit(
     current: Mapping[str, Any],
     current_revision: int,
     updated: dict[str, Any],
-    plan: _AuthPlan,
+    kafka_plan: _AuthPlan | None,
+    registry_plan: _RegistryAuthPlan | None,
     secret_store: SecretStore | None,
     before: _ProfileRowState,
     mutation: _MutationTracker,
 ) -> ProfileCollection:
     def switch(references: Mapping[str, str]) -> None:
-        updated["kafka"]["auth"] = _auth_document(plan, references)
+        _apply_edit_authentication_plans(updated, kafka_plan, registry_plan, references)
         _validate_profile(updated)
         _validate_stored_registry(updated)
         update_profile_revision(
@@ -854,8 +857,14 @@ def _commit_authenticated_edit(
             document=_encode_profile(updated),
         )
 
-    if not plan.replacements and not plan.retire_references:
-        updated["kafka"]["auth"] = _auth_document(plan, {})
+    replacements = (kafka_plan.replacements if kafka_plan is not None else ()) + (
+        registry_plan.replacements if registry_plan is not None else ()
+    )
+    retire_references = (kafka_plan.retire_references if kafka_plan is not None else ()) + (
+        registry_plan.retire_references if registry_plan is not None else ()
+    )
+    if not replacements and not retire_references:
+        _apply_edit_authentication_plans(updated, kafka_plan, registry_plan, {})
         _validate_profile(updated)
         _validate_stored_registry(updated)
         evidence = _MutationEvidence(
@@ -887,10 +896,10 @@ def _commit_authenticated_edit(
         connection,
         store,
         current["id"],
-        plan.replacements,
+        replacements,
     )
     staged_references = {item.field: item.reference for item in staged}
-    updated["kafka"]["auth"] = _auth_document(plan, staged_references)
+    _apply_edit_authentication_plans(updated, kafka_plan, registry_plan, staged_references)
     _validate_profile(updated)
     _validate_stored_registry(updated)
     evidence = _MutationEvidence(
@@ -908,7 +917,7 @@ def _commit_authenticated_edit(
         current["id"],
         staged,
         switch,
-        retire_references=plan.retire_references,
+        retire_references=retire_references,
         inspect_outcome=_credential_outcome_inspector(database_path, evidence),
     )
     mutation.mark_committed()
@@ -922,102 +931,43 @@ def _commit_authenticated_edit(
     return collection
 
 
-def _commit_requested_registry_authentication(
-    connection: sqlite3.Connection,
-    database_path: Path,
-    profile_name: str,
+def _requested_registry_edit_plan(
+    profile_id: str,
     current: Mapping[str, Any],
-    current_revision: int,
-    updated: dict[str, Any],
+    updated: Mapping[str, Any],
     registry_auth: RegistryAuthInput | None,
-    kafka_auth: KafkaAuthInput | None,
-    secret_store: SecretStore | None,
-    before: _ProfileRowState,
-    mutation: _MutationTracker,
-) -> ProfileCollection | None:
-    if registry_auth is None:
+) -> _RegistryAuthPlan | None:
+    current_registry = current.get("registry")
+    stored_registry = current_registry if isinstance(current_registry, Mapping) else None
+    if registry_auth is not None:
+        return _plan_registry_authentication(profile_id, stored_registry, registry_auth)
+    current_references = _registry_auth_references(profile_id, stored_registry)
+    if not current_references:
         return None
-    if kafka_auth is not None:
-        raise ProfileStoreError(
-            "Kafka and Registry authentication changes must be submitted separately"
-        )
-    registry = current.get("registry")
-    plan = _plan_registry_authentication(
-        str(current["id"]), registry if isinstance(registry, Mapping) else None, registry_auth
+    updated_registry = updated.get("registry")
+    updated_references = _registry_auth_references(
+        profile_id, updated_registry if isinstance(updated_registry, Mapping) else None
     )
-    return _commit_registry_authenticated_edit(
-        connection,
-        database_path,
-        profile_name,
-        current,
-        current_revision,
-        updated,
-        plan,
-        secret_store,
-        before,
-        mutation,
+    if set(current_references.values()) == set(updated_references.values()):
+        return None
+    return _RegistryAuthPlan(
+        RegistryAuthInput("none"),
+        {},
+        (),
+        tuple(current_references.values()),
     )
 
 
-def _commit_registry_authenticated_edit(
-    connection: sqlite3.Connection,
-    database_path: Path,
-    profile_name: str,
-    current: Mapping[str, Any],
-    current_revision: int,
-    updated: dict[str, Any],
-    plan: _RegistryAuthPlan,
-    secret_store: SecretStore | None,
-    before: _ProfileRowState,
-    mutation: _MutationTracker,
-) -> ProfileCollection:
-    """Commit Registry credential replacement using the existing recovery journal."""
-    store = secret_store or load_secret_store()
-    staged = stage_secret_replacements(connection, store, current["id"], plan.replacements)
-    staged_references = {item.field: item.reference for item in staged}
-
-    def switch(references: Mapping[str, str]) -> None:
-        _apply_registry_authentication(updated, plan, references)
-        _validate_profile(updated)
-        _validate_stored_registry(updated)
-        update_profile_revision(
-            connection,
-            profile_name=profile_name,
-            profile_id=current["id"],
-            expected_revision=current_revision,
-            document=_encode_profile(updated),
-        )
-
-    _apply_registry_authentication(updated, plan, staged_references)
-    _validate_profile(updated)
-    _validate_stored_registry(updated)
-    evidence = _MutationEvidence(
-        before=before,
-        after=_ProfileRowState(
-            profile_name,
-            str(current["id"]),
-            current_revision + 1,
-            _encode_profile(updated),
-        ),
-    )
-    result = commit_secret_replacements(
-        connection,
-        store,
-        current["id"],
-        staged,
-        switch,
-        retire_references=plan.retire_references,
-        inspect_outcome=_credential_outcome_inspector(database_path, evidence),
-    )
-    mutation.mark_committed()
-    collection = _load_profile_collection(database_path, connection)
-    if result.failed:
-        raise ProfileStoreError(
-            f"profile '{profile_name}' was updated but credential cleanup is pending; "
-            "run 'kantrip doctor --repair'",
-            exit_code=3,
-        )
-    return collection
+def _apply_edit_authentication_plans(
+    profile: dict[str, Any],
+    kafka_plan: _AuthPlan | None,
+    registry_plan: _RegistryAuthPlan | None,
+    staged: Mapping[str, str],
+) -> None:
+    if kafka_plan is not None:
+        profile["kafka"]["auth"] = _auth_document(kafka_plan, staged)
+    if registry_plan is not None and isinstance(profile.get("registry"), dict):
+        _apply_registry_authentication(profile, registry_plan, staged)
 
 
 def _profile_mutation_error(error: CredentialMutationError) -> ProfileStoreError:
@@ -1040,21 +990,36 @@ def _plan_authentication(
     requested: KafkaAuthInput,
 ) -> _AuthPlan:
     auth_type = requested.auth_type
-    if auth_type not in {"none", "plain", "scram-sha-256", "scram-sha-512", "mtls"}:
+    if auth_type not in {
+        "none",
+        "plain",
+        "scram-sha-256",
+        "scram-sha-512",
+        "mtls",
+        "oauth",
+    }:
         raise ProfileStoreError("Kafka authentication type is not supported")
     current_auth = current or {"type": "none"}
     current_type = current_auth.get("type")
     current_references = _auth_references(profile_id, current_auth)
     if auth_type == "none":
-        if any(
-            value is not None
-            for value in (
-                requested.username,
-                requested.password,
-                requested.client_certificate,
-                requested.private_key,
-                requested.private_key_password,
+        if (
+            any(
+                value is not None
+                for value in (
+                    requested.username,
+                    requested.password,
+                    requested.client_certificate,
+                    requested.private_key,
+                    requested.private_key_password,
+                    requested.oauth_token_url,
+                    requested.oauth_client_id,
+                    requested.oauth_client_secret,
+                    requested.oauth_ca_certificates,
+                )
             )
+            or requested.oauth_scopes is not None
+            or requested.oauth_default_trust
         ):
             raise ProfileStoreError("Kafka auth none cannot include credentials")
         return _AuthPlan("none", None, None, {}, (), tuple(current_references.values()))
@@ -1065,7 +1030,14 @@ def _plan_authentication(
             current_references,
             requested,
         )
-    return _mtls_auth_plan(
+    if auth_type == "mtls":
+        return _mtls_auth_plan(
+            current_auth,
+            current_type,
+            current_references,
+            requested,
+        )
+    return _oauth_auth_plan(
         current_auth,
         current_type,
         current_references,
@@ -1079,7 +1051,11 @@ def _password_auth_plan(
     current_references: Mapping[str, str],
     requested: KafkaAuthInput,
 ) -> _AuthPlan:
-    if requested.client_certificate is not None or requested.private_key is not None:
+    if (
+        requested.client_certificate is not None
+        or requested.private_key is not None
+        or _has_kafka_oauth_input(requested)
+    ):
         raise ProfileStoreError("Kafka password authentication cannot include a client identity")
     username = requested.username
     if username is None and current_type in {"plain", "scram-sha-256", "scram-sha-512"}:
@@ -1117,7 +1093,11 @@ def _mtls_auth_plan(
     current_references: Mapping[str, str],
     requested: KafkaAuthInput,
 ) -> _AuthPlan:
-    if requested.username is not None or requested.password is not None:
+    if (
+        requested.username is not None
+        or requested.password is not None
+        or _has_kafka_oauth_input(requested)
+    ):
         raise ProfileStoreError("Kafka mTLS authentication cannot include username or password")
     changing_identity = (
         requested.client_certificate is not None or requested.private_key is not None
@@ -1167,10 +1147,100 @@ def _mtls_auth_plan(
     )
 
 
+def _oauth_auth_plan(
+    current_auth: Mapping[str, Any],
+    current_type: object,
+    current_references: Mapping[str, str],
+    requested: KafkaAuthInput,
+) -> _AuthPlan:
+    if any(
+        value is not None
+        for value in (
+            requested.username,
+            requested.password,
+            requested.client_certificate,
+            requested.private_key,
+            requested.private_key_password,
+        )
+    ):
+        raise ProfileStoreError("Kafka OAuth authentication cannot include other credentials")
+    token_url = requested.oauth_token_url
+    client_id = requested.oauth_client_id
+    scopes = requested.oauth_scopes
+    ca_certificates = requested.oauth_ca_certificates
+    if current_type == "oauth":
+        token_url = token_url or _stored_text(current_auth, "tokenUrl")
+        client_id = client_id or _stored_text(current_auth, "clientId")
+        if scopes is None:
+            stored_scopes = current_auth.get("scopes", [])
+            scopes = tuple(stored_scopes) if isinstance(stored_scopes, list) else None
+        if ca_certificates is None and not requested.oauth_default_trust:
+            stored_ca = current_auth.get("caCertificates")
+            ca_certificates = stored_ca if isinstance(stored_ca, str) else None
+    if token_url is None or client_id is None or scopes is None:
+        raise ProfileStoreError("Kafka OAuth requires a token URL, client ID, and scopes")
+    try:
+        validate_oauth_endpoint(token_url)
+        validated_client_id, validated_scopes = validate_oauth_identity(client_id, list(scopes))
+    except OAuthProfileError as error:
+        raise ProfileStoreError(str(error).replace("OAuth", "Kafka OAuth", 1)) from error
+    validated_ca = _validated_ca_bundle(ca_certificates) if ca_certificates is not None else None
+    previous = current_references.get("kafka/oauth/client-secret")
+    retained: dict[str, str] = {}
+    replacements: tuple[SecretReplacement, ...] = ()
+    if requested.oauth_client_secret is not None:
+        try:
+            validate_sasl_credential(requested.oauth_client_secret)
+        except KafkaProfileError as error:
+            raise ProfileStoreError(str(error)) from error
+        replacements = (
+            SecretReplacement("kafka/oauth/client-secret", requested.oauth_client_secret, previous),
+        )
+    elif previous is not None:
+        retained["kafka/oauth/client-secret"] = previous
+    else:
+        raise ProfileStoreError("Kafka OAuth authentication requires a client secret")
+    retired = _retired_references(current_references, retained, replacements)
+    return _AuthPlan(
+        "oauth",
+        None,
+        None,
+        retained,
+        replacements,
+        retired,
+        token_url,
+        validated_client_id,
+        validated_scopes,
+        validated_ca,
+    )
+
+
+def _stored_text(document: Mapping[str, Any], field: str) -> str | None:
+    value = document.get(field)
+    return value if isinstance(value, str) else None
+
+
+def _has_kafka_oauth_input(requested: KafkaAuthInput) -> bool:
+    return (
+        any(
+            value is not None
+            for value in (
+                requested.oauth_token_url,
+                requested.oauth_client_id,
+                requested.oauth_scopes,
+                requested.oauth_client_secret,
+                requested.oauth_ca_certificates,
+            )
+        )
+        or requested.oauth_default_trust
+    )
+
+
 def _auth_references(profile_id: str, auth: Mapping[str, Any]) -> dict[str, str]:
     references: dict[str, str] = {}
     for property_name, credential_field in (
         ("passwordRef", "kafka/password"),
+        ("clientSecretRef", "kafka/oauth/client-secret"),
         ("privateKeyRef", "kafka/tls/private-key"),
         ("privateKeyPasswordRef", "kafka/tls/private-key-password"),
     ):
@@ -1217,7 +1287,18 @@ def _auth_document(plan: _AuthPlan, staged: Mapping[str, str]) -> dict[str, Any]
             "username": plan.username,
             "passwordRef": references["kafka/password"],
         }
-    document: dict[str, Any] = {
+    if plan.auth_type == "oauth":
+        document = {
+            "type": "oauth",
+            "tokenUrl": plan.oauth_token_url,
+            "clientId": plan.oauth_client_id,
+            "scopes": list(plan.oauth_scopes),
+            "clientSecretRef": references["kafka/oauth/client-secret"],
+        }
+        if plan.oauth_ca_certificates is not None:
+            document["caCertificates"] = plan.oauth_ca_certificates
+        return document
+    document = {
         "type": "mtls",
         "clientCertificate": plan.client_certificate,
         "privateKeyRef": references["kafka/tls/private-key"],
@@ -1236,26 +1317,11 @@ def _plan_registry_authentication(
     """Validate one Registry auth replacement without writing a secret."""
     if requested.auth_type not in {"none", "basic", "token", "mtls", "oauth"}:
         raise ProfileStoreError("Registry authentication type is not supported")
+    if requested.ca_certificates is not None:
+        _validated_ca_bundle(requested.ca_certificates)
     current_references = _registry_auth_references(profile_id, current)
     if requested.auth_type == "none":
-        if (
-            any(
-                value is not None
-                for value in (
-                    requested.username,
-                    requested.password,
-                    requested.token,
-                    requested.client_certificate,
-                    requested.private_key,
-                    requested.private_key_password,
-                    requested.oauth_token_url,
-                    requested.oauth_client_id,
-                    requested.oauth_client_secret,
-                )
-            )
-            or requested.oauth_scopes
-        ):
-            raise ProfileStoreError("Registry auth none cannot include credentials")
+        _validate_registry_none_input(requested)
         return _RegistryAuthPlan(requested, {}, (), tuple(current_references.values()))
     field = {
         "basic": "registry/password",
@@ -1269,10 +1335,50 @@ def _plan_registry_authentication(
         "mtls": requested.private_key,
         "oauth": requested.oauth_client_secret,
     }[requested.auth_type]
-    _validate_registry_auth_input(requested)
+    previous = current_references.get(field)
+    _validate_registry_auth_input(requested, credential_exists=previous is not None)
+    if requested.auth_type == "basic" and (
+        requested.username is None
+        or any(character in requested.username for character in (":", "\x00", "\r", "\n"))
+    ):
+        raise ProfileStoreError("Registry basic username is invalid")
+    if value is not None and requested.auth_type in {"basic", "token", "oauth"}:
+        try:
+            validate_sasl_credential(value)
+        except KafkaProfileError as error:
+            raise ProfileStoreError("Registry credential is invalid") from error
+    retained, replacements = _registry_secret_replacements(
+        requested, field, value, previous, current_references
+    )
+    retired = _retired_references(current_references, retained, replacements)
+    return _RegistryAuthPlan(requested, retained, replacements, retired)
+
+
+def _validate_registry_none_input(requested: RegistryAuthInput) -> None:
+    supplied = (
+        requested.username,
+        requested.password,
+        requested.token,
+        requested.client_certificate,
+        requested.private_key,
+        requested.private_key_password,
+        requested.oauth_token_url,
+        requested.oauth_client_id,
+        requested.oauth_client_secret,
+    )
+    if any(value is not None for value in supplied) or requested.oauth_scopes:
+        raise ProfileStoreError("Registry auth none cannot include credentials")
+
+
+def _registry_secret_replacements(
+    requested: RegistryAuthInput,
+    field: str,
+    value: str | None,
+    previous: str | None,
+    current_references: Mapping[str, str],
+) -> tuple[dict[str, str], tuple[SecretReplacement, ...]]:
     retained: dict[str, str] = {}
     replacements: tuple[SecretReplacement, ...] = ()
-    previous = current_references.get(field)
     if value is not None:
         replacements = (SecretReplacement(field, value, previous),)
     elif previous is not None:
@@ -1281,8 +1387,9 @@ def _plan_registry_authentication(
         raise ProfileStoreError(
             f"Registry {requested.auth_type} authentication requires a credential"
         )
+
+    password_field = "registry/tls/private-key-password"
     if requested.auth_type == "mtls" and requested.private_key_password is not None:
-        password_field = "registry/tls/private-key-password"
         replacements += (
             SecretReplacement(
                 password_field,
@@ -1290,8 +1397,13 @@ def _plan_registry_authentication(
                 current_references.get(password_field),
             ),
         )
-    retired = _retired_references(current_references, retained, replacements)
-    return _RegistryAuthPlan(requested, retained, replacements, retired)
+    elif (
+        requested.auth_type == "mtls"
+        and requested.private_key is None
+        and password_field in current_references
+    ):
+        retained[password_field] = current_references[password_field]
+    return retained, replacements
 
 
 def _new_registry_auth_plan(
@@ -1306,30 +1418,76 @@ def _new_registry_auth_plan(
     return _plan_registry_authentication(profile_id, None, requested)
 
 
-def _validate_registry_auth_input(requested: RegistryAuthInput) -> None:
+def _validate_registry_auth_input(requested: RegistryAuthInput, *, credential_exists: bool) -> None:
     if requested.auth_type == "basic":
         _validate_registry_basic_input(requested)
     elif requested.auth_type == "token":
         _validate_registry_token_input(requested)
     elif requested.auth_type == "mtls":
-        _validate_registry_mtls_input(requested)
+        _validate_registry_mtls_input(requested, credential_exists=credential_exists)
     elif requested.auth_type == "oauth":
         _validate_registry_oauth_input(requested)
 
 
 def _validate_registry_basic_input(requested: RegistryAuthInput) -> None:
-    if not requested.username or requested.token is not None:
+    incompatible = (
+        requested.token,
+        requested.client_certificate,
+        requested.private_key,
+        requested.private_key_password,
+        requested.oauth_token_url,
+        requested.oauth_client_id,
+        requested.oauth_client_secret,
+        requested.oauth_ca_certificates,
+        requested.oauth_logical_cluster,
+        requested.oauth_identity_pool_id,
+    )
+    if (
+        not requested.username
+        or any(value is not None for value in incompatible)
+        or requested.oauth_scopes
+    ):
         raise ProfileStoreError("Registry basic authentication requires --registry-username")
 
 
 def _validate_registry_token_input(requested: RegistryAuthInput) -> None:
-    if any(value is not None for value in (requested.username, requested.password)):
+    incompatible = (
+        requested.username,
+        requested.password,
+        requested.client_certificate,
+        requested.private_key,
+        requested.private_key_password,
+        requested.oauth_token_url,
+        requested.oauth_client_id,
+        requested.oauth_client_secret,
+        requested.oauth_ca_certificates,
+        requested.oauth_logical_cluster,
+        requested.oauth_identity_pool_id,
+    )
+    if any(value is not None for value in incompatible) or requested.oauth_scopes:
         raise ProfileStoreError("Registry token authentication cannot include basic credentials")
 
 
-def _validate_registry_mtls_input(requested: RegistryAuthInput) -> None:
-    if requested.client_certificate is None or requested.private_key is None:
+def _validate_registry_mtls_input(requested: RegistryAuthInput, *, credential_exists: bool) -> None:
+    incompatible = (
+        requested.username,
+        requested.password,
+        requested.token,
+        requested.oauth_token_url,
+        requested.oauth_client_id,
+        requested.oauth_client_secret,
+        requested.oauth_ca_certificates,
+        requested.oauth_logical_cluster,
+        requested.oauth_identity_pool_id,
+    )
+    if any(value is not None for value in incompatible) or requested.oauth_scopes:
+        raise ProfileStoreError("Registry mTLS cannot include another authentication mode")
+    if requested.client_certificate is None or (
+        requested.private_key is None and not credential_exists
+    ):
         raise ProfileStoreError("Registry mTLS requires certificate and private key")
+    if requested.private_key is None:
+        return
     try:
         validate_client_identity(
             requested.client_certificate,
@@ -1341,14 +1499,26 @@ def _validate_registry_mtls_input(requested: RegistryAuthInput) -> None:
 
 
 def _validate_registry_oauth_input(requested: RegistryAuthInput) -> None:
+    incompatible = (
+        requested.username,
+        requested.password,
+        requested.token,
+        requested.client_certificate,
+        requested.private_key,
+        requested.private_key_password,
+    )
+    if any(value is not None for value in incompatible):
+        raise ProfileStoreError("Registry OAuth cannot include another authentication mode")
     if not requested.oauth_token_url or not requested.oauth_client_id:
         raise ProfileStoreError("Registry OAuth requires a token URL and client ID")
-    if not requested.oauth_token_url.startswith("https://"):
-        raise ProfileStoreError("Registry OAuth token URL requires https://")
-    if len(set(requested.oauth_scopes)) != len(requested.oauth_scopes) or any(
-        not scope for scope in requested.oauth_scopes
-    ):
-        raise ProfileStoreError("Registry OAuth scopes must be unique non-empty text")
+    scopes = requested.oauth_scopes or ()
+    try:
+        validate_oauth_endpoint(requested.oauth_token_url)
+        validate_oauth_identity(requested.oauth_client_id, list(scopes))
+    except OAuthProfileError as error:
+        raise ProfileStoreError(str(error).replace("OAuth", "Registry OAuth", 1)) from error
+    if requested.oauth_ca_certificates is not None:
+        _validated_ca_bundle(requested.oauth_ca_certificates)
 
 
 def _registry_auth_document(
@@ -1369,11 +1539,13 @@ def _registry_auth_document(
         auth["tokenRef"] = references["registry/token"]
     elif requested.auth_type == "mtls":
         assert requested.client_certificate is not None
-        certificate, _ = validate_client_identity(
-            requested.client_certificate,
-            requested.private_key or "",
-            password=requested.private_key_password,
-        )
+        certificate = requested.client_certificate
+        if requested.private_key is not None:
+            certificate, _ = validate_client_identity(
+                requested.client_certificate,
+                requested.private_key,
+                password=requested.private_key_password,
+            )
         tls = dict(tls or {}) | {"clientCertificate": certificate}
         auth["privateKeyRef"] = references["registry/tls/private-key"]
         password_reference = references.get("registry/tls/private-key-password")
@@ -1383,7 +1555,7 @@ def _registry_auth_document(
         auth.update(
             tokenUrl=requested.oauth_token_url,
             clientId=requested.oauth_client_id,
-            scopes=list(requested.oauth_scopes),
+            scopes=list(requested.oauth_scopes or ()),
             clientSecretRef=references["registry/oauth/client-secret"],
         )
         if requested.oauth_ca_certificates is not None:
@@ -1610,6 +1782,13 @@ def _apply_registry_edits(
     existing = profile.get("registry")
     if not isinstance(existing, Mapping) and url is None:
         raise ProfileStoreError("--registry-provider requires --registry-url for a new Registry")
+    if (
+        isinstance(existing, Mapping)
+        and provider is not None
+        and provider != existing.get("provider")
+        and url is None
+    ):
+        raise ProfileStoreError("changing Registry provider requires --registry-url")
     selected_provider = provider or (
         str(existing["provider"]) if isinstance(existing, Mapping) else CONFLUENT_PROVIDER
     )

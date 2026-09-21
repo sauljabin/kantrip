@@ -13,12 +13,12 @@
 <a href="https://pypi.org/project/kantrip"><img alt="macOS support" src="https://img.shields.io/badge/os-macOS-7C3AED?style=flat-square&logo=apple&logoColor=white"></a>
 </p>
 
-Kantrip securely manages plaintext, TLS, SASL, and mTLS Kafka profiles
+Kantrip securely manages plaintext, TLS, SASL, mTLS, and OAuth Kafka profiles
 for kcat, the official Kafka CLIs, Kaskade, and compatible applications. This
 pre-release CLI validates and displays profiles, opens scoped sessions, and
 checks Kafka and registry connectivity.
 The typed connection core validates, resolves, and renders PLAIN,
-SCRAM-SHA-256, SCRAM-SHA-512, and mTLS for authenticated command sessions and
+SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth for authenticated command sessions and
 ACL-independent Kafka connectivity checks.
 
 ## Features
@@ -27,7 +27,8 @@ ACL-independent Kafka connectivity checks.
 
 - Schema-validated profiles in a private transactional SQLite database
 - Ordered automatic schema migrations with private recovery backups
-- Multiple bootstrap servers, descriptions, labels, and optional Registry endpoints
+- Multiple bootstrap servers, descriptions, labels, and independent secure Registry endpoints
+- Native Kafka OAuth and Registry Basic, token, mTLS, and OAuth profiles
 - Plaintext or verified TLS transport with default client trust or a copied PEM CA bundle
 - Typed PLAIN, SCRAM, and mTLS lifecycle with OS-backed secret references
 - Canonical Java and librdkafka authentication renderers

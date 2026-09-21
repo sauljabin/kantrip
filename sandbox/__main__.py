@@ -314,6 +314,8 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
         "realm": "kantrip",
         "enabled": True,
         "sslRequired": "external",
+        "accessTokenLifespan": 15,
+        "roles": {"realm": [{"name": "sr-readonly"}]},
         "clients": [
             _keycloak_client(
                 credentials["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID"],
@@ -327,6 +329,16 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
                 credentials["KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID"],
                 credentials["KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET"],
             ),
+        ],
+        "users": [
+            {
+                "username": (
+                    "service-account-" f"{credentials['KANTRIP_SANDBOX_APICURIO_CLIENT_ID']}"
+                ),
+                "enabled": True,
+                "serviceAccountClientId": credentials["KANTRIP_SANDBOX_APICURIO_CLIENT_ID"],
+                "realmRoles": ["sr-readonly"],
+            }
         ],
     }
     password_line = (
@@ -429,7 +441,13 @@ def _secret(name: str, string_data: Mapping[str, str]) -> dict[str, object]:
 
 def _wait_for_certificates() -> None:
     base = ("kubectl", "--context", KUBECTL_CONTEXT, "-n", NAMESPACE)
-    for certificate in ("sandbox-root-ca", "keycloak-tls", "kafka-listeners-tls", "registries-tls"):
+    for certificate in (
+        "sandbox-root-ca",
+        "keycloak-tls",
+        "kafka-listeners-tls",
+        "registries-tls",
+        "registry-mtls-client",
+    ):
         _run((*base, "wait", f"certificate/{certificate}", "--for=condition=Ready", "--timeout=3m"))
 
 
@@ -490,6 +508,7 @@ def _wait_for_registries() -> None:
         "apicurio-secure",
         "schema-registry",
         "schema-registry-secure",
+        "schema-registry-mtls",
         "schema-registry-oauth",
     ):
         _wait_for_deployment(deployment, timeout="10m")
@@ -506,6 +525,18 @@ def _export_credentials(credentials: Mapping[str, str]) -> None:
         ),
     }
     for key, secret_name, secret_key, filename in (
+        (
+            "KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE",
+            "registry-mtls-client",
+            "tls.crt",
+            "registry-client.crt",
+        ),
+        (
+            "KANTRIP_SANDBOX_REGISTRY_MTLS_KEY",
+            "registry-mtls-client",
+            "tls.key",
+            "registry-client.key",
+        ),
         ("KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE", "kantrip-mtls", "user.crt", "user.crt"),
         ("KANTRIP_SANDBOX_KAFKA_MTLS_KEY", "kantrip-mtls", "user.key", "user.key"),
         ("KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE", "kantrip-mtls", "user.p12", "user.p12"),

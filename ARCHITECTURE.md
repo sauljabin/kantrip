@@ -57,16 +57,16 @@ from the executable user contract in `COMPATIBILITY.md`.
 | --- | --- | --- |
 | Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and connection-state ping |
 | PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | Supported by `add`, `edit`, `exec`, and `ping` |
-| Kafka OAuth | Unimplemented | Unsupported |
-| Registry | One explicit provider, HTTP without authentication | Provider-aware clients and provider-metadata ping |
+| Kafka OAuth | TLS-only client credentials with independent token trust | Native Java 4.0+ and librdkafka OIDC rendering, sessions, and ping |
+| Registry | Independent TLS, Basic, token, mTLS, and OAuth | Provider-aware private client configuration and authenticated probes |
 | External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
 
 Each stored Registry declares `provider: confluent` with
 `schema.registry.url`, or `provider: apicurio` with `apicurio.registry.url`.
 The CLI selects and persists Confluent when a Registry URL is supplied without
 an explicit provider. Native Apicurio uses `/apis/registry/v3`; its
-`/apis/ccompat/v7` API requires a Confluent profile. Registry TLS and
-authentication are currently schema-invalid. No arbitrary Java or librdkafka
+`/apis/ccompat/v7` API requires a Confluent profile. Registry TLS,
+authentication, and token-endpoint trust are independent from Kafka. No arbitrary Java or librdkafka
 property maps are accepted; only typed connection fields reach renderers.
 Registry property namespaces follow the official
 [Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
@@ -121,7 +121,7 @@ TLS. Authentication always requires verified TLS. Passwords, private keys, and
 optional private-key passwords resolve from exact profile-owned references;
 public client certificate chains remain in the profile. Java and librdkafka
 render independently from the same resolved model, including internally escaped
-JAAS for Java password mechanisms. OAuth 2.0 client credentials remain planned.
+JAAS for Java password mechanisms and native OAuth client-credentials settings.
 A Registry remains an independent connection; Kafka and Registry credentials
 are never inherited across those boundaries.
 
@@ -185,8 +185,9 @@ than relying on schema normalization or read-time inference.
 
 Profiles reject arbitrary property maps. Current renderers produce Java and
 librdkafka connection configuration and provider-specific HTTP Registry URL
-settings. Import normalization, Registry security, and OAuth rendering remain
-in the roadmap.
+settings. Registry TLS/authentication and Kafka/Registry OAuth render into
+client-specific private configuration; property-file import normalization
+remains in the roadmap.
 
 ## Profile lifecycle and input sources
 
@@ -258,8 +259,11 @@ verify Apache Kafka 2.7+ or Confluent Platform 6.1+, the releases that introduce
 PEM trust-store support. Older or unidentifiable Java clients fail before the
 Kafka operation instead of attempting an incompatible or weaker configuration.
 
-OAuth acquisition and refresh are not implemented in the current profile or
-session path. Their native-client integration is scoped in the roadmap.
+Kafka OAuth acquisition and refresh are delegated to the verified Apache Java
+callback or librdkafka OIDC support. Registry clients receive only mappings
+with proven native refresh; the bounded Registry ping obtains one in-memory
+client-credentials token and discards it after the provider probe. Broker,
+Registry, and token-endpoint trust remain independent.
 
 ## Client adapters
 
@@ -430,11 +434,14 @@ configured or learned, addressable broker reaches `UP` after the required
 TLS/SASL exchange. It does not call resource or cluster-description APIs.
 Plaintext proves reachability, server-only TLS proves server identity, SASL
 proves its configured exchange, and mTLS proves the configured client exchange;
-none proves application authorization. Current Registry profiles are
-unauthenticated HTTP only. Their provider-specific probe validates fixed
-non-resource metadata: Confluent-compatible `/schemas/types` or native Apicurio
-`/system/info`. This proves endpoint reachability and provider response shape,
-not server identity, user authentication, or schema/subject authorization.
+none proves application authorization. Registry profiles independently support
+HTTP or verified HTTPS plus Basic, fixed bearer, mTLS, or OAuth credentials.
+Their provider-specific read probe uses Confluent-compatible
+`/subjects?limit=1` or native Apicurio v3 `/search/versions?limit=1`, validates
+the provider response shape, and accepts an empty collection. Authenticated
+profiles repeat that exact URL without credentials to prove the gate rejects
+anonymous access. The result proves only that listing/search is permitted, not
+access to a particular schema or write authorization.
 
 Kantrip writes results to stdout and diagnostics to stderr. Sensitive values
 are classified and redacted before presentation, and color never carries

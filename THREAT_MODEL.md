@@ -3,9 +3,9 @@
 This developer security analysis follows the boundaries and decisions in
 [Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
 credential lifecycle, authenticated Kafka execution, and local diagnostics.
-Secure Registry/OAuth connections and input parsers remain unimplemented; their
-required controls and acceptance evidence live in [MVP.md](MVP.md). Do not treat
-schema acceptance as an end-to-end security guarantee. See
+Secure Registry and OAuth connections use typed profiles, independent trust and
+credentials, private generated files, bounded authenticated probes, and
+client-specific capability checks. Schema acceptance alone is not an end-to-end security guarantee. See
 [Compatibility](COMPATIBILITY.md).
 
 Kantrip reduces accidental disclosure, profile confusion, unsafe connection
@@ -282,11 +282,14 @@ Controls:
 - Keep Kafka certificate and hostname verification enabled.
 - Copy validated public CA material into the profile instead of depending on an
   externally mutable CA path during later sessions.
-- Reject non-HTTP or credential-bearing Registry configurations until their
-  secure execution paths are implemented.
-- Probe current unauthenticated registries only through fixed provider metadata
-  endpoints, never subject/artifact listings, and label the result as
-  reachability rather than authentication or authorization.
+- Reject non-HTTP(S), credential-bearing URL, and unverified authenticated
+  Registry configurations. Typed HTTPS trust and credentials use only reviewed
+  provider/client mappings.
+- Probe registries only through the fixed, non-mutating read query for their
+  provider: Confluent-compatible `/subjects?limit=1` or native Apicurio v3
+  `/search/versions?limit=1`. Authenticated probes repeat the same URL without
+  credentials and accept only an explicit 401/403 or the expected mTLS
+  client-certificate rejection; unrelated transport failures prove nothing.
 
 Residual risk: plaintext Kafka and HTTP Registry connections provide neither
 transport confidentiality nor server authentication. A trusted CA can still

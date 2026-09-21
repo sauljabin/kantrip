@@ -14,15 +14,22 @@ from typing import Any, Literal
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 
+from kantrip.oauth import (
+    OAuthConnection,
+    OAuthProfileError,
+    validate_oauth_endpoint,
+    validate_oauth_identity,
+)
 from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
 
 KafkaTransport = Literal["plaintext", "tls"]
-KafkaAuthType = Literal["none", "plain", "scram-sha-256", "scram-sha-512", "mtls"]
+KafkaAuthType = Literal["none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth"]
 MAX_CA_BUNDLE_BYTES = 1024 * 1024
 MAX_CLIENT_PEM_BYTES = 1024 * 1024
 CA_BUNDLE_FILENAME = "kafka-ca.pem"
 CLIENT_CERTIFICATE_FILENAME = "kafka-client.crt"
 CLIENT_KEY_FILENAME = "kafka-client.key"
+OAUTH_CA_BUNDLE_FILENAME = "kafka-oauth-ca.pem"
 _CERTIFICATE_PATTERN = re.compile(
     r"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+?" r"-----END CERTIFICATE-----"
 )
@@ -49,6 +56,7 @@ class KafkaConnection:
     client_certificate: str | None = None
     private_key_reference: str | None = None
     private_key_password_reference: str | None = None
+    oauth: OAuthConnection | None = None
     password: str | None = None
     private_key: str | None = None
     private_key_password: str | None = None
@@ -240,6 +248,14 @@ def resolve_kafka_connection(
                 password=key_password,
             )
             return replace(connection, private_key=key, private_key_password=key_password)
+        if connection.auth_type == "oauth":
+            assert connection.oauth is not None
+            client_secret = store.get(connection.oauth.client_secret_reference)
+            validate_sasl_credential(client_secret)
+            return replace(
+                connection,
+                oauth=replace(connection.oauth, client_secret=client_secret),
+            )
     except SecretStoreError as error:
         raise KafkaProfileError("Kafka credentials could not be resolved") from error
     return connection
@@ -249,6 +265,7 @@ def java_properties(
     connection: KafkaConnection,
     *,
     ca_location: Path | None = None,
+    oauth_ca_location: Path | None = None,
 ) -> dict[str, str]:
     """Render canonical Java Kafka connection properties."""
     _validate_render_transport(connection)
@@ -271,7 +288,7 @@ def java_properties(
                 "ssl.truststore.type": "PEM",
             }
         )
-    _add_java_authentication(properties, connection)
+    _add_java_authentication(properties, connection, oauth_ca_location=oauth_ca_location)
     return properties
 
 
@@ -281,8 +298,10 @@ def librdkafka_properties(
     ca_location: Path | None = None,
     client_certificate_location: Path | None = None,
     private_key_location: Path | None = None,
+    oauth_ca_location: Path | None = None,
     inline_ca: bool = False,
     inline_client: bool = False,
+    inline_oauth_ca: bool = False,
 ) -> dict[str, str]:
     """Render canonical librdkafka connection properties."""
     _validate_render_transport(connection)
@@ -309,6 +328,8 @@ def librdkafka_properties(
         connection,
         client_certificate_location=client_certificate_location,
         private_key_location=private_key_location,
+        oauth_ca_location=oauth_ca_location,
+        inline_oauth_ca=inline_oauth_ca,
         inline_client=inline_client,
     )
     return properties
@@ -334,6 +355,8 @@ def _with_authentication(
         return _with_password_authentication(connection, auth, profile_id, auth_type)
     if auth_type == "mtls":
         return _with_mtls_authentication(connection, auth, profile_id)
+    if auth_type == "oauth":
+        return _with_oauth_authentication(connection, auth, profile_id)
     raise KafkaProfileError("Kafka authentication is not supported")
 
 
@@ -384,6 +407,38 @@ def _with_mtls_authentication(
     )
 
 
+def _with_oauth_authentication(
+    connection: KafkaConnection,
+    auth: Mapping[str, Any],
+    profile_id: str,
+) -> KafkaConnection:
+    token_url = auth.get("tokenUrl")
+    client_id = auth.get("clientId")
+    scopes = auth.get("scopes", [])
+    reference = auth.get("clientSecretRef")
+    if not isinstance(token_url, str) or not isinstance(reference, str):
+        raise KafkaProfileError("Kafka OAuth configuration is invalid")
+    try:
+        validate_oauth_endpoint(token_url)
+        validated_client_id, validated_scopes = validate_oauth_identity(client_id, scopes)
+    except OAuthProfileError as error:
+        raise KafkaProfileError(str(error).replace("OAuth", "Kafka OAuth", 1)) from error
+    _validate_owned_reference(reference, profile_id, "kafka/oauth/client-secret")
+    ca = auth.get("caCertificates")
+    ca_certificates = validate_ca_bundle(ca) if ca is not None else None
+    return replace(
+        connection,
+        auth_type="oauth",
+        oauth=OAuthConnection(
+            token_url,
+            validated_client_id,
+            validated_scopes,
+            reference,
+            ca_certificates,
+        ),
+    )
+
+
 def _validate_owned_reference(reference: str, profile_id: str, field: str) -> None:
     try:
         parsed = parse_secret_reference(reference)
@@ -401,6 +456,8 @@ def _validate_render_transport(connection: KafkaConnection) -> None:
 def _add_java_authentication(
     properties: dict[str, str],
     connection: KafkaConnection,
+    *,
+    oauth_ca_location: Path | None,
 ) -> None:
     if connection.auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
         if connection.username is None or connection.password is None:
@@ -437,6 +494,44 @@ def _add_java_authentication(
         )
         if connection.private_key_password is not None:
             properties["ssl.key.password"] = connection.private_key_password
+    elif connection.auth_type == "oauth":
+        _add_java_oauth(properties, connection, oauth_ca_location)
+
+
+def _add_java_oauth(
+    properties: dict[str, str],
+    connection: KafkaConnection,
+    oauth_ca_location: Path | None,
+) -> None:
+    oauth = connection.oauth
+    if oauth is None or oauth.client_secret is None:
+        raise KafkaProfileError("Kafka OAuth credentials are not resolved")
+    jaas_options = ""
+    if oauth.ca_certificates is not None:
+        if oauth_ca_location is None:
+            raise KafkaProfileError("Kafka OAuth CA bundle requires a private session file")
+        jaas_options = (
+            f" ssl.truststore.type={_jaas_value('PEM')}"
+            f" ssl.truststore.location={_jaas_value(str(oauth_ca_location))}"
+        )
+    properties.update(
+        {
+            "security.protocol": "SASL_SSL",
+            "sasl.mechanism": "OAUTHBEARER",
+            "sasl.login.callback.handler.class": (
+                "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler"
+            ),
+            "sasl.jaas.config": (
+                "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required"
+                f"{jaas_options};"
+            ),
+            "sasl.oauthbearer.token.endpoint.url": oauth.token_url,
+            "sasl.oauthbearer.client.credentials.client.id": oauth.client_id,
+            "sasl.oauthbearer.client.credentials.client.secret": oauth.client_secret,
+        }
+    )
+    if oauth.scopes:
+        properties["sasl.oauthbearer.scope"] = " ".join(oauth.scopes)
 
 
 def _add_librdkafka_authentication(
@@ -445,7 +540,9 @@ def _add_librdkafka_authentication(
     *,
     client_certificate_location: Path | None,
     private_key_location: Path | None,
+    oauth_ca_location: Path | None,
     inline_client: bool,
+    inline_oauth_ca: bool,
 ) -> None:
     if connection.auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
         if connection.username is None or connection.password is None:
@@ -457,6 +554,11 @@ def _add_librdkafka_authentication(
                 "sasl.username": connection.username,
                 "sasl.password": connection.password,
             }
+        )
+        return
+    if connection.auth_type == "oauth":
+        _add_librdkafka_oauth(
+            properties, connection, oauth_ca_location, inline_oauth_ca=inline_oauth_ca
         )
         return
     if connection.auth_type != "mtls":
@@ -473,6 +575,37 @@ def _add_librdkafka_authentication(
         raise KafkaProfileError("Kafka mTLS credentials require private session files")
     if connection.private_key_password is not None:
         properties["ssl.key.password"] = connection.private_key_password
+
+
+def _add_librdkafka_oauth(
+    properties: dict[str, str],
+    connection: KafkaConnection,
+    oauth_ca_location: Path | None,
+    *,
+    inline_oauth_ca: bool,
+) -> None:
+    oauth = connection.oauth
+    if oauth is None or oauth.client_secret is None:
+        raise KafkaProfileError("Kafka OAuth credentials are not resolved")
+    properties.update(
+        {
+            "security.protocol": "SASL_SSL",
+            "sasl.mechanism": "OAUTHBEARER",
+            "sasl.oauthbearer.method": "oidc",
+            "sasl.oauthbearer.token.endpoint.url": oauth.token_url,
+            "sasl.oauthbearer.client.id": oauth.client_id,
+            "sasl.oauthbearer.client.secret": oauth.client_secret,
+        }
+    )
+    if oauth.scopes:
+        properties["sasl.oauthbearer.scope"] = " ".join(oauth.scopes)
+    if oauth.ca_certificates is not None:
+        if oauth_ca_location is not None:
+            properties["https.ca.location"] = str(oauth_ca_location)
+        elif inline_oauth_ca:
+            properties["https.ca.pem"] = oauth.ca_certificates
+        else:
+            raise KafkaProfileError("Kafka OAuth CA bundle requires a private session file")
 
 
 def _jaas_value(value: str) -> str:
@@ -536,6 +669,7 @@ __all__ = [
     "CLIENT_KEY_FILENAME",
     "MAX_CA_BUNDLE_BYTES",
     "MAX_CLIENT_PEM_BYTES",
+    "OAUTH_CA_BUNDLE_FILENAME",
     "KafkaConnection",
     "KafkaProfileError",
     "java_properties",
