@@ -272,7 +272,9 @@ not native refresh evidence.
 Kaskade's native Apicurio mapping uses the official shared
 `apicurio.registry.tls.certificates` bundle for Registry and token endpoint, but
 keeps separate HTTP/TLS contexts so Registry client identity never reaches the
-IdP. OAuth scopes require the stable Kaskade release that contains PR 139.
+IdP. Native Apicurio OAuth scopes require Kaskade 5.0.1 or newer, the first
+stable release that implements the official scope property. Profiles without
+scopes retain compatibility with earlier Kaskade releases.
 Confluent Java likewise uses one official `ssl.*` trust configuration for both
 destinations. Distinct CA profiles are rejected for those shared contracts.
 

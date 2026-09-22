@@ -917,10 +917,9 @@ for every equivalent format, direct command, or shell shim:
    private property mapping.
 2. Confluent's Python `SchemaRegistryClient` through Kaskade's Confluent
    provider.
-3. Kaskade's native `ApicurioClient` through its Apicurio provider. Until a
-   stable Kaskade release contains PR 139, perform development evidence only
-   against exact commit `28cd379dded2cc0923edf35c028a34d93101cbfc`; do not
-   change Kantrip's release gate.
+3. Kaskade's native `ApicurioClient` through its Apicurio provider. Scope-free
+   profiles retain compatibility with earlier Kaskade releases; scoped profiles
+   require the published Kaskade 5.0.1 release or newer.
 
 For each case, use its own IdP client and the 15-second access-token lifetime.
 Read a real schema, wait for expiry, then read a different uncached schema or
@@ -930,6 +929,13 @@ token to expire, and request a third uncached schema. The next refresh must fail
 cleanly without exposing the secret or token. Re-enable the client afterward.
 Do not require an already issued token to become invalid immediately unless the
 IdP explicitly guarantees that behavior.
+
+For Confluent's Java wrappers, Kantrip passes the private Java properties file
+to both the Kafka command and the formatter/reader. It also passes the validated,
+credential-free Registry URL as a formatter/reader property so the wrapper's
+`http://localhost:8081` default cannot take precedence. OAuth token endpoints
+are allowlisted through the session-owned JVM options, and custom CAs are
+rendered as a Java PEM truststore used by both Registry and token requests.
 
 Keep short adapter coverage for all six Confluent console wrappers, Kaskade's
 two providers, and Bash/Zsh/Fish. Those checks prove argument/configuration

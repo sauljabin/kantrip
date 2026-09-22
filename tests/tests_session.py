@@ -47,7 +47,7 @@ class TestProfileSession(unittest.TestCase):
             },
         }
 
-    def test_kaskade_apicurio_security_waits_for_a_published_release(self) -> None:
+    def test_kaskade_apicurio_scopes_reject_unsupported_releases(self) -> None:
         connection = RegistryConnection(
             "apicurio",
             "https://registry.invalid/apis/registry/v3",
@@ -60,23 +60,24 @@ class TestProfileSession(unittest.TestCase):
                 "secret-reference",
             ),
         )
-        version = subprocess.CompletedProcess(
-            ["kaskade", "--version"],
-            0,
-            stdout="kaskade, version 5.0.1.dev5\n",
-            stderr="",
-        )
-
-        with (
-            patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.adapters.subprocess.run", return_value=version),
-            self.assertRaisesRegex(AdapterError, "published Kaskade release.*kaskade#139"),
-        ):
-            require_kaskade_apicurio_security_support(
-                "kaskade",
-                connection,
-                environment={"PATH": "/opt/bin"},
+        for rendered in ("5.0.0", "5.0.1.dev5"):
+            version = subprocess.CompletedProcess(
+                ["kaskade", "--version"],
+                0,
+                stdout=f"kaskade, version {rendered}\n",
+                stderr="",
             )
+            with (
+                self.subTest(version=rendered),
+                patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
+                patch("kantrip.adapters.subprocess.run", return_value=version),
+                self.assertRaisesRegex(AdapterError, "Kaskade 5.0.1 or newer"),
+            ):
+                require_kaskade_apicurio_security_support(
+                    "kaskade",
+                    connection,
+                    environment={"PATH": "/opt/bin"},
+                )
 
     def test_oauth_trust_bundle_uses_a_portable_system_path_not_environment(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -135,7 +136,7 @@ class TestProfileSession(unittest.TestCase):
 
         run.assert_not_called()
 
-    def test_kaskade_apicurio_security_accepts_the_declared_stable_release(self) -> None:
+    def test_kaskade_apicurio_scopes_accept_kaskade_5_0_1(self) -> None:
         connection = RegistryConnection(
             "apicurio",
             "https://registry.invalid/apis/registry/v3",
@@ -158,10 +159,6 @@ class TestProfileSession(unittest.TestCase):
         with (
             patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
             patch("kantrip.adapters.subprocess.run", return_value=version),
-            patch(
-                "kantrip.adapters._KASKADE_APICURIO_SECURITY_MIN_VERSION",
-                (5, 0, 1),
-            ),
         ):
             require_kaskade_apicurio_security_support(
                 "kaskade",
@@ -565,15 +562,40 @@ class TestProfileSession(unittest.TestCase):
 
     def test_adapts_all_schema_registry_console_commands(self) -> None:
         adapters = {
-            "kafka-avro-console-consumer": "--consumer.config",
-            "kafka-avro-console-producer": "--producer.config",
-            "kafka-json-schema-console-consumer": "--consumer.config",
-            "kafka-json-schema-console-producer": "--producer.config",
-            "kafka-protobuf-console-consumer": "--consumer.config",
-            "kafka-protobuf-console-producer": "--producer.config",
+            "kafka-avro-console-consumer": (
+                "--consumer.config",
+                "--formatter-config",
+                "--formatter-property",
+            ),
+            "kafka-avro-console-producer": (
+                "--producer.config",
+                "--reader-config",
+                "--reader-property",
+            ),
+            "kafka-json-schema-console-consumer": (
+                "--consumer.config",
+                "--formatter-config",
+                "--formatter-property",
+            ),
+            "kafka-json-schema-console-producer": (
+                "--producer.config",
+                "--reader-config",
+                "--reader-property",
+            ),
+            "kafka-protobuf-console-consumer": (
+                "--consumer.config",
+                "--formatter-config",
+                "--formatter-property",
+            ),
+            "kafka-protobuf-console-producer": (
+                "--producer.config",
+                "--reader-config",
+                "--reader-property",
+            ),
         }
-        for executable, config_option in adapters.items():
+        for executable, options in adapters.items():
             with self.subTest(executable=executable):
+                config_option, auxiliary_config, auxiliary_property = options
                 observed: dict[str, object] = {}
 
                 def inspect_run(
@@ -615,7 +637,14 @@ class TestProfileSession(unittest.TestCase):
                     arguments[:4],
                 )
                 self.assertEqual("schema-registry-kafka.properties", Path(arguments[4]).name)
-                self.assertEqual(["--topic", "orders"], arguments[5:])
+                self.assertEqual(auxiliary_config, arguments[5])
+                self.assertEqual("schema-registry-kafka.properties", Path(arguments[6]).name)
+                self.assertEqual(auxiliary_property, arguments[7])
+                self.assertEqual(
+                    "schema.registry.url=http://registry.invalid:8081",
+                    arguments[8],
+                )
+                self.assertEqual(["--topic", "orders"], arguments[9:])
                 environment = observed["environment"]
                 assert isinstance(environment, dict)
                 self.assertEqual("http://registry.invalid:8081", environment["SCHEMA_REGISTRY_URL"])
@@ -674,6 +703,69 @@ class TestProfileSession(unittest.TestCase):
             "schema.registry.basic.auth.credentials.source=USER_INFO\n",
             observed["config"],
         )
+
+    def test_confluent_console_oauth_owns_java_allowlist_and_pem_trust(self) -> None:
+        reference = secret_reference(PROFILE_ID, "registry/oauth/client-secret")
+        ca = synthetic_pki().ca
+        self.profile["registry"] = {
+            "provider": "confluent",
+            "schema.registry.url": "https://registry.invalid:8081",
+            "tls": {"caCertificates": ca},
+            "auth": {
+                "type": "oauth",
+                "tokenUrl": "https://idp.invalid/token",
+                "clientId": "registry-client",
+                "scopes": ["registry.read"],
+                "clientSecretRef": reference,
+                "caCertificates": ca,
+                "logicalCluster": "lsrc-synthetic",
+            },
+        }
+        store = Mock()
+        store.get.return_value = "registry-client-secret"
+        observed: dict[str, object] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            config = Path(arguments[4]).read_text(encoding="utf-8")
+            observed["arguments"] = arguments
+            observed["environment"] = environment
+            observed["config"] = config
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch(
+                "kantrip.session.shutil.which",
+                return_value="/opt/confluent/kafka-avro-console-consumer",
+            ),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kafka-avro-console-consumer", "--topic", "orders"],
+                environment={"SCHEMA_REGISTRY_OPTS": "-Duntrusted=true"},
+                secret_store=store,
+            )
+
+        arguments = observed["arguments"]
+        assert isinstance(arguments, list)
+        self.assertNotIn("registry-client-secret", " ".join(arguments))
+        self.assertIn(
+            "schema.registry.url=https://registry.invalid:8081",
+            arguments,
+        )
+        config = observed["config"]
+        assert isinstance(config, str)
+        self.assertIn("schema.registry.ssl.truststore.type=PEM\n", config)
+        self.assertIn("schema.registry.ssl.truststore.location=", config)
+        self.assertNotIn("schema.registry.ssl.ca.location=", config)
+        environment = observed["environment"]
+        assert isinstance(environment, dict)
+        allowed = "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://idp.invalid/token"
+        self.assertEqual(allowed, environment["KAFKA_OPTS"])
+        self.assertEqual(allowed, environment["SCHEMA_REGISTRY_OPTS"])
 
     def test_kaskade_reads_native_apicurio_basic_from_private_ini(self) -> None:
         password_reference = secret_reference(PROFILE_ID, "registry/password")
@@ -756,10 +848,6 @@ class TestProfileSession(unittest.TestCase):
             patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
             patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
             patch("kantrip.adapters.subprocess.run", return_value=version),
-            patch(
-                "kantrip.adapters._KASKADE_APICURIO_SECURITY_MIN_VERSION",
-                (5, 0, 1),
-            ),
             patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
@@ -789,6 +877,10 @@ class TestProfileSession(unittest.TestCase):
         cases = (
             ("--property", "schema.registry.url=http://other.invalid:8081"),
             ("--property=schema.registry.url=http://other.invalid:8081",),
+            ("--formatter-property", "schema.registry.url=http://other.invalid:8081"),
+            ("--reader-property=schema.registry.bearer.auth.token=other",),
+            ("--reader-config=other.properties",),
+            ("--command-property=bootstrap.servers=other.invalid:9092",),
             ("--producer-property", "bootstrap.servers=other.invalid:9092"),
             ("--consumer-property=bootstrap.servers=other.invalid:9092",),
             ("--producer.config=other.properties",),
@@ -807,6 +899,19 @@ class TestProfileSession(unittest.TestCase):
                     environment={},
                 )
             run.assert_not_called()
+
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
+            patch("kantrip.session._run_child") as run,
+            self.assertRaisesRegex(SessionError, "cannot override"),
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kafka-avro-console-consumer", "--formatter-config=other.properties"],
+                environment={},
+            )
+        run.assert_not_called()
 
     def test_schema_registry_command_requires_registry_configuration(self) -> None:
         del self.profile["registry"]

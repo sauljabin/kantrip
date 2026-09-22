@@ -291,6 +291,7 @@ def confluent_console_properties(
         ca_location,
         client_certificate_location,
         private_key_location,
+        java=True,
     )
     return {f"schema.registry.{name}": value for name, value in native.items()}
 
@@ -303,15 +304,19 @@ def _add_confluent_registry_security(
     private_key_location: Path | None,
     *,
     allow_independent_oauth_ca: bool = False,
+    java: bool = False,
 ) -> None:
-    _add_registry_tls_files(
-        properties,
-        connection,
-        ca_location,
-        client_certificate_location,
-        private_key_location,
-        prefix="ssl.",
-    )
+    if java:
+        _add_confluent_java_tls(properties, connection, ca_location)
+    else:
+        _add_registry_tls_files(
+            properties,
+            connection,
+            ca_location,
+            client_certificate_location,
+            private_key_location,
+            prefix="ssl.",
+        )
     if connection.auth_type == "none" or connection.auth_type == "mtls":
         return
     if connection.auth_type == "basic":
@@ -357,6 +362,35 @@ def _add_confluent_registry_security(
         properties["bearer.auth.logical.cluster"] = connection.oauth_logical_cluster
     if connection.oauth_identity_pool_id is not None:
         properties["bearer.auth.identity.pool.id"] = connection.oauth_identity_pool_id
+
+
+def _add_confluent_java_tls(
+    properties: dict[str, str],
+    connection: RegistryConnection,
+    ca_location: Path | None,
+) -> None:
+    if connection.ca_certificates is not None:
+        if ca_location is None:
+            raise RegistryProfileError("Registry CA bundle requires a private session file")
+        properties.update(
+            {
+                "ssl.truststore.location": str(ca_location),
+                "ssl.truststore.type": "PEM",
+            }
+        )
+    if connection.auth_type != "mtls":
+        return
+    if connection.client_certificate is None or connection.private_key is None:
+        raise RegistryProfileError("Registry mTLS credentials are not resolved")
+    properties.update(
+        {
+            "ssl.keystore.type": "PEM",
+            "ssl.keystore.certificate.chain": connection.client_certificate,
+            "ssl.keystore.key": connection.private_key,
+        }
+    )
+    if connection.private_key_password is not None:
+        properties["ssl.key.password"] = connection.private_key_password
 
 
 def _add_apicurio_registry_security(

@@ -149,7 +149,7 @@ _KASKADE_VERSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _JAVA_PEM_VERSION_TIMEOUT_SECONDS = 5
-_KASKADE_APICURIO_SECURITY_MIN_VERSION: tuple[int, int, int] | None = None
+_KASKADE_APICURIO_SECURITY_MIN_VERSION = (5, 0, 1)
 
 
 def require_java_pem_support(
@@ -220,16 +220,15 @@ def require_kaskade_apicurio_security_support(
     *,
     environment: Mapping[str, str],
 ) -> None:
-    """Gate Apicurio mappings added by the pending Kaskade security release."""
+    """Gate native Apicurio OAuth scopes on their first stable Kaskade release."""
     if not _requires_new_kaskade_apicurio_security(registry):
         return
     version, suffix, rendered = _kaskade_client_version(executable, environment)
-    minimum = _KASKADE_APICURIO_SECURITY_MIN_VERSION
-    if minimum is not None and not suffix and version >= minimum:
+    if not suffix and version >= _KASKADE_APICURIO_SECURITY_MIN_VERSION:
         return
     raise AdapterError(
-        f"kaskade {rendered} cannot safely map this Apicurio security profile; "
-        "a published Kaskade release containing kaskade#139 is required"
+        f"kaskade {rendered} cannot map native Apicurio OAuth scopes; "
+        "install Kaskade 5.0.1 or newer"
     )
 
 
@@ -346,6 +345,7 @@ def prepare_command(
         bootstrap_option, config_option = kafka_options
         _reject_kafka_overrides(executable, prepared[1:], kafka_options)
         selected_config_path = java_config_path
+        registry_url: str | None = None
         if executable in SCHEMA_REGISTRY_EXECUTABLES:
             connection = _require_confluent_registry(executable, registry)
             _require_registry_authentication(executable, connection)
@@ -354,12 +354,25 @@ def prepare_command(
                     f"{executable} requires a private Schema Registry client configuration"
                 )
             selected_config_path = schema_registry_java_config_path
+            registry_url = connection.url
+        auxiliary_config = _schema_registry_auxiliary_config_option(executable)
+        auxiliary_property = _schema_registry_auxiliary_property_option(executable)
         return [
             prepared[0],
             bootstrap_option,
             bootstrap_servers,
             config_option,
             str(selected_config_path),
+            *(
+                (auxiliary_config, str(selected_config_path))
+                if auxiliary_config is not None
+                else ()
+            ),
+            *(
+                (auxiliary_property, f"schema.registry.url={registry_url}")
+                if auxiliary_property is not None and registry_url is not None
+                else ()
+            ),
             *prepared[1:],
         ]
     if executable in KCAT_EXECUTABLES:
@@ -468,7 +481,17 @@ def create_subshell_shims(  # noqa: C901
             registry=registry if name in SCHEMA_REGISTRY_EXECUTABLES else None,
             schema_registry_required=name in SCHEMA_REGISTRY_EXECUTABLES,
             capability_error=java_pem_errors.get(executable_directory),
-            preserve_kafka_opts=kafka_auth_type == "oauth",
+            preserve_kafka_opts=(
+                kafka_auth_type == "oauth"
+                or registry is not None
+                and registry.provider == CONFLUENT_PROVIDER
+                and registry.auth_type == "oauth"
+            ),
+            preserve_schema_registry_opts=(
+                name in SCHEMA_REGISTRY_EXECUTABLES
+                and registry is not None
+                and registry.auth_type == "oauth"
+            ),
         )
         _write_executable(directory / name, contents)
     if kaskade_executable is not None:
@@ -625,6 +648,12 @@ def _reject_kafka_overrides(
 ) -> None:
     connection_options = (
         *injected_options,
+        *(
+            (auxiliary_config,)
+            if (auxiliary_config := _schema_registry_auxiliary_config_option(executable))
+            is not None
+            else ()
+        ),
         *_KAFKA_ALTERNATE_CONNECTION_OPTIONS.get(executable, ()),
     )
     for argument in arguments:
@@ -639,26 +668,51 @@ def _reject_kafka_overrides(
 
 def _reject_schema_registry_property_overrides(executable: str, arguments: Sequence[str]) -> None:
     for index, argument in enumerate(arguments):
-        if argument in {"--producer-property", "--consumer-property"} or argument.startswith(
-            ("--producer-property=", "--consumer-property=")
+        if argument in {
+            "--command-property",
+            "--producer-property",
+            "--consumer-property",
+        } or argument.startswith(
+            ("--command-property=", "--producer-property=", "--consumer-property=")
         ):
             raise AdapterError(
                 f"{executable} Kafka client properties cannot override the selected "
                 "Kantrip profile"
             )
         property_value: str | None = None
-        if argument.startswith("--property="):
-            property_value = argument[len("--property=") :]
-        elif argument == "--property" and index + 1 < len(arguments):
+        property_options = ("--property", "--formatter-property", "--reader-property")
+        matching_option = next(
+            (option for option in property_options if argument.startswith(f"{option}=")),
+            None,
+        )
+        if matching_option is not None:
+            property_value = argument[len(matching_option) + 1 :]
+        elif argument in property_options and index + 1 < len(arguments):
             property_value = arguments[index + 1]
-        if property_value is not None and property_value.split("=", 1)[0] in {
-            "bootstrap.servers",
-            "schema.registry.url",
-        }:
+        property_name = property_value.split("=", 1)[0] if property_value is not None else None
+        if property_name == "bootstrap.servers" or (
+            property_name is not None and property_name.startswith("schema.registry.")
+        ):
             raise AdapterError(
-                f"{executable} property '{property_value.split('=', 1)[0]}' cannot override "
+                f"{executable} property '{property_name}' cannot override "
                 "the selected Kantrip profile"
             )
+
+
+def _schema_registry_auxiliary_config_option(executable: str) -> str | None:
+    if executable in SCHEMA_REGISTRY_CONSUMER_EXECUTABLES:
+        return "--formatter-config"
+    if executable in SCHEMA_REGISTRY_PRODUCER_EXECUTABLES:
+        return "--reader-config"
+    return None
+
+
+def _schema_registry_auxiliary_property_option(executable: str) -> str | None:
+    if executable in SCHEMA_REGISTRY_CONSUMER_EXECUTABLES:
+        return "--formatter-property"
+    if executable in SCHEMA_REGISTRY_PRODUCER_EXECUTABLES:
+        return "--reader-property"
+    return None
 
 
 def _render_kafka_shim(
@@ -673,10 +727,13 @@ def _render_kafka_shim(
     schema_registry_required: bool,
     capability_error: str | None,
     preserve_kafka_opts: bool,
+    preserve_schema_registry_opts: bool,
 ) -> str:
+    auxiliary_config = _schema_registry_auxiliary_config_option(name)
     rejected_options = (
         bootstrap_option,
         config_option,
+        *((auxiliary_config,) if auxiliary_config is not None else ()),
         *_KAFKA_ALTERNATE_CONNECTION_OPTIONS.get(name, ()),
     )
     rejected_patterns = "|".join(
@@ -689,16 +746,18 @@ def _render_kafka_shim(
         registry_guard = _render_registry_shim_guard(name, registry, confluent_only=True)
         property_guard = f"""previous_argument=
 for argument in "$@"; do
-  if [ "$previous_argument" = '--property' ]; then
+  case "$previous_argument" in
+    --property|--formatter-property|--reader-property)
     case "$argument" in
-      bootstrap.servers=*|schema.registry.url=*)
+      bootstrap.servers=*|schema.registry.*)
         printf '%s\\n' '{name} properties cannot override the selected Kantrip profile' >&2
         exit 2
         ;;
     esac
-  fi
+    ;;
+  esac
   case "$argument" in
-    --producer-property|--producer-property=*|--consumer-property|--consumer-property=*|--property=bootstrap.servers=*|--property=schema.registry.url=*)
+    --command-property|--command-property=*|--producer-property|--producer-property=*|--consumer-property|--consumer-property=*|--property=bootstrap.servers=*|--property=schema.registry.*|--formatter-property=bootstrap.servers=*|--formatter-property=schema.registry.*|--reader-property=bootstrap.servers=*|--reader-property=schema.registry.*)
       printf '%s\\n' '{name} properties cannot override the selected Kantrip profile' >&2
       exit 2
       ;;
@@ -707,13 +766,24 @@ for argument in "$@"; do
 done
 """
         if registry is not None and registry.provider == CONFLUENT_PROVIDER:
-            registry_arguments = ""
+            auxiliary_property = _schema_registry_auxiliary_property_option(name)
+            assert auxiliary_property is not None
+            registry_arguments = (
+                f" {auxiliary_property} " f"{shlex.quote(f'schema.registry.url={registry.url}')}"
+            )
     capability_guard = ""
     if capability_error is not None:
         capability_guard = f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
     java_environment = "unset JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS"
     if not preserve_kafka_opts:
         java_environment = f"unset KAFKA_OPTS\n{java_environment}"
+    if not preserve_schema_registry_opts:
+        java_environment = f"unset SCHEMA_REGISTRY_OPTS\n{java_environment}"
+    auxiliary_arguments = (
+        f" {auxiliary_config} {shlex.quote(str(java_config_path))}"
+        if auxiliary_config is not None
+        else ""
+    )
     return f"""#!/bin/sh
 {java_environment}
 {registry_guard}{capability_guard}{property_guard}for argument in "$@"; do
@@ -724,7 +794,7 @@ done
       ;;
   esac
 done
-exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers)} {config_option} {shlex.quote(str(java_config_path))}{registry_arguments} "$@"
+exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers)} {config_option} {shlex.quote(str(java_config_path))}{auxiliary_arguments}{registry_arguments} "$@"
 """
 
 

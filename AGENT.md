@@ -168,10 +168,11 @@
   Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
   environment variable until Kaskade implements that contract.
 - Preserve Apicurio's official shared `apicurio.registry.tls.certificates`
-  trust contract for Registry and OAuth. Kaskade PR 139 separates the HTTP/TLS
-  contexts so Registry client identity does not reach the IdP, and adds the
-  official scope plus cleanup contract. Version-gate scopes until a containing
-  stable Kaskade release is published; never invent a minimum version.
+  trust contract for Registry and OAuth. Kaskade 5.0.1 separates the HTTP/TLS
+  contexts so Registry client identity does not reach the IdP, and implements
+  the official scope plus cleanup contract. Require Kaskade 5.0.1 or newer only
+  when native Apicurio OAuth scopes are configured; preserve compatible older
+  modes that do not need that property.
 - Confluent Java uses one official `ssl.*` trust configuration for Registry and
   OAuth. Confluent Python has no token-CA property; only for a Kaskade Registry
   OAuth child, provide a private `SSL_CERT_FILE` containing platform default

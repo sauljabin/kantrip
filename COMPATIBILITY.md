@@ -101,7 +101,7 @@ its owned values after shell startup; see [environment precedence](USAGE.md#envi
 | Native Apicurio HTTP/HTTPS, no auth | Kaskade Registry deserializers and ping |
 | Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
 | Native Apicurio Basic or mTLS | Private Kaskade INI and provider-aware ping. Kaskade supports private CA trust and unencrypted PEM mTLS keys; encrypted PEM keys are rejected. |
-| Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. OAuth scopes and Registry-only client identity handling are in [kaskade#139](https://github.com/sauljabin/kaskade/pull/139); scopes remain gated until a containing stable release exists. |
+| Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. Kaskade 5.0.1+ is required when OAuth scopes are configured; profiles without scopes retain compatibility with earlier releases. Kaskade keeps Registry and token HTTP/TLS contexts separate so Registry client identity does not reach the IdP. |
 | Confluent fixed bearer | Profile and probe support; clients without a safe fixed-token mapping reject it |
 | Kafka credential inheritance / URL credentials | Rejected |
 

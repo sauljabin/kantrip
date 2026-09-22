@@ -623,7 +623,9 @@ identically.
 Kaskade supports Avro, JSON Schema, and Protobuf decoding with Confluent Schema
 Registry and native Apicurio Registry through this adapter. Native Apicurio uses
 its default `contentId` framing because Kantrip currently configures only the
-registry URL. Kantrip sets no Kaskade-specific environment variable.
+registry URL. Native Apicurio OAuth profiles with scopes require Kaskade 5.0.1
+or newer; profiles without scopes retain compatibility with earlier releases.
+Kantrip sets no Kaskade-specific environment variable.
 
 ## Profile storage
 

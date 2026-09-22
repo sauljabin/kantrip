@@ -689,7 +689,7 @@ adapter mapping or a capability error.
 | URL | `schema.registry.url` | `apicurio.registry.url` |
 | Basic | `basic.auth.credentials.source=USER_INFO`, `basic.auth.user.info` | `apicurio.registry.auth.username`, `.password` |
 | Fixed bearer | `bearer.auth.credentials.source=STATIC_TOKEN`, `bearer.auth.token` | Unsupported |
-| OAuth | `bearer.auth.credentials.source=OAUTHBEARER`, `.issuer.endpoint.url`, `.client.id`, `.client.secret`, `.scope` | `apicurio.registry.auth.service.token.endpoint`, `.client.id`, `.client.secret` |
+| OAuth | `bearer.auth.credentials.source=OAUTHBEARER`, `.issuer.endpoint.url`, `.client.id`, `.client.secret`, `.scope` | `apicurio.registry.auth.service.token.endpoint`, `.client.id`, `.client.secret`, plus version-gated `apicurio.registry.auth.client.scope` |
 | Routing | `bearer.auth.logical.cluster`, `bearer.auth.identity.pool.id` | No invented equivalents |
 | TLS/mTLS | Standard client `ssl.*` PEM trust/key fields, correctly prefixed when combined with Kafka | Version-verified `apicurio.registry.tls.*` PEM trust, certificates, verify-host and client identity properties |
 

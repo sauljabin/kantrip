@@ -397,11 +397,23 @@ def _child_environment(
                 f"{prefix}_REGISTRY_URL": registry.url,
             }
         )
+    allowed_oauth_urls: list[str] = []
     if kafka.auth_type == "oauth":
         assert kafka.oauth is not None
-        child_environment["KAFKA_OPTS"] = (
-            "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=" f"{kafka.oauth.token_url}"
+        allowed_oauth_urls.append(kafka.oauth.token_url)
+    if (
+        registry is not None
+        and registry.provider == CONFLUENT_PROVIDER
+        and registry.auth_type == "oauth"
+    ):
+        assert registry.oauth is not None
+        allowed_oauth_urls.append(registry.oauth.token_url)
+    if allowed_oauth_urls:
+        allowed_urls_property = "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=" + ",".join(
+            dict.fromkeys(allowed_oauth_urls)
         )
+        child_environment["KAFKA_OPTS"] = allowed_urls_property
+        child_environment["SCHEMA_REGISTRY_OPTS"] = allowed_urls_property
     return child_environment
 
 

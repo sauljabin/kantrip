@@ -244,13 +244,12 @@ prove refresh inside a long-lived Registry client. Native refresh acceptance is
 grouped by implementation rather than wrapper: one Confluent Java console case,
 one Kaskade Confluent Python case, and one Kaskade native Apicurio case.
 
-The native Apicurio OAuth contract is verified against Kaskade commit
-`28cd379dded2cc0923edf35c028a34d93101cbfc` from
-[`kaskade#139`](https://github.com/sauljabin/kaskade/pull/139). It reports the
-development version `5.0.1.dev5`; that value is evidence for the exact checkout,
-not a supported minimum. Keep Kantrip's capability gate closed until Kaskade
-publishes a stable release containing the change, then record and test that
-actual release version.
+The native Apicurio OAuth contract is verified against the published
+[Kaskade 5.0.1 release](https://github.com/sauljabin/kaskade/releases/tag/v5.0.1).
+That is the minimum version only when scopes require the official
+`apicurio.registry.auth.client.scope` property. Keep scope-free profiles
+compatible with earlier Kaskade releases and test release gates with installed
+stable distributions rather than development-version strings alone.
 An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
 through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
 from a private temporary config file. `sandbox-admin` is the only superuser.
@@ -272,6 +271,13 @@ Schema Registry topics are declared as Strimzi `KafkaTopic` resources with
 `cleanup.policy=compact` and the same kebab-case names used by the Kafka
 clients: `schema-registry`, `schema-registry-secure`, and
 `schema-registry-oauth`.
+
+The Confluent console wrappers have two configuration consumers: the Kafka
+command and the schema formatter/reader. Both receive the private session file;
+the validated Registry URL is additionally supplied as a non-secret formatter
+or reader property to suppress Confluent's built-in localhost default. Registry
+OAuth sessions own the JVM URL allowlist and use Java PEM truststore properties
+for both the Registry and token endpoint.
 
 Run the adapter smoke workflow against the active services:
 
