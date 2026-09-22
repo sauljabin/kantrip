@@ -299,7 +299,7 @@ clients, creates isolated profiles and exact test-owned topics/schemas/artifacts
 and leaves the sandbox running. CI runs the same command on Ubuntu with a real
 DBus Secret Service/GNOME Keyring session and always collects sanitized resource
 diagnostics before removing its CI-owned sandbox.
-The E2E Zsh launcher skips host-global startup files with Zsh's `+d` option to
+The E2E Zsh launcher skips host-global startup files with Zsh's `-d` option to
 avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs.
 
 ### Automated E2E acceptance matrix

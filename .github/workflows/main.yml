@@ -101,6 +101,8 @@ jobs:
           version: v4.1.1
       - name: Sync dependencies
         run: uv sync --locked
+      - name: Validate E2E Zsh startup
+        run: uv run --locked python -m tests.e2e.shell_environment
       - name: Install pinned released client tools
         run: |
           set -euo pipefail
