@@ -5,7 +5,6 @@ from __future__ import annotations
 import fcntl
 import os
 import secrets
-import tempfile
 import unittest
 from typing import TextIO
 
@@ -14,6 +13,7 @@ from rich.console import Console
 from sandbox.__main__ import STATE_ROOT
 from tests.e2e import adapters, authentication
 from tests.e2e.preconditions import check_preconditions
+from tests.e2e.shell_environment import isolated_zsh_environment
 
 
 class TestSandboxEndToEnd(unittest.TestCase):
@@ -40,9 +40,7 @@ class TestSandboxEndToEnd(unittest.TestCase):
 
     def test_10_plaintext_adapter_operations(self) -> None:
         run_id = secrets.token_hex(6)
-        with tempfile.TemporaryDirectory(prefix="kantrip-e2e-zsh-") as directory:
-            environment = dict(os.environ)
-            environment["ZDOTDIR"] = directory
+        with isolated_zsh_environment(os.environ) as environment:
             adapters.smoke(
                 Console(color_system=None),
                 profile=f"e2e-{run_id}",

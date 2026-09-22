@@ -27,6 +27,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from sandbox.__main__ import CA_FILE, STATE_FILE, load_credentials
 from scripts import TerminalTimeout, run_terminal
 from tests.e2e.registry_oauth import RegistryOAuthFailure, exercise_registry_oauth_renewal
+from tests.e2e.shell_environment import isolated_zsh_environment
 
 
 class AuthSmokeFailure(RuntimeError):
@@ -193,10 +194,11 @@ def main() -> None:
             "zsh",
         )
     )
-    with tempfile.TemporaryDirectory(prefix="kantrip-auth-smoke-") as directory:
-        environment = dict(os.environ)
+    with (
+        tempfile.TemporaryDirectory(prefix="kantrip-auth-smoke-") as directory,
+        isolated_zsh_environment(os.environ) as environment,
+    ):
         environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
-        environment["ZDOTDIR"] = directory
         profiles: list[str] = []
         try:
             for case in CASES:
@@ -234,7 +236,6 @@ def exercise_registry_oauth() -> None:
     with tempfile.TemporaryDirectory(prefix="kantrip-registry-oauth-e2e-") as directory:
         environment = dict(os.environ)
         environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
-        environment["ZDOTDIR"] = directory
         profiles: list[str] = []
         try:
             for case in REGISTRY_CASES:
