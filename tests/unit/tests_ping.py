@@ -18,7 +18,7 @@ from kantrip.ping import (
     ping_profile,
 )
 from kantrip.secret_store import secret_reference
-from tests.pki import synthetic_pki
+from tests.unit.pki import synthetic_pki
 
 
 def _connected_admin(configuration: dict[str, object], **kwargs: object) -> Mock:

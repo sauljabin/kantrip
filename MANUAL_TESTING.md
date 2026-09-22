@@ -1,12 +1,12 @@
 # Manual Testing
 
-These checks complement the offline test suite and the automated sandbox smoke
-workflow. Each scenario describes how to create a meaningful initial state, the
+These checks complement the unit suite and the automated sandbox E2E suite.
+Each scenario describes how to create a meaningful initial state, the
 action to take, and the observable result. Run commands from the repository root.
 These scenarios describe current behavior. The pending
 [first-release manual QA checklist](MVP.md#manual-qa--first-release-checklist)
 is kept with the roadmap until its commands are implemented; move those checks
-here as each owning PR lands. Human QA supplements both offline and smoke tests.
+here as each owning PR lands. Human QA supplements both unit and E2E tests.
 
 ## Isolated test state
 
@@ -183,17 +183,17 @@ uv run --locked kantrip exec tls-manual -- sh -c \
 Start the sandbox, then run its disposable authenticated acceptance matrix:
 
 ```bash
-uv run --locked python -m scripts.auth_smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
-The authenticated script exercises allowed and no-ACL Kafka identities for
+The E2E suite exercises allowed and no-ACL Kafka identities for
 PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; native OAuth; unauthenticated
 plaintext and server-only TLS; Bash, Zsh, and Fish; invalid passwords and client
 certificate; wrong CA and hostname; and an unavailable broker. It also creates
 Kantrip profiles for Confluent and Apicurio Basic/OAuth plus Confluent mTLS,
 proves the configured read query and authentication gate, rejects invalid
-credentials, and verifies that a new OAuth token acquisition fails after client
-revocation. That Registry check is not long-lived native refresh evidence.
+credentials, and verifies long-lived Registry renewal before a revoked client
+causes a new token acquisition to fail without decoding the final record.
 Allowed Kafka identities can use only `kantrip-auth-`, OAuth can use
 only `kantrip-oauth-`, and unauthenticated smoke clients can use only
 `kantrip-smoke-`. Each no-ACL identity must complete `ping` and then receive a
@@ -700,13 +700,11 @@ The lifecycle tool has already written private Java client properties.
 
 ### Exercise
 
-Run the current Kantrip adapter smoke test against the baseline listener:
+Run the complete automated acceptance matrix against the already-running
+sandbox. It includes Bash, Zsh, and Fish:
 
 ```bash
-uv run --locked python -m scripts.smoke
-uv run --locked python -m scripts.smoke \
-  --shell bash --shell zsh --shell fish
-uv run --locked python -m scripts.auth_smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
 Exercise plaintext, server-authenticated TLS, SCRAM-SHA-512, and mTLS through
@@ -747,7 +745,7 @@ uv run --locked kantrip exec sandbox-mtls -- kafka-topics --list
 
 At the SCRAM password prompt, enter the generated
 `KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD` through a secure terminal paste without
-printing it. `scripts.auth_smoke` creates the equivalent OAuth profile through
+printing it. The E2E suite creates the equivalent OAuth profile through
 Kantrip's no-echo client-secret prompt and exercises both Java and librdkafka;
 the property command below remains an independent fixture check.
 
@@ -778,24 +776,24 @@ kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
   wait --for=create pod/kantrip-dual-role-0 --timeout=5m
 kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
   wait pod/kantrip-dual-role-0 --for=condition=Ready --timeout=5m
-uv run --locked python -m scripts.auth_smoke
+uv run --locked python -m scripts.tests --suite e2e
 uv run --locked python -m sandbox up
-uv run --locked python -m scripts.auth_smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
 ### Expected result
 
-- The smoke workflow continues to pass through plaintext `localhost:9092` and
+- The E2E workflow passes through plaintext `localhost:9092` and
   cleans up its temporary profile and topic.
 - `sandbox-plaintext` reaches `localhost:9092`, and `sandbox-tls` reaches
   `localhost:9093` with the exported CA.
 - Kantrip verifies the sandbox CA and reaches the TLS listener on `9093`.
 - Kantrip and the native client reach SCRAM-SHA-512 on `9094` and mTLS on
-  `9095`; the native OAuth client reaches `9096`; the authenticated smoke
+  `9095`; the native OAuth client reaches `9096`; authenticated acceptance
   reaches PLAIN on `9097` and SCRAM-SHA-256 on `9098`.
 - Kafka `ping` reports the authenticated exchange without requiring topic or
   cluster ACLs; the subsequent topic command remains subject to broker ACLs.
-- After the unified broker restart, the complete authenticated smoke still
+- After the unified broker restart, the complete authenticated matrix still
   passes without rerunning the provisioning Job.
 - A second `sandbox up` completes idempotently and the matrix remains green.
 - Wrong credentials, client identity, CA, hostname, and unavailable broker
@@ -833,7 +831,7 @@ uv run --locked kantrip add sandbox-apicurio \
   --registry-url http://localhost:8082/apis/registry/v3
 uv run --locked kantrip describe sandbox-schema-registry
 uv run --locked kantrip describe sandbox-apicurio
-uv run --locked python -m scripts.auth_smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
 Refresh the short-lived OAuth bearer sessions without printing either client

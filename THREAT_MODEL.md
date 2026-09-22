@@ -121,6 +121,13 @@ password to Kafka tooling, and deletes it on exit. A privileged cluster
 administrator, compromised node, or process inside that short-lived container
 can still read the mounted or temporary value.
 
+The E2E runner accepts only an explicitly provisioned sandbox and never owns its
+lifecycle. It requires the approved native credential backend (macOS Keychain or
+Linux Secret Service), performs an exact temporary set/get/delete check, and
+serializes changes to shared OAuth identities. CI creates a fresh DBus/GNOME
+Keyring session and removes only its own sandbox after sanitized diagnostics are
+captured. Local E2E intentionally leaves the caller's sandbox running.
+
 ### Recovery boundary
 
 Database state and runtime directories found during startup or explicit repair

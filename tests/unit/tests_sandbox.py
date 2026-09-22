@@ -15,7 +15,7 @@ from sandbox.__main__ import (
     load_versions,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
 VERSIONS_FILE = SANDBOX_ROOT / "versions.env"
 KIND_CONFIG = SANDBOX_ROOT / "kind.yaml"

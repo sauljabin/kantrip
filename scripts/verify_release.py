@@ -50,11 +50,13 @@ SDIST_REQUIRED = {
     "pyproject.toml",
     "sandbox/kubernetes/23-kafka-provisioning.yaml",
     "schemas/profile.schema.json",
-    "scripts/auth_smoke.py",
-    "tests/pki.py",
-    "tests/mutation_worker.py",
-    "tests/tests_mutation_crash.py",
-    "tests/tests_pki.py",
+    "scripts/tests.py",
+    "tests/e2e/test_end_to_end.py",
+    "tests/e2e/versions.env",
+    "tests/unit/pki.py",
+    "tests/unit/mutation_worker.py",
+    "tests/unit/tests_mutation_crash.py",
+    "tests/unit/tests_pki.py",
 }
 _FORBIDDEN_TEST_CREDENTIAL_SUFFIXES = (".crt", ".key", ".p12", ".pem", ".pfx")
 

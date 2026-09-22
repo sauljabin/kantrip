@@ -442,6 +442,18 @@ requires an explicit `down` followed by `up`; it never silently deletes the old
 cluster. Acceptance forces a User Operator reconciliation, restarts the broker
 without rerunning provisioning, and performs a second idempotent `sandbox up`.
 
+Infrastructure acceptance is deliberately separate from sandbox lifecycle.
+`python -m scripts.tests --suite e2e` validates an already-running laboratory
+and never creates or destroys it. The same suite runs locally and in CI against
+an installed candidate wheel plus separately installed, pinned released clients.
+Setup failures (missing executable, wrong version, workload/certificate/topic
+readiness, host endpoint, private state, or native credential store) are distinct
+from product assertion failures. A private non-blocking lock serializes mutation
+of shared OAuth clients. Long-lived Registry consumers force distinct schema
+cache misses before and after token expiry, confirm new IdP issuance, then revoke
+the client and require token-acquisition failure without decoding the final
+record. TUI clients are observed through parsed terminal state.
+
 ## Diagnostics and output
 
 `doctor` checks global or profile-scoped migration/profile state, exact

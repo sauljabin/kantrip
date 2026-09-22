@@ -10,7 +10,7 @@ from pathlib import Path
 
 from kantrip.profiles import load_profiles, reconcile_pending_secrets
 from kantrip.reconciliation import pending_secret_cleanup
-from tests.mutation_worker import FIRST_SECRET, SECOND_SECRET, FileSecretStore
+from tests.unit.mutation_worker import FIRST_SECRET, SECOND_SECRET, FileSecretStore
 
 
 @unittest.skipUnless(hasattr(signal, "SIGKILL"), "SIGKILL is unavailable")
@@ -77,12 +77,12 @@ class TestMutationCrashRecovery(unittest.TestCase):
             [
                 sys.executable,
                 "-m",
-                "tests.mutation_worker",
+                "tests.unit.mutation_worker",
                 scenario,
                 str(database),
                 str(store_root),
             ],
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=Path(__file__).resolve().parents[2],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

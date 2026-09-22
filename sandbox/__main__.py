@@ -315,6 +315,7 @@ def _apply_runtime_secrets(credentials: Mapping[str, str]) -> None:
         "enabled": True,
         "sslRequired": "external",
         "accessTokenLifespan": 15,
+        "eventsEnabled": True,
         "roles": {"realm": [{"name": "sr-readonly"}]},
         "clients": [
             _keycloak_client(

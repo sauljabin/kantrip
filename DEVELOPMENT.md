@@ -58,18 +58,19 @@ uv run python -m scripts.analyze
 Run the offline unit tests:
 
 ```bash
-uv run python -m scripts.tests
+uv run python -m scripts.tests --suite unit
 ```
 
-Run the shell contract independently:
+The default suite is `unit`. Select it explicitly in automation with:
 
 ```bash
-KANTRIP_REQUIRED_SHELLS=bash,zsh,fish \
-  uv run --locked python -m scripts.verify_shell_contract
+uv run --locked python -m scripts.tests --suite unit
 ```
 
-The shell contract uses generated fake clients and PTYs; it does not require
-Kafka, Docker, kcat, Kaskade, or Java.
+Unit tests live in `tests/unit`, including the shell contract with generated fake
+clients and PTYs. They do not require Kafka, Docker, kcat, Kaskade, or Java.
+Infrastructure acceptance lives in `tests/e2e` and uses the same entry point
+with `--suite e2e` after explicit provisioning.
 
 Generate the deterministic Rich README banner:
 
@@ -93,7 +94,7 @@ state explicitly; do not add aliases or silently reset user data.
 
 Implement the sequential PRs in [MVP.md](MVP.md), including their acceptance
 criteria and affected documentation. Its manual first-release QA is a separate
-human release gate; the offline suite and sandbox smoke remain required.
+human release gate; both unit and E2E suites remain required.
 
 ## Database migrations
 
@@ -152,7 +153,7 @@ the superseded reference. Profile removal commits the row deletion and cleanup
 records before it contacts the credential backend.
 
 Tests for this boundary use deterministic in-process failpoints and
-`tests/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
+`tests/unit/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
 new credential owner or input path is added:
 
 | Cut or race | Required invariant |
@@ -180,7 +181,7 @@ those platform boundaries separately. Assertions may inspect references and
 journal rows, but must never include a real credential value in diagnostic
 output.
 
-## Sandbox services and smoke workflow
+## Sandbox services and E2E workflow
 
 The sandbox is a local Kind laboratory with one operator-managed Strimzi Kafka
 cluster, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
@@ -231,8 +232,7 @@ Registry uses separate Basic and OAuth processes because its local JAAS
 property-file login and OAuth `AuthenticationHandler` are different server
 authentication paths; Apicurio accepts both mechanisms on one endpoint and
 assigns its service account the standard `sr-readonly` realm role.
-`scripts.auth_smoke`
-creates typed Kantrip profiles for every secure variant. The single Kafka cluster's
+The E2E suite creates typed Kantrip profiles for every secure variant. The single Kafka cluster's
 `plaintext` listener means no authentication and no encryption. All other
 external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
 principals prove that `kantrip ping` does not depend on Kafka resource
@@ -279,30 +279,42 @@ or reader property to suppress Confluent's built-in localhost default. Registry
 OAuth sessions own the JVM URL allowlist and use Java PEM truststore properties
 for both the Registry and token endpoint.
 
-Run the adapter smoke workflow against the active services:
+Install the exact released client versions listed in `tests/e2e/versions.env`
+outside Kantrip's environment. Build the candidate wheel and install it in a
+separate environment, then set `KANTRIP_E2E_KANTRIP` to that environment's
+`kantrip` executable. The test process validates all tools, sandbox workloads,
+host endpoints, private file modes, and the native credential store before any
+product assertion.
+
+Run the complete adapter, shell, authentication, authorization, and Registry
+renewal matrix against the already-running services:
 
 ```bash
-uv run --locked python -m scripts.smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
-Include the interactive shell adapters with:
+The runner never invokes `sandbox up` or `sandbox down`; local and CI provisioners
+own that lifecycle. It holds a non-blocking lock while mutating shared OAuth
+clients, creates isolated profiles and exact test-owned topics/schemas/artifacts,
+and leaves the sandbox running. CI runs the same command on Ubuntu with a real
+DBus Secret Service/GNOME Keyring session and always collects sanitized resource
+diagnostics before removing its CI-owned sandbox.
 
-```bash
-uv run --locked python -m scripts.smoke \
-  --shell bash --shell zsh --shell fish
-```
+### Automated E2E acceptance matrix
 
-Run the authenticated lifecycle, direct producer/consumer/admin, all-shell,
-invalid-authorization, and no-ACL ping matrix with:
+| Area | Released clients and operation evidence |
+| --- | --- |
+| Kafka plaintext | Apache Kafka 4.3.1 and Confluent Platform 8.3.1 topic/admin, producer, consumer, group, config, ACL, and broker-API commands; kcat/kafkacat 1.7.0 on macOS and 1.7.1 on Ubuntu for metadata/produce/consume; Kaskade 5.0.1 admin/consume; Bash, Zsh, and Fish sessions |
+| Kafka authentication | Verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth profiles; real Java produce/consume, librdkafka metadata, all three shells, prefix ACL denial, and no-resource-ACL ping proof |
+| Schema formats | Confluent Avro, JSON Schema, and Protobuf console producer/consumer pairs with decoded markers and exact topic cleanup |
+| Registry security | Confluent Basic, OAuth, and mTLS plus native Apicurio Basic and OAuth profile probes; invalid credentials/identity/CA/hostname and anonymous-access controls |
+| OAuth lifetime | Native Kafka Java/librdkafka clients survive expiry; Confluent Java, Kaskade Confluent, and Kaskade native Apicurio consumers stay alive across fresh schema cache misses, show new IdP issuance, then fail token acquisition after client revocation without decoding the final record |
+| Ping boundary | Kafka proves broker protocol/authentication without topic APIs; Registry uses the documented read endpoint and requires anonymous denial for authenticated profiles; successful ping is followed by denied resource operations for no-ACL identities |
 
-```bash
-uv run --locked python -m scripts.auth_smoke
-```
-
-The smoke workflow remains a pre-commit hook. It creates isolated temporary
-profiles and topics and cleans them up. Keep the sandbox running when committing
-changes that execute the hook. See [Manual Testing](MANUAL_TESTING.md) for
-provider-specific invocations and expected results.
+Unsupported or conditional combinations remain explicit in `COMPATIBILITY.md`;
+an absent required executable or setup component is an E2E setup failure, never
+a skip or pass. See [Manual Testing](MANUAL_TESTING.md) for provider-specific
+exploratory checks and expected results.
 
 ## Build artifacts
 
@@ -344,7 +356,7 @@ git pull --ff-only origin main
 git status --short
 uv lock --check
 uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests
+uv run --locked python -m scripts.tests --suite unit
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```

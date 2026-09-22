@@ -76,10 +76,10 @@ _KASKADE_COMMANDS = frozenset({"admin", "consumer"})
 _KASKADE_CONNECTION_OPTIONS = (
     "--bootstrap-servers",
     "--config-file",
-    "--kafka",
     "--registry",
     "-b",
 )
+_KASKADE_SAFE_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
 _KAFKA_ALTERNATE_CONNECTION_OPTIONS = {
     **{
         executable: ("--broker-list",)
@@ -525,7 +525,18 @@ def create_subshell_shims(  # noqa: C901
 
 
 def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
-    for argument in arguments:
+    for index, argument in enumerate(arguments):
+        if argument == "--kafka" or argument.startswith("--kafka="):
+            property_value = (
+                arguments[index + 1]
+                if argument == "--kafka" and index + 1 < len(arguments)
+                else argument.removeprefix("--kafka=")
+            )
+            if not _safe_kaskade_kafka_property(property_value):
+                raise AdapterError(
+                    "kaskade option '--kafka' cannot override the selected Kantrip profile"
+                )
+            continue
         for option in _KASKADE_CONNECTION_OPTIONS:
             if (
                 argument == option
@@ -536,6 +547,13 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
                 raise AdapterError(
                     f"kaskade option '{option}' cannot override the selected Kantrip profile"
                 )
+
+
+def _safe_kaskade_kafka_property(value: str) -> bool:
+    name, separator, setting = value.partition("=")
+    if not separator or not setting or name not in _KASKADE_SAFE_KAFKA_PROPERTIES:
+        return False
+    return name != "broker.address.family" or setting in {"v4", "v6", "any"}
 
 
 def _reject_kcat_overrides(executable: str, arguments: Sequence[str]) -> None:
@@ -839,8 +857,19 @@ case "${{1-}}" in
     registry_deserializer=
     previous_argument=
     for argument in "$@"; do
+      if [ "$previous_argument" = --kafka ]; then
+        case "$argument" in
+          group.id=?*|broker.address.family=v4|broker.address.family=v6|broker.address.family=any) ;;
+          *)
+            printf '%s\\n' 'kaskade connection options cannot override the selected Kantrip profile' >&2
+            exit 2
+            ;;
+        esac
+      fi
       case "$argument" in
-        -b|-b*|--bootstrap-servers|--bootstrap-servers=*|--config-file|--config-file=*|--kafka|--kafka=*|--registry|--registry=*)
+        --kafka|--kafka=group.id=?*|--kafka=broker.address.family=v4|--kafka=broker.address.family=v6|--kafka=broker.address.family=any)
+          ;;
+        -b|-b*|--bootstrap-servers|--bootstrap-servers=*|--config-file|--config-file=*|--kafka=*|--registry|--registry=*)
           printf '%s\\n' 'kaskade connection options cannot override the selected Kantrip profile' >&2
           exit 2
           ;;

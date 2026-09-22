@@ -11,7 +11,7 @@ from kantrip.registry import (
     resolve_registry_connection,
 )
 from kantrip.secret_store import secret_reference
-from tests.pki import KEY_PASSWORD, synthetic_pki
+from tests.unit.pki import KEY_PASSWORD, synthetic_pki
 
 
 class _Store:

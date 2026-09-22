@@ -25,9 +25,9 @@ from kantrip.kafka import (
     validate_client_identity,
 )
 from kantrip.secret_store import SecretNotFoundError, secret_reference
-from tests.pki import synthetic_pki, temporary_pki_files
+from tests.unit.pki import synthetic_pki, temporary_pki_files
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestKafkaConnection(unittest.TestCase):

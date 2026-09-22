@@ -36,7 +36,7 @@ from kantrip.profiles import (
 )
 from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
-from tests.pki import synthetic_pki
+from tests.unit.pki import synthetic_pki
 
 
 class TestProfiles(unittest.TestCase):

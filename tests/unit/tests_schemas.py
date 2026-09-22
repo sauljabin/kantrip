@@ -4,9 +4,9 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile.schema.json"
-from tests.pki import synthetic_pki
+from tests.unit.pki import synthetic_pki
 
 
 class TestProfileSchema(unittest.TestCase):

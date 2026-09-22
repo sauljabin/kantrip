@@ -17,7 +17,7 @@ release authorization, requesting it only if absent.
 - [ ] Complete the [first-release manual QA](MVP.md#manual-qa--first-release-checklist),
   or its implemented scenarios moved to [Manual Testing](MANUAL_TESTING.md),
   against the candidate wheel on Linux and macOS. Record actual results;
-  automated tests and smoke do not replace the human checklist.
+  automated unit and E2E tests do not replace the human checklist.
 - [ ] Confirm every required CLI/protocol/authentication/input-format cell in
   [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
   conditional and unsupported cells explicitly, including ping proof limits.
@@ -53,8 +53,11 @@ release authorization, requesting it only if absent.
   prior released sequence. Verify rollback, uniquely timestamped private
   backups, preservation of earlier backups, migration history, and
   `PRAGMA user_version` before publishing a schema change.
-- [ ] Verify lockfile consistency, code analysis, unit tests, and the shell
-  contract using the workflows in [Development](DEVELOPMENT.md#development-scripts).
+- [ ] Verify lockfile consistency, code analysis, the offline unit suite, and the
+  sandbox E2E suite using the workflows in
+  [Development](DEVELOPMENT.md#development-scripts). Confirm E2E used the
+  candidate wheel, pinned released clients, and the native platform credential
+  store rather than Kantrip's development environment.
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,
   including the supported Python and Linux/macOS matrix and packaging jobs.
   Refresh evidence for changes made during release preparation.

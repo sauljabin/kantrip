@@ -65,10 +65,10 @@ Implementation navigation (extend these tests; do not duplicate whole suites):
 
 | PR | Main existing code and test seams |
 | --- | --- |
-| 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/tests_registry.py`, `tests/tests_schemas.py`, `tests/tests_credential_mutations.py`, `tests/tests_redaction.py`, client integration fixtures |
-| 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/tests_sandbox.py` |
+| 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/unit/tests_registry.py`, `tests/unit/tests_schemas.py`, `tests/unit/tests_credential_mutations.py`, `tests/unit/tests_redaction.py`, E2E client integration fixtures |
+| 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/unit/tests_sandbox.py` |
 | 4 | Adapter/rendering/capability seams from PRs 1–2, `shells.py`, `doctor.py`; session, shell, smoke, and PTY contract tests |
-| 5 | Lifecycle/resolution/adapter/rendering seams from PRs 1–4; platform integration evidence, `scripts/verify_release.py`, `scripts/smoke.py`, docs, examples, packaging/workflow checks |
+| 5 | Lifecycle/resolution/adapter/rendering seams from PRs 1–4; platform integration evidence, `scripts/verify_release.py`, `tests/e2e`, docs, examples, packaging/workflow checks |
 | 6 | New `site/` static sources and focused site build/validation script; `.github/workflows/`, existing artwork, `README.md`, `DEVELOPMENT.md` |
 | 7 | All root guides and their anchors, schemas/examples, site links, `pyproject.toml` sdist includes, `scripts/verify_release.py` required files, templates/workflows |
 
@@ -436,10 +436,10 @@ which duplication or responsibility problem each substantial refactor resolves.
 ### 5.2 Integration evidence and release gates
 
 Run and record supported Linux/macOS and Python 3.10–3.14 checks; use actual
-macOS Keychain and Linux Secret Service for store integration. Offline tests
-remain offline. Keep the existing smoke workflow and PTY shell contract; add
-secure integrations separately rather than making ordinary tests require
-Docker or keyring access. Pin test clients and retain sanitized evidence for
+macOS Keychain and Linux Secret Service for store integration. Unit tests remain
+offline. Keep the PTY shell contract in `tests/unit`; run secure integrations
+only through `python -m scripts.tests --suite e2e` so ordinary tests never
+require Docker or keyring access. Pin test clients and retain sanitized evidence for
 minimum and representative current versions.
 
 Fill any remaining infrastructure gaps: PLAIN/SCRAM-SHA-256, authorizer-enabled
@@ -456,7 +456,7 @@ Required existing gates for every PR:
 
 ```bash
 uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests
+uv run --locked python -m scripts.tests --suite unit
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
@@ -464,8 +464,7 @@ uv run --locked python -m scripts.verify_release dist
 Release integration also runs:
 
 ```bash
-uv run --locked python -m scripts.verify_shell_contract
-uv run --locked python -m scripts.smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
 Complete the manual QA below against the built wheel, record candidate commit,

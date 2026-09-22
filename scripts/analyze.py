@@ -5,7 +5,7 @@ from scripts import CommandProcessor
 
 def main() -> None:
     commands = {
-        "checking types": "mypy kantrip/ sandbox/ scripts/",
+        "checking types": "mypy kantrip/ sandbox/ scripts/ tests/e2e/",
         "black": "black --check .",
         "ruff": "ruff check .",
         "typos": "typos --format brief",

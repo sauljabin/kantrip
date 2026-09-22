@@ -16,7 +16,7 @@ from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult, ping_profile
 from kantrip.profiles import ProfileStoreError, add_profile, load_profiles
 from kantrip.secret_store import SecretNotFoundError
-from tests.pki import synthetic_pki, temporary_pki_files
+from tests.unit.pki import synthetic_pki, temporary_pki_files
 
 
 class TestCli(unittest.TestCase):

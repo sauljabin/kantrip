@@ -323,7 +323,13 @@ def _adapter_commands() -> list[str]:
     commands.append("; ".join(registry_commands))
     for executable in sorted(KCAT_EXECUTABLES):
         commands.extend((f"{executable} -L", f"{executable} -C -s value=avro -t contract"))
-    commands.extend(("kaskade admin", "kaskade consumer", "kaskade consumer -v registry"))
+    commands.extend(
+        (
+            "kaskade admin",
+            "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
+            "kaskade consumer -v registry",
+        )
+    )
     return commands
 
 

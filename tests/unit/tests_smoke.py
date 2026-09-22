@@ -8,7 +8,7 @@ from unittest.mock import patch
 from click.testing import CliRunner
 from rich.console import Console
 
-from scripts.smoke import (
+from tests.e2e.adapters import (
     SmokeFailure,
     _failure_details,
     _kantrip_cli,
@@ -52,11 +52,12 @@ class TestSmoke(unittest.TestCase):
         self.assertEqual("Kantrip Sandbox\n\nSetup\n\nKafka CLI\n", stream.getvalue())
 
     def test_captured_kantrip_commands_explicitly_disable_color(self) -> None:
-        command = _kantrip_cli("ping", "sandbox")
+        with patch("tests.e2e.adapters.shutil.which", return_value="/opt/bin/kantrip"):
+            command = _kantrip_cli("ping", "sandbox")
 
         self.assertEqual(
-            ["-m", "kantrip.cli", "--no-color", "ping", "sandbox"],
-            command[1:],
+            ["/opt/bin/kantrip", "--no-color", "ping", "sandbox"],
+            command,
         )
 
     def test_failure_details_remove_nested_status_presentation(self) -> None:
@@ -75,7 +76,7 @@ class TestSmoke(unittest.TestCase):
             _failure_details(result),
         )
 
-    @patch("scripts.smoke.smoke", side_effect=SmokeFailure("connectivity failed"))
+    @patch("tests.e2e.adapters.smoke", side_effect=SmokeFailure("connectivity failed"))
     def test_main_renders_failures_with_its_selected_presentation(self, _smoke: object) -> None:
         result = CliRunner().invoke(main, ["--no-color"])
 

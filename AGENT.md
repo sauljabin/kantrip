@@ -165,7 +165,9 @@
 - Kaskade `admin` and `consumer` receive a private INI file through
   `--config-file`; registry deserializers select a second private file with a
   provider-specific `[registry]` section. Kaskade alone supports native
-  Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
+  Apicurio Avro, JSON Schema, and Protobuf decoding. Allow only `group.id` and
+  `broker.address.family` as explicit `--kafka` runtime properties; reject
+  connection and authentication overrides. Do not assume a Kaskade
   environment variable until Kaskade implements that contract.
 - Preserve Apicurio's official shared `apicurio.registry.tls.certificates`
   trust contract for Registry and OAuth. Kaskade 5.0.1 separates the HTTP/TLS
@@ -210,10 +212,10 @@
 
 ## Tests, Scripts, and Sandbox
 
-- Tests live in `tests` and remain offline. Generate PKI in memory or in
-  test-owned temporary directories; never commit certificate/key fixtures. Shared workflow
-  helpers belong in `scripts/__init__.py`; other script modules are executable
-  workflows.
+- Offline tests live in `tests/unit`; infrastructure acceptance lives in
+  `tests/e2e`. Generate PKI in memory or in test-owned temporary directories;
+  never commit certificate/key fixtures. Shared workflow helpers belong in
+  `scripts/__init__.py`; other script modules are executable workflows.
 - Keep Kind configuration, Kubernetes manifests, pinned versions, synthetic
   bootstrap data, and lifecycle tooling in `sandbox`. Bind every host endpoint
   to loopback. Offline tests may inspect manifests and import side-effect-free
@@ -238,20 +240,23 @@
   Both Apicurio variants use KafkaSQL with isolated journal and snapshot topics,
   delete cleanup policy, and infinite retention so their data survives Apicurio
   pod restarts. Destroying the Kind cluster intentionally removes sandbox data.
-- `python -m scripts.smoke` runs the adapter smoke workflow against the active
-  plaintext listener on `localhost:9092`, with locally installed clients and
-  optional shells. It is a pre-commit hook, not an offline or packaged E2E test.
-- `python -m scripts.auth_smoke` runs the real authenticated lifecycle,
-  producer/consumer/admin, Bash/Zsh/Fish, and no-ACL ping acceptance matrix.
-  It uses the native credential backend and must delete its temporary profiles.
-- `python -m scripts.verify_shell_contract` tests Bash, Zsh, and Fish through PTYs
-  and fake clients. Keep assertions in Python and delete safe-metadata event logs
-  with their temporary directory.
+- `python -m scripts.tests --suite unit` is the default offline gate. It includes
+  the Bash, Zsh, and Fish PTY contract with generated fake clients.
+- `python -m scripts.tests --suite e2e` is the sole external acceptance entry
+  point. It requires an explicitly provisioned sandbox, the pinned released
+  clients in `tests/e2e/versions.env`, the candidate wheel installed separately,
+  and a real approved native credential backend. It must never create or remove
+  the caller's sandbox. It owns exact temporary profiles, topics, schemas, and
+  artifacts and cleans only those resources.
+- E2E preconditions must distinguish missing tooling or infrastructure from
+  product assertion failures. Exercise real operations, not help/version output;
+  parse TUI behavior through terminal state, not raw redraw bytes. Serialize the
+  shared OAuth identities and prove refresh and post-revocation failure in the
+  same long-lived client processes.
 - Keep reproducible, high-value exploratory scenarios in `MANUAL_TESTING.md`.
   Every scenario needs explicit setup, actions, and expected results.
   `DEVELOPMENT.md` contains environment and contributor workflows, not manual
-  test cases. Manual checks complement rather than replace offline tests and the
-  sandbox smoke workflow.
+  test cases. Manual checks complement rather than replace unit and E2E tests.
 
 ## Verification
 
@@ -259,7 +264,9 @@ Run these checks after code, environment, schema, tooling, or documentation work
 
 ```text
 uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests
+uv run --locked python -m scripts.tests --suite unit
+# With the sandbox and released external clients already provisioned:
+uv run --locked python -m scripts.tests --suite e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```

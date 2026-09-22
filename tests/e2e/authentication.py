@@ -26,6 +26,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from sandbox.__main__ import CA_FILE, STATE_FILE, load_credentials
 from scripts import TerminalTimeout, run_terminal
+from tests.e2e.registry_oauth import RegistryOAuthFailure, exercise_registry_oauth_renewal
 
 
 class AuthSmokeFailure(RuntimeError):
@@ -185,8 +186,10 @@ def main() -> None:
             "fish",
             "kafka-console-consumer",
             "kafka-console-producer",
+            "kafka-avro-console-consumer",
             "kafka-topics",
             "kcat",
+            "kubectl",
             "zsh",
         )
     )
@@ -218,11 +221,37 @@ def main() -> None:
             _exercise_unavailable_broker(environment, profiles)
             _exercise_unauthenticated_listeners(environment, profiles)
             _exercise_oauth_revocation(credentials, environment)
-            _exercise_registry_oauth_revocation(credentials, environment)
         finally:
             for profile in reversed(profiles):
                 _run((*_cli(), "remove", profile, "--force"), environment, accepted=(0, 1, 3))
     print("Authenticated Kafka and Registry sandbox smoke checks passed")
+
+
+def exercise_registry_oauth() -> None:
+    """Exercise long-lived Registry clients with only their two OAuth profiles."""
+    credentials = load_credentials(STATE_FILE)
+    with tempfile.TemporaryDirectory(prefix="kantrip-registry-oauth-e2e-") as directory:
+        environment = dict(os.environ)
+        environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
+        profiles: list[str] = []
+        try:
+            for case in REGISTRY_CASES:
+                if case.auth_type != "oauth":
+                    continue
+                profile = f"auth-{case.name}"
+                _add_registry_profile(profile, case, credentials, environment)
+                profiles.append(profile)
+            exercise_registry_oauth_renewal(
+                credentials,
+                environment,
+                admin_token=_keycloak_admin_token,
+                set_client_enabled=_set_keycloak_client_enabled,
+            )
+        except RegistryOAuthFailure as error:
+            raise AuthSmokeFailure(str(error)) from error
+        finally:
+            for profile in reversed(profiles):
+                _run((*_cli(), "remove", profile, "--force"), environment, accepted=(0, 1, 3))
 
 
 def _add_registry_profile(
@@ -278,8 +307,12 @@ def _add_registry_profile(
                 credentials[case.oauth_client_id_field],
                 "--registry-oauth-ca-file",
                 str(CA_FILE),
+                "--registry-oauth-scope",
+                "openid",
             )
         )
+        if case.provider == "confluent":
+            arguments.extend(("--registry-oauth-logical-cluster", "lsrc-sandbox"))
         ready_text = "Registry OAuth client secret"
     status, output = run_terminal(
         arguments,
@@ -541,24 +574,6 @@ def _exercise_oauth_revocation(
     finally:
         _set_keycloak_client_enabled(credentials, client_id, enabled=True)
     _run((*_cli(), "ping", "auth-oauth", "--timeout", "10"), environment)
-
-
-def _exercise_registry_oauth_revocation(
-    credentials: Mapping[str, str],
-    environment: Mapping[str, str],
-) -> None:
-    for case in REGISTRY_CASES:
-        if case.auth_type != "oauth":
-            continue
-        assert case.oauth_client_id_field is not None
-        client_id = credentials[case.oauth_client_id_field]
-        profile = f"auth-{case.name}"
-        _set_keycloak_client_enabled(credentials, client_id, enabled=False)
-        try:
-            _run((*_cli(), "ping", profile, "--timeout", "10"), environment, accepted=(1,))
-        finally:
-            _set_keycloak_client_enabled(credentials, client_id, enabled=True)
-        _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
 
 
 def _set_keycloak_client_enabled(
@@ -916,7 +931,11 @@ def _safe_failure(profile: str, output: str, credentials: Mapping[str, str]) -> 
 
 
 def _cli() -> tuple[str, ...]:
-    return sys.executable, "-m", "kantrip.cli", "--no-color"
+    configured = os.environ.get("KANTRIP_E2E_KANTRIP")
+    executable = configured or shutil.which("kantrip")
+    if executable is None:
+        raise AuthSmokeFailure("required command 'kantrip' was not found")
+    return executable, "--no-color"
 
 
 def _require_commands(commands: Sequence[str]) -> None:

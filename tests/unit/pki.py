@@ -31,6 +31,7 @@ class SyntheticPki:
     encrypted_client_key: str
     mismatched_client_key: str
     server_certificate: str
+    server_key: str
     wrong_host_certificate: str
     expired_certificate: str
     future_certificate: str
@@ -56,6 +57,7 @@ def synthetic_pki() -> SyntheticPki:
         server_certificate=_certificate_pem(
             _leaf(ca, ca_key, server_key, "localhost", dns_name="localhost")
         ),
+        server_key=_private_key_pem(server_key),
         wrong_host_certificate=_certificate_pem(
             _leaf(ca, ca_key, server_key, "wrong.invalid", dns_name="wrong.invalid")
         ),
@@ -110,6 +112,24 @@ def _certificate_authority(common_name: str) -> tuple[rsa.RSAPrivateKey, x509.Ce
         .not_valid_before(datetime(2025, 1, 1, tzinfo=timezone.utc))
         .not_valid_after(datetime(2036, 1, 1, tzinfo=timezone.utc))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
         .sign(key, hashes.SHA256())
     )
     return key, certificate
@@ -135,6 +155,14 @@ def _leaf(
         .not_valid_before(not_before)
         .not_valid_after(not_after)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .add_extension(
+            x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+            critical=False,
+        )
         .add_extension(
             x509.ExtendedKeyUsage(
                 [x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH]

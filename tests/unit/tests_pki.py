@@ -6,7 +6,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import ExtensionOID
 
-from tests.pki import CONTROLLED_NOW, KEY_PASSWORD, synthetic_pki, temporary_pki_files
+from tests.unit.pki import CONTROLLED_NOW, KEY_PASSWORD, synthetic_pki, temporary_pki_files
 
 
 class TestSyntheticPki(unittest.TestCase):

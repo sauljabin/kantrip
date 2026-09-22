@@ -19,7 +19,7 @@ from kantrip.registry import RegistryConnection
 from kantrip.runtime import create_session_runtime
 from kantrip.secret_store import secret_reference
 from kantrip.session import SessionError, _oauth_trust_bundle, run_profile_session
-from tests.pki import synthetic_pki
+from tests.unit.pki import synthetic_pki
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
@@ -1284,6 +1284,9 @@ class TestProfileSession(unittest.TestCase):
             "--bootstrap-servers=other:9092",
             "--config-file=other.ini",
             "--kafka=bootstrap.servers=other:9092",
+            "--kafka=security.protocol=PLAINTEXT",
+            "--kafka=broker.address.family=invalid",
+            "--kafka=group.id=",
             "--registry=url=http://other.invalid:8081",
         ):
             with (
@@ -1294,6 +1297,33 @@ class TestProfileSession(unittest.TestCase):
                 run_profile_session(
                     "local", self.profile, ["kaskade", "admin", option], environment={}
                 )
+
+    def test_kaskade_accepts_explicit_group_and_ip_family(self) -> None:
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+            patch(
+                "kantrip.session._run_child",
+                return_value=subprocess.CompletedProcess(["kaskade"], 0),
+            ) as run,
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                [
+                    "kaskade",
+                    "consumer",
+                    "--topic",
+                    "orders",
+                    "--kafka",
+                    "group.id=orders-readers",
+                    "--kafka=broker.address.family=v4",
+                ],
+                environment={},
+            )
+
+        arguments = run.call_args.args[0]
+        self.assertIn("group.id=orders-readers", arguments)
+        self.assertIn("--kafka=broker.address.family=v4", arguments)
 
     def test_kaskade_root_options_are_not_adapted(self) -> None:
         with (
