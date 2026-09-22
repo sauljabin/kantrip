@@ -202,4 +202,4 @@ spec:
       userOperatorContainer:
         env:
           - name: STRIMZI_IGNORED_USERS_PATTERN
-            value: ^ANONYMOUS$
+            value: ^(ANONYMOUS|kantrip-scram-256|kantrip-scram-256-no-acl)$

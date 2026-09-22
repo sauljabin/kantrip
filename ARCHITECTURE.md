@@ -417,20 +417,23 @@ that path to `kafka-configs.sh --add-config-file`, and removes the file on exit;
 the password does not enter the container argument vector. There is no
 unauthenticated provisioning listener.
 
-The Strimzi User Operator is the single owner of ACLs for authenticated clients,
-the OAuth service account, and the five Registry Kafka identities. PLAIN,
-SCRAM-SHA-256, and OAuth principals also have unused SCRAM-SHA-512
-`KafkaUser` credentials so the operator can reconcile their real ACL
-principals; their tested listeners still use their named mechanisms. Registry
+The Strimzi User Operator owns ACLs for its authenticated clients, the OAuth
+service account, and the five Registry Kafka identities. PLAIN and OAuth
+principals also have unused SCRAM-SHA-512 `KafkaUser` credentials so the
+operator can reconcile their real ACL principals; their tested listeners still
+use their named mechanisms. The two SCRAM-SHA-256 identities are excluded from
+User Operator reconciliation, because the Job owns their 256-only credentials
+and the allowed identity's `kantrip-auth-` ACLs. Registry
 identities receive only their exact topic and consumer-group permissions.
 Allowed client fixtures receive the `kantrip-auth-` prefix, while matching
 authenticated no-ACL identities prove that ping does not imply resource
 authorization.
 
-The provisioning Job is the sole owner of the unauthenticated smoke ACL:
+The provisioning Job is also the sole owner of the unauthenticated smoke ACL:
 `ANONYMOUS` receives only topic and group prefixes `kantrip-smoke-` plus cluster
-Describe. It is never a superuser. The User Operator explicitly ignores that
-principal so periodic reconciliation does not erase the Job-owned rule. The
+Describe. It is never a superuser. The User Operator explicitly ignores these
+Job-owned principals so periodic reconciliation does not erase their credentials
+or rules. The
 OAuth service account is limited to `kantrip-oauth-`. This is a loopback-only,
 disposable test fixture, not a claim of Kubernetes network isolation or a
 production authorization design.

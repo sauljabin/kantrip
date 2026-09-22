@@ -9,6 +9,7 @@ import yaml
 from sandbox.__main__ import (
     SECRET_FIELDS,
     SandboxFailure,
+    _delete_legacy_scram_256_user,
     _reject_legacy_topology,
     load_credentials,
     load_or_create_credentials,
@@ -129,7 +130,8 @@ class TestSandbox(unittest.TestCase):
         self.assertIn("kantrip-kafka-bootstrap:9099", script)
         self.assertIn("ANONYMOUS", script)
         self.assertNotIn("service-account-kantrip-kafka", script)
-        self.assertNotIn("kantrip-auth-", script)
+        self.assertIn("kantrip-auth-", script)
+        self.assertIn('add_prefix_acls "$(cat /mnt/auth-users/scram-256-username)"', script)
         volumes = job["spec"]["template"]["spec"]["volumes"]
         self.assertIn("sandbox-admin", {item["secret"]["secretName"] for item in volumes})
         self.assertIn("kafka-custom-users", {item["secret"]["secretName"] for item in volumes})
@@ -138,7 +140,10 @@ class TestSandbox(unittest.TestCase):
             "env"
         ]
         self.assertIn(
-            {"name": "STRIMZI_IGNORED_USERS_PATTERN", "value": "^ANONYMOUS$"},
+            {
+                "name": "STRIMZI_IGNORED_USERS_PATTERN",
+                "value": "^(ANONYMOUS|kantrip-scram-256|kantrip-scram-256-no-acl)$",
+            },
             user_operator_env,
         )
 
@@ -178,14 +183,14 @@ class TestSandbox(unittest.TestCase):
         self.assertEqual("tls", authentication["kantrip-mtls"])
         self.assertEqual("tls", authentication["kantrip-mtls-no-acl"])
         self.assertEqual("scram-sha-512", authentication["kantrip-plain"])
-        self.assertEqual("scram-sha-512", authentication["kantrip-scram-256"])
+        self.assertNotIn("kantrip-scram-256", authentication)
         self.assertEqual("scram-sha-512", authentication["service-account-kantrip-kafka"])
-        self.assertEqual(13, len(authentication))
+        self.assertEqual(12, len(authentication))
         by_name = {user["metadata"]["name"]: user for user in users}
         self.assertNotIn("authorization", by_name["sandbox-admin"]["spec"])
         self.assertNotIn("authorization", by_name["kantrip-scram-no-acl"]["spec"])
         self.assertNotIn("authorization", by_name["kantrip-mtls-no-acl"]["spec"])
-        for name in ("kantrip-plain", "kantrip-scram-256", "service-account-kantrip-kafka"):
+        for name in ("kantrip-plain", "service-account-kantrip-kafka"):
             self.assertEqual("simple", by_name[name]["spec"]["authorization"]["type"])
         for name in (
             "schema-registry-kafka",
@@ -195,6 +200,16 @@ class TestSandbox(unittest.TestCase):
             "apicurio-secure-kafka",
         ):
             self.assertEqual("simple", by_name[name]["spec"]["authorization"]["type"])
+
+    def test_scram_256_migration_deletes_only_the_legacy_managed_user(self) -> None:
+        with patch("sandbox.__main__._run") as run:
+            _delete_legacy_scram_256_user()
+
+        command = run.call_args.args[0]
+        self.assertEqual(
+            ("delete", "kafkauser/kantrip-scram-256", "--ignore-not-found", "--wait=true"),
+            command[-4:],
+        )
 
     def test_legacy_two_cluster_topology_requires_explicit_recreation(self) -> None:
         found = CompletedProcess(("kubectl",), 0, "kafka.kafka.strimzi.io/auth-kantrip\n", "")

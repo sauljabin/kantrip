@@ -254,9 +254,11 @@ An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
 through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
 from a private temporary config file. `sandbox-admin` is the only superuser.
 
-Strimzi owns authenticated-client, OAuth, and Registry ACLs. The Job owns only
-the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe needed
-by the plaintext and server-only TLS smoke; `ANONYMOUS` is not a superuser. The
+Strimzi owns its authenticated-client, OAuth, and Registry ACLs. The Job owns
+both SCRAM-SHA-256 identities and the allowed identity's `kantrip-auth-` ACLs,
+plus the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe
+needed by the plaintext and server-only TLS smoke. The User Operator ignores
+these Job-owned principals; `ANONYMOUS` is not a superuser. The
 laboratory does not claim Kubernetes network isolation or production hardening.
 
 The Kafka cluster uses a disposable persistent volume, so broker data, ACLs,

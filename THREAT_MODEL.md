@@ -112,10 +112,12 @@ network isolation. `sandbox-admin` is the only broker superuser and is used only
 by the in-cluster provisioning Job over TLS/SCRAM-SHA-512. Runtime-generated
 credentials remain below private ignored state and mounted Secrets.
 
-Strimzi owns ACLs for authenticated clients, OAuth, and Registry identities.
-The Job owns only the `ANONYMOUS` `kantrip-smoke-` topic/group prefix and cluster
-Describe needed by unauthenticated smoke clients; `ANONYMOUS` is never a
-superuser. SCRAM-SHA-256 provisioning reads passwords from mounted files,
+Strimzi owns ACLs for its authenticated clients, OAuth, and Registry identities.
+The Job owns both SCRAM-SHA-256 identities, the allowed identity's
+`kantrip-auth-` ACLs, and the `ANONYMOUS` `kantrip-smoke-` topic/group prefix and
+cluster Describe needed by unauthenticated smoke clients. The User Operator
+ignores these Job-owned principals; `ANONYMOUS` is never a superuser.
+SCRAM-SHA-256 provisioning reads passwords from mounted files,
 writes a mode-restricted temporary config, passes its path rather than the
 password to Kafka tooling, and deletes it on exit. A privileged cluster
 administrator, compromised node, or process inside that short-lived container

@@ -224,6 +224,19 @@ def main() -> None:
             _exercise_unavailable_broker(environment, profiles)
             _exercise_unauthenticated_listeners(environment, profiles)
             _exercise_oauth_revocation(credentials, environment)
+            _run(
+                (
+                    *_cli(),
+                    "exec",
+                    "auth-scram-256",
+                    "--",
+                    "kcat",
+                    "-X",
+                    "broker.address.family=v4",
+                    "-L",
+                ),
+                environment,
+            )
         finally:
             for profile in reversed(profiles):
                 _run((*_cli(), "remove", profile, "--force"), environment, accepted=(0, 1, 3))
