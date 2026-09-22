@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import os
 import secrets
+import tempfile
 import unittest
 from typing import TextIO
 
@@ -39,17 +40,20 @@ class TestSandboxEndToEnd(unittest.TestCase):
 
     def test_10_plaintext_adapter_operations(self) -> None:
         run_id = secrets.token_hex(6)
-        adapters.smoke(
-            Console(color_system=None),
-            profile=f"e2e-{run_id}",
-            bootstrap_servers=("localhost:9092",),
-            topic=f"kantrip-smoke-e2e-{run_id}",
-            keep_topic=False,
-            registry_provider="confluent",
-            registry_url="http://localhost:8081",
-            environment=os.environ,
-            shells=("bash", "zsh", "fish"),
-        )
+        with tempfile.TemporaryDirectory(prefix="kantrip-e2e-zsh-") as directory:
+            environment = dict(os.environ)
+            environment["ZDOTDIR"] = directory
+            adapters.smoke(
+                Console(color_system=None),
+                profile=f"e2e-{run_id}",
+                bootstrap_servers=("localhost:9092",),
+                topic=f"kantrip-smoke-e2e-{run_id}",
+                keep_topic=False,
+                registry_provider="confluent",
+                registry_url="http://localhost:8081",
+                environment=environment,
+                shells=("bash", "zsh", "fish"),
+            )
 
     def test_20_authenticated_matrix(self) -> None:
         authentication.main()

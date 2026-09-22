@@ -196,6 +196,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="kantrip-auth-smoke-") as directory:
         environment = dict(os.environ)
         environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
+        environment["ZDOTDIR"] = directory
         profiles: list[str] = []
         try:
             for case in CASES:
@@ -233,6 +234,7 @@ def exercise_registry_oauth() -> None:
     with tempfile.TemporaryDirectory(prefix="kantrip-registry-oauth-e2e-") as directory:
         environment = dict(os.environ)
         environment["KANTRIP_DATABASE"] = str(Path(directory) / "profiles.db")
+        environment["ZDOTDIR"] = directory
         profiles: list[str] = []
         try:
             for case in REGISTRY_CASES:
