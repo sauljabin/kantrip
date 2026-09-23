@@ -125,6 +125,7 @@ jobs:
           )
           export LD_LIBRARY_PATH="$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           kcat -V
+          kcat -X list | grep -E '^https[.]ca[.]location[[:space:]]+[|]' > /dev/null
           echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
           curl --fail --location --retry 3 \
             "https://archive.apache.org/dist/kafka/${APACHE_KAFKA_VERSION}/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" \
