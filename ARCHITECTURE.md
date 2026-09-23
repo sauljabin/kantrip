@@ -291,7 +291,24 @@ system stores, and later sessions remain unchanged.
 
 An adapter recognizes the executable, rejects connection overrides, and injects
 native configuration. One capability table drives direct commands and shell
-shims. Java custom-CA and mTLS execution also checks the installed client version.
+shims. Both paths invoke the same argument guard before launching the native
+client; shell quoting and process supervision remain separate. Java custom-CA
+and mTLS execution also checks the installed client version.
+
+| Client family | Profile-owned native inputs | Runtime inputs retained |
+| --- | --- | --- |
+| Apache/Confluent Java consoles and admin tools | Bootstrap and config files, alternate connection files, and client-property overrides | Consumer `group.id`; topic, group, ACL, and broker resource operations such as `kafka-configs --add-config` |
+| Confluent Registry consoles | Kafka and Registry files/URLs, alternate command/formatter/reader files, and profile-owned format properties | Consumer `group.id` and presentation properties that cannot replace a connection |
+| `kcat`/`kafkacat` | `-b`, `-F`, `-r`, and arbitrary `-X` configuration | `-X group.id` and `-X broker.address.family` only |
+| Kaskade | Bootstrap/Registry/config-file options and arbitrary `--kafka` properties | `--kafka group.id` and `--kafka broker.address.family` only |
+
+These are native-client grammars, not a generic passthrough policy. A future
+client option is admitted only after checking the released tool's semantics,
+adding direct and Bash/Zsh/Fish regressions, and showing that it cannot select
+another profile connection or disclose private configuration. Do not pre-create
+adapters for clients Kantrip does not currently support. A user-selected
+arbitrary executable remains trusted with its child environment and is not
+confined by these adapter guards.
 
 Current adapters cover Apache and Confluent Kafka commands, Confluent Schema
 Registry consoles, `kcat`/`kafkacat`, and Kaskade. The exact version and feature

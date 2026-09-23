@@ -19,9 +19,12 @@ from file-input and Registry support. The remaining security work and
 first-release verification requirements are tracked in [MVP.md](MVP.md).
 Kafka ping observes a completed broker connection without resource APIs; its
 transport/authentication proof does not establish application authorization.
-Current unauthenticated Registry probes validate fixed provider metadata without
-listing subjects or artifacts; they establish neither authentication nor
-resource authorization.
+Registry ping reads only the selected provider's bounded list/search endpoint:
+`GET /subjects?limit=1` for Confluent-compatible APIs or
+`GET /search/versions?limit=1` for native Apicurio v3. A successful authenticated
+probe also requires anonymous denial on that same route. This establishes the
+configured authentication gate and permission for that exact read query, not
+read/write access to every schema or a producer/consumer's full authorization.
 
 ## Reporting a vulnerability
 

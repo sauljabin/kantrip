@@ -8,8 +8,10 @@
   schema, fixture, example, template, and command. Replace obsolete or duplicate
   guidance.
 - Do not add empty modules or speculative adapters. Keep cyclomatic complexity
-  at or below 10; repository-wide Ruff `C901` runs in `scripts.analyze`, so use
-  focused helpers instead of suppressions.
+  at or below 10 for new and materially changed functions; repository-wide Ruff
+  `C901` runs in `scripts.analyze`. Five existing functions carry narrow
+  suppressions; remove those through focused refactors rather than adding new
+  suppressions.
 - Importing `kantrip` must have no filesystem, logging, console, or network side
   effects. Classify and redact values before presentation; keep behavior
   independent from Rich.
@@ -184,6 +186,9 @@
   variables, and restore the owned environment and private shim path. Never
   install persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
+  Keep one argument policy shared by direct execution and shell shims. Apply
+  explicit per-client rules to native connection, configuration-file, and
+  runtime-property options while preserving resource and presentation options.
 - `kantrip ping` polls Confluent Kafka's `AdminClient` statistics and error
   callbacks for a configured/learned addressable broker reaching `UP`; never use
   topic/group/schema/cluster resource APIs for Kafka success. Registry ping uses
@@ -276,6 +281,9 @@ when the banner, console theme, or SVG helper changes.
 
 ## Releases and Contributions
 
+- Use explicit published version tags for third-party GitHub Actions in every
+  workflow. Verify each tag against its upstream release before changing it;
+  avoid commit hashes and floating major tags.
 - Annotated stable and PEP 440 pre-release tags (`vMAJOR.MINOR.PATCH`, plus
   `aN`, `bN`, or `rcN` suffixes) on `main` are the only release version source;
   Hatchling and hatch-vcs derive package metadata from Git. GitHub Releases are

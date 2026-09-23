@@ -9,7 +9,6 @@ import yaml
 from sandbox.__main__ import (
     SECRET_FIELDS,
     SandboxFailure,
-    _delete_legacy_scram_256_user,
     _reject_legacy_topology,
     load_credentials,
     load_or_create_credentials,
@@ -200,16 +199,6 @@ class TestSandbox(unittest.TestCase):
             "apicurio-secure-kafka",
         ):
             self.assertEqual("simple", by_name[name]["spec"]["authorization"]["type"])
-
-    def test_scram_256_migration_deletes_only_the_legacy_managed_user(self) -> None:
-        with patch("sandbox.__main__._run") as run:
-            _delete_legacy_scram_256_user()
-
-        command = run.call_args.args[0]
-        self.assertEqual(
-            ("delete", "kafkauser/kantrip-scram-256", "--ignore-not-found", "--wait=true"),
-            command[-4:],
-        )
 
     def test_legacy_two_cluster_topology_requires_explicit_recreation(self) -> None:
         found = CompletedProcess(("kubectl",), 0, "kafka.kafka.strimzi.io/auth-kantrip\n", "")

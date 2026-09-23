@@ -88,7 +88,6 @@ def up() -> None:
         _apply_manifest("20-kafka.yaml", versions)
         _apply_manifest("21-kafka-users.yaml", versions)
         _wait_for_kafka()
-        _delete_legacy_scram_256_user()
         _delete_job("kafka-provisioning")
         _apply_manifest("23-kafka-provisioning.yaml", versions)
         _wait_for_job("kafka-provisioning", timeout="5m")
@@ -476,23 +475,6 @@ def _wait_for_kafka() -> None:
         "service-account-kantrip-kafka",
     ):
         _run((*base, "wait", f"kafkauser/{user}", "--for=condition=Ready", "--timeout=5m"))
-
-
-def _delete_legacy_scram_256_user() -> None:
-    """Hand the 256-only sandbox identity from Strimzi to the provisioning Job."""
-    _run(
-        (
-            "kubectl",
-            "--context",
-            KUBECTL_CONTEXT,
-            "-n",
-            NAMESPACE,
-            "delete",
-            "kafkauser/kantrip-scram-256",
-            "--ignore-not-found",
-            "--wait=true",
-        )
-    )
 
 
 def _delete_job(name: str) -> None:

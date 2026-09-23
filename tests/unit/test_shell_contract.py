@@ -116,9 +116,20 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 f"{shlex.quote(sys.executable)} -m kantrip.cli current",
                 *_adapter_commands(),
                 "kcat -F other.conf >/dev/null 2>&1 || echo __KCAT_OVERRIDE_OK__",
+                "kcat -b other.invalid:9092 >/dev/null 2>&1 || echo __KCAT_BOOTSTRAP_BLOCKED__",
+                "kcat -X security.protocol=PLAINTEXT >/dev/null 2>&1 || echo __KCAT_AUTH_BLOCKED__",
                 (
                     "kafka-topics --bootstrap-server other.invalid:9092 --list "
                     ">/dev/null 2>&1 || echo __KAFKA_OVERRIDE_OK__"
+                ),
+                (
+                    "kafka-console-consumer --consumer-property "
+                    "bootstrap.servers=other.invalid:9092 >/dev/null 2>&1 "
+                    "|| echo __JAVA_PROPERTY_BLOCKED__"
+                ),
+                (
+                    "kafka-console-consumer --command-config other.properties "
+                    ">/dev/null 2>&1 || echo __JAVA_CONFIG_BLOCKED__"
                 ),
                 (
                     "kaskade admin --config-file other.ini >/dev/null 2>&1 "
@@ -141,7 +152,11 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__STARTUP__loaded", output)
             self.assertIn("__PROFILE__contract", output)
             self.assertIn("__KCAT_OVERRIDE_OK__", output)
+            self.assertIn("__KCAT_BOOTSTRAP_BLOCKED__", output)
+            self.assertIn("__KCAT_AUTH_BLOCKED__", output)
             self.assertIn("__KAFKA_OVERRIDE_OK__", output)
+            self.assertIn("__JAVA_PROPERTY_BLOCKED__", output)
+            self.assertIn("__JAVA_CONFIG_BLOCKED__", output)
             self.assertIn("__KASKADE_OVERRIDE_OK__", output)
             self.assertIn("__SCHEMA_OVERRIDE_OK__", output)
             self.assertIn("contract\r\n", output)

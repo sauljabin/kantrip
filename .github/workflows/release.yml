@@ -111,9 +111,16 @@ jobs:
         with:
           subject-path: dist/*
 
+  e2e-tests:
+    name: E2E / exact release wheel
+    needs: build
+    uses: ./.github/workflows/e2e.yml
+    with:
+      candidate-artifact: release-bundle
+
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, attest-packages]
+    needs: [build, attest-packages, e2e-tests]
     runs-on: ubuntu-latest
     environment:
       name: release

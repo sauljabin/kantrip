@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -79,10 +80,32 @@ _KASKADE_CONNECTION_OPTIONS = (
     "--registry",
     "-b",
 )
-_KASKADE_SAFE_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
+_SAFE_RUNTIME_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
+_KAFKA_CLIENT_PROPERTY_OPTIONS = frozenset(
+    {"--command-property", "--consumer-property", "--producer-property"}
+)
+_KAFKA_FORMAT_PROPERTY_OPTIONS = frozenset(
+    {"--property", "--formatter-property", "--reader-property"}
+)
+_PROFILE_PROPERTY_PREFIXES = (
+    "sasl.",
+    "ssl.",
+    "https.",
+    "schema.registry.",
+    "basic.auth.",
+    "bearer.auth.",
+    "apicurio.registry.",
+)
+_PROFILE_PROPERTY_NAMES = frozenset(
+    {"bootstrap.servers", "security.protocol", "broker.list", "metadata.broker.list"}
+)
 _KAFKA_ALTERNATE_CONNECTION_OPTIONS = {
     **{
-        executable: ("--broker-list",)
+        executable: ("--command-config",)
+        for executable in KAFKA_CONSOLE_CONSUMER_EXECUTABLES | SCHEMA_REGISTRY_CONSUMER_EXECUTABLES
+    },
+    **{
+        executable: ("--command-config", "--broker-list")
         for executable in KAFKA_CONSOLE_PRODUCER_EXECUTABLES | SCHEMA_REGISTRY_PRODUCER_EXECUTABLES
     },
     **{
@@ -532,7 +555,7 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
                 if argument == "--kafka" and index + 1 < len(arguments)
                 else argument.removeprefix("--kafka=")
             )
-            if not _safe_kaskade_kafka_property(property_value):
+            if not _safe_runtime_kafka_property(property_value):
                 raise AdapterError(
                     "kaskade option '--kafka' cannot override the selected Kantrip profile"
                 )
@@ -549,16 +572,16 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
                 )
 
 
-def _safe_kaskade_kafka_property(value: str) -> bool:
+def _safe_runtime_kafka_property(value: str) -> bool:
     name, separator, setting = value.partition("=")
-    if not separator or not setting or name not in _KASKADE_SAFE_KAFKA_PROPERTIES:
+    if not separator or not setting or name not in _SAFE_RUNTIME_KAFKA_PROPERTIES:
         return False
     return name != "broker.address.family" or setting in {"v4", "v6", "any"}
 
 
 def _reject_kcat_overrides(executable: str, arguments: Sequence[str]) -> None:
     for index, argument in enumerate(arguments):
-        if argument in {"-F", "-r"} or argument.startswith(("-F", "-r")):
+        if argument.startswith(("-F", "-r", "-b")):
             option = argument[:2]
             raise AdapterError(
                 f"{executable} option '{option}' cannot override the selected Kantrip profile"
@@ -568,10 +591,12 @@ def _reject_kcat_overrides(executable: str, arguments: Sequence[str]) -> None:
             property_value = arguments[index + 1]
         elif argument.startswith("-X"):
             property_value = argument[2:]
-        if property_value is not None and property_value.startswith("schema.registry.url="):
+        if property_value is not None and not _safe_runtime_kafka_property(property_value):
             raise AdapterError(
-                f"{executable} Schema Registry URL cannot override the selected Kantrip profile"
+                f"{executable} option '-X' cannot override the selected Kantrip profile"
             )
+        if argument == "-X" and index + 1 >= len(arguments):
+            raise AdapterError(f"{executable} option '-X' requires a safe property")
 
 
 def _kcat_uses_schema_registry(arguments: Sequence[str]) -> bool:
@@ -674,47 +699,50 @@ def _reject_kafka_overrides(
         ),
         *_KAFKA_ALTERNATE_CONNECTION_OPTIONS.get(executable, ()),
     )
-    for argument in arguments:
+    for index, argument in enumerate(arguments):
         for option in connection_options:
             if argument == option or argument.startswith(f"{option}="):
                 raise AdapterError(
                     f"{executable} option '{option}' cannot override the selected Kantrip profile"
                 )
-    if executable in SCHEMA_REGISTRY_EXECUTABLES:
-        _reject_schema_registry_property_overrides(executable, arguments)
-
-
-def _reject_schema_registry_property_overrides(executable: str, arguments: Sequence[str]) -> None:
-    for index, argument in enumerate(arguments):
-        if argument in {
-            "--command-property",
-            "--producer-property",
-            "--consumer-property",
-        } or argument.startswith(
-            ("--command-property=", "--producer-property=", "--consumer-property=")
-        ):
-            raise AdapterError(
-                f"{executable} Kafka client properties cannot override the selected "
-                "Kantrip profile"
-            )
-        property_value: str | None = None
-        property_options = ("--property", "--formatter-property", "--reader-property")
-        matching_option = next(
-            (option for option in property_options if argument.startswith(f"{option}=")),
+        matching = next(
+            (
+                option
+                for option in _KAFKA_CLIENT_PROPERTY_OPTIONS | _KAFKA_FORMAT_PROPERTY_OPTIONS
+                if argument == option or argument.startswith(f"{option}=")
+            ),
             None,
         )
-        if matching_option is not None:
-            property_value = argument[len(matching_option) + 1 :]
-        elif argument in property_options and index + 1 < len(arguments):
-            property_value = arguments[index + 1]
-        property_name = property_value.split("=", 1)[0] if property_value is not None else None
-        if property_name == "bootstrap.servers" or (
-            property_name is not None and property_name.startswith("schema.registry.")
-        ):
-            raise AdapterError(
-                f"{executable} property '{property_name}' cannot override "
-                "the selected Kantrip profile"
+        if matching is None:
+            continue
+        value = (
+            arguments[index + 1]
+            if argument == matching and index + 1 < len(arguments)
+            else argument[len(matching) + 1 :] if argument.startswith(f"{matching}=") else ""
+        )
+        name, separator, setting = value.partition("=")
+        name = name.strip()
+        if not separator or not name or not setting:
+            raise AdapterError(f"{executable} option '{matching}' requires name=value")
+        if matching in _KAFKA_CLIENT_PROPERTY_OPTIONS:
+            safe_group = (
+                executable
+                in KAFKA_CONSOLE_CONSUMER_EXECUTABLES | SCHEMA_REGISTRY_CONSUMER_EXECUTABLES
+                and matching in {"--command-property", "--consumer-property"}
+                and name == "group.id"
             )
+            if not safe_group:
+                raise AdapterError(
+                    f"{executable} option '{matching}' cannot override the selected Kantrip profile"
+                )
+        elif _profile_owned_property(name):
+            raise AdapterError(
+                f"{executable} property '{name}' cannot override the selected Kantrip profile"
+            )
+
+
+def _profile_owned_property(name: str) -> bool:
+    return name in _PROFILE_PROPERTY_NAMES or name.startswith(_PROFILE_PROPERTY_PREFIXES)
 
 
 def _schema_registry_auxiliary_config_option(executable: str) -> str | None:
@@ -748,41 +776,10 @@ def _render_kafka_shim(
     preserve_schema_registry_opts: bool,
 ) -> str:
     auxiliary_config = _schema_registry_auxiliary_config_option(name)
-    rejected_options = (
-        bootstrap_option,
-        config_option,
-        *((auxiliary_config,) if auxiliary_config is not None else ()),
-        *_KAFKA_ALTERNATE_CONNECTION_OPTIONS.get(name, ()),
-    )
-    rejected_patterns = "|".join(
-        pattern for option in rejected_options for pattern in (option, f"{option}=*")
-    )
     registry_guard = ""
-    property_guard = ""
     registry_arguments = ""
     if schema_registry_required:
         registry_guard = _render_registry_shim_guard(name, registry, confluent_only=True)
-        property_guard = f"""previous_argument=
-for argument in "$@"; do
-  case "$previous_argument" in
-    --property|--formatter-property|--reader-property)
-    case "$argument" in
-      bootstrap.servers=*|schema.registry.*)
-        printf '%s\\n' '{name} properties cannot override the selected Kantrip profile' >&2
-        exit 2
-        ;;
-    esac
-    ;;
-  esac
-  case "$argument" in
-    --command-property|--command-property=*|--producer-property|--producer-property=*|--consumer-property|--consumer-property=*|--property=bootstrap.servers=*|--property=schema.registry.*|--formatter-property=bootstrap.servers=*|--formatter-property=schema.registry.*|--reader-property=bootstrap.servers=*|--reader-property=schema.registry.*)
-      printf '%s\\n' '{name} properties cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  previous_argument="$argument"
-done
-"""
         if registry is not None and registry.provider == CONFLUENT_PROVIDER:
             auxiliary_property = _schema_registry_auxiliary_property_option(name)
             assert auxiliary_property is not None
@@ -804,16 +801,16 @@ done
     )
     return f"""#!/bin/sh
 {java_environment}
-{registry_guard}{capability_guard}{property_guard}for argument in "$@"; do
-  case "$argument" in
-    {rejected_patterns})
-      printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-done
+{registry_guard}{capability_guard}{_adapter_guard_command(name)}
 exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers)} {config_option} {shlex.quote(str(java_config_path))}{auxiliary_arguments}{registry_arguments} "$@"
 """
+
+
+def _adapter_guard_command(name: str) -> str:
+    return (
+        f"{shlex.quote(sys.executable)} -I -m kantrip._adapter_guard "
+        f'{shlex.quote(name)} "$@" || exit $?'
+    )
 
 
 def _render_registry_shim_guard(
@@ -854,26 +851,10 @@ case "${{1-}}" in
   admin|consumer)
     command="$1"
     shift
+    {_adapter_guard_command('kaskade')}
     registry_deserializer=
     previous_argument=
     for argument in "$@"; do
-      if [ "$previous_argument" = --kafka ]; then
-        case "$argument" in
-          group.id=?*|broker.address.family=v4|broker.address.family=v6|broker.address.family=any) ;;
-          *)
-            printf '%s\\n' 'kaskade connection options cannot override the selected Kantrip profile' >&2
-            exit 2
-            ;;
-        esac
-      fi
-      case "$argument" in
-        --kafka|--kafka=group.id=?*|--kafka=broker.address.family=v4|--kafka=broker.address.family=v6|--kafka=broker.address.family=any)
-          ;;
-        -b|-b*|--bootstrap-servers|--bootstrap-servers=*|--config-file|--config-file=*|--kafka=*|--registry|--registry=*)
-          printf '%s\\n' 'kaskade connection options cannot override the selected Kantrip profile' >&2
-          exit 2
-          ;;
-      esac
       case "$previous_argument:$argument" in
         -k:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--key:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|-v:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--value:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy])
           registry_deserializer=1
@@ -909,27 +890,10 @@ def _render_kcat_shim(
     registry_url = shlex.quote(registry.url if registry is not None else "")
     return f"""#!/bin/sh
 export KCAT_CONFIG={shlex.quote(str(config_path))}
+{_adapter_guard_command(name)}
 schema_deserializer=
 previous_argument=
 for argument in "$@"; do
-  case "$argument" in
-    -F|-F*|-r|-r*)
-      printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  case "$previous_argument:$argument" in
-    -X:schema.registry.url=*)
-      printf '%s\\n' '{name} Schema Registry URL cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  case "$argument" in
-    -Xschema.registry.url=*)
-      printf '%s\\n' '{name} Schema Registry URL cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
   case "$previous_argument:$argument" in
     -s:avro|-s:key=avro|-s:value=avro)
       schema_deserializer=1

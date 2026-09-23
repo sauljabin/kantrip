@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -66,134 +68,8 @@ jobs:
 
   e2e-tests:
     name: E2E / Ubuntu / released clients
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Install operating-system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            build-essential dbus-x11 fish gnome-keyring kafkacat libcurl4-openssl-dev liblz4-dev \
-            libsasl2-dev libsecret-1-0 libssl-dev libzstd-dev openjdk-21-jre-headless zsh
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
-        with:
-          version: ${{ env.UV_VERSION }}
-          python-version: "3.13"
-          enable-cache: true
-      - name: Set up Kind
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
-        with:
-          install_only: true
-          version: v0.31.0
-          kubectl_version: v1.35.0
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
-        with:
-          version: v1.35.0
-      - name: Set up Helm
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with:
-          version: v4.1.1
-      - name: Sync dependencies
-        run: uv sync --locked
-      - name: Validate E2E Zsh startup
-        run: uv run --locked python -m tests.e2e.shell_environment
-      - name: Install pinned released client tools
-        run: |
-          set -euo pipefail
-          source tests/e2e/versions.env
-          tool_root="$RUNNER_TEMP/kantrip-e2e-tools"
-          mkdir -p "$tool_root/bin"
-          curl --fail --location --retry 3 \
-            "https://github.com/confluentinc/librdkafka/archive/refs/tags/v${LIBRDKAFKA_MIN_VERSION}.tar.gz" \
-            -o "$RUNNER_TEMP/librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz"
-          printf '%s  %s\n' "$LIBRDKAFKA_SOURCE_SHA256" \
-            "librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz" \
-            | (cd "$RUNNER_TEMP" && sha256sum --check -)
-          tar -xzf "$RUNNER_TEMP/librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz" -C "$tool_root"
-          (
-            cd "$tool_root/librdkafka-${LIBRDKAFKA_MIN_VERSION}"
-            ./configure --prefix="$tool_root/librdkafka"
-            make -j2 libs
-            make install
-          )
-          export LD_LIBRARY_PATH="$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          kcat -V
-          kcat -X list | grep -E '^https[.]ca[.]location[[:space:]]+[|]' > /dev/null
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          curl --fail --location --retry 3 \
-            "https://archive.apache.org/dist/kafka/${APACHE_KAFKA_VERSION}/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" \
-            -o "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz"
-          curl --fail --location --retry 3 \
-            "https://archive.apache.org/dist/kafka/${APACHE_KAFKA_VERSION}/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz.sha512" \
-            -o "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz.sha512"
-          apache_checksum="$(sed 's/^[^:]*: //' "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz.sha512" \
-            | tr -d '[:space:]')"
-          printf '%s  %s\n' "$apache_checksum" "kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" \
-            | (cd "$RUNNER_TEMP" && sha512sum --check -)
-          tar -xzf "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" -C "$tool_root"
-          curl --fail --location --retry 3 \
-            "https://packages.confluent.io/archive/8.3/confluent-${CONFLUENT_VERSION}.tar.gz" \
-            -o "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz"
-          curl --fail --location --retry 3 \
-            "https://packages.confluent.io/archive/8.3/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt" \
-            -o "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt"
-          (cd "$RUNNER_TEMP" && sha256sum --check "confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt")
-          tar -xzf "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz" -C "$tool_root"
-          ln -s "$(command -v kcat)" "$tool_root/bin/kafkacat"
-          UV_TOOL_DIR="$tool_root/uv" UV_TOOL_BIN_DIR="$tool_root/bin" \
-            uv tool install --python 3.13 "kaskade==${KASKADE_VERSION}"
-          {
-            echo "$tool_root/bin"
-            echo "$tool_root/confluent-${CONFLUENT_VERSION}/bin"
-            echo "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin"
-          } >> "$GITHUB_PATH"
-      - name: Build and install candidate wheel
-        run: |
-          set -euo pipefail
-          candidate_root="$RUNNER_TEMP/kantrip-candidate"
-          uv build --wheel --out-dir "$candidate_root/dist"
-          uv venv --python 3.13 "$candidate_root/venv"
-          uv pip install --python "$candidate_root/venv/bin/python" "$candidate_root"/dist/*.whl
-          echo "KANTRIP_E2E_KANTRIP=$candidate_root/venv/bin/kantrip" >> "$GITHUB_ENV"
-      - name: Run sandbox E2E with native Secret Service
-        env:
-          CI: "1"
-          E2E_SCRIPT: |
-            eval "$(printf "%s" "kantrip-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets)"
-            uv run --locked python -m sandbox up
-            uv run --locked python -m scripts.tests --suite e2e
-          KANTRIP_REQUIRED_SHELLS: bash,zsh,fish
-          NO_COLOR: "1"
-          PYTHON_KEYRING_BACKEND: keyring.backends.SecretService.Keyring
-        run: dbus-run-session -- bash -euo pipefail -c "$E2E_SCRIPT"
-      - name: Collect sanitized E2E diagnostics
-        if: always()
-        run: |
-          mkdir -p "$RUNNER_TEMP/e2e-diagnostics"
-          kubectl --context kind-kantrip-sandbox get pods,services,deployments,jobs \
-            --all-namespaces -o wide > "$RUNNER_TEMP/e2e-diagnostics/resources.txt" 2>&1 || true
-          kubectl --context kind-kantrip-sandbox -n kantrip-sandbox get events \
-            --sort-by=.lastTimestamp > "$RUNNER_TEMP/e2e-diagnostics/events.txt" 2>&1 || true
-          docker stats --no-stream > "$RUNNER_TEMP/e2e-diagnostics/docker-stats.txt" 2>&1 || true
-          docker system df > "$RUNNER_TEMP/e2e-diagnostics/docker-disk.txt" 2>&1 || true
-      - name: Upload E2E diagnostics
-        if: always()
-        uses: actions/upload-artifact@615b319bd27bb32c3d64dca6b6ed6974d5fbe653 # v6.0.0
-        with:
-          name: e2e-diagnostics
-          path: ${{ runner.temp }}/e2e-diagnostics
-          if-no-files-found: error
-          retention-days: 7
-      - name: Remove CI-owned sandbox
-        if: always()
-        run: uv run --locked python -m sandbox down
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
+    uses: ./.github/workflows/e2e.yml
 
   build:
     name: Package
@@ -231,9 +107,14 @@ jobs:
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
           E2E_RESULT: ${{ needs.e2e-tests.result }}
+          E2E_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'run-e2e') }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
-          test "$E2E_RESULT" = success
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$E2E_REQUESTED" != true ]]; then
+            test "$E2E_RESULT" = skipped
+          else
+            test "$E2E_RESULT" = success
+          fi
           test "$BUILD_RESULT" = success

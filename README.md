@@ -63,11 +63,11 @@ ACL-independent Kafka connectivity checks.
 
 ## Roadmap
 
-The [MVP roadmap](MVP.md) orders the remaining work into seven cohesive PRs,
-with technical decisions, CLI changes, acceptance criteria, and a manual
-first-release QA checklist. It covers secure Registry/OAuth connections,
-external input formats, additional clients,
-readability refactoring, a GitHub Pages site, and final documentation cleanup.
+The [MVP roadmap](MVP.md) tracks the remaining first-release work, including
+external input formats, additional clients, readability, a GitHub Pages site,
+and final documentation cleanup. Current secure Registry and OAuth support is
+described in [Compatibility](COMPATIBILITY.md); first-release manual checks live
+in [Manual Testing](MANUAL_TESTING.md) as each capability lands.
 Development contracts may change destructively before the first release; no
 compatibility with earlier development commits is promised.
 

@@ -560,6 +560,26 @@ class TestProfileSession(unittest.TestCase):
             ):
                 run_profile_session("local", self.profile, [executable, option], environment={})
 
+    def test_official_kafka_commands_keep_safe_runtime_and_resource_options(self) -> None:
+        cases = (
+            ("kafka-console-consumer", "--consumer-property", "group.id=manual-readers"),
+            ("kafka-console-consumer", "--property", "print.key=true"),
+            ("kafka-configs", "--add-config", "retention.ms=1000"),
+        )
+        for executable, option, value in cases:
+            with (
+                self.subTest(executable=executable, option=option),
+                patch("kantrip.session.shutil.which", return_value=f"/opt/kafka/{executable}"),
+                patch(
+                    "kantrip.session._run_child",
+                    return_value=subprocess.CompletedProcess([executable], 0),
+                ) as run,
+            ):
+                run_profile_session(
+                    "local", self.profile, [executable, option, value], environment={}
+                )
+                self.assertIn(value, run.call_args.args[0])
+
     def test_adapts_all_schema_registry_console_commands(self) -> None:
         adapters = {
             "kafka-avro-console-consumer": (
@@ -876,6 +896,7 @@ class TestProfileSession(unittest.TestCase):
     def test_schema_registry_commands_reject_connection_property_overrides(self) -> None:
         cases = (
             ("--property", "schema.registry.url=http://other.invalid:8081"),
+            ("--property", " schema.registry.url =http://other.invalid:8081"),
             ("--property=schema.registry.url=http://other.invalid:8081",),
             ("--formatter-property", "schema.registry.url=http://other.invalid:8081"),
             ("--reader-property=schema.registry.bearer.auth.token=other",),
@@ -884,6 +905,9 @@ class TestProfileSession(unittest.TestCase):
             ("--producer-property", "bootstrap.servers=other.invalid:9092"),
             ("--consumer-property=bootstrap.servers=other.invalid:9092",),
             ("--producer.config=other.properties",),
+            ("--command-config=other.properties",),
+            ("--formatter-property", "sasl.jaas.config=other"),
+            ("--reader-property", "ssl.truststore.location=other"),
         )
         for arguments in cases:
             with (
@@ -912,6 +936,22 @@ class TestProfileSession(unittest.TestCase):
                 environment={},
             )
         run.assert_not_called()
+
+    def test_schema_registry_consumer_keeps_runtime_group_id(self) -> None:
+        with (
+            patch("kantrip.session.shutil.which", return_value="/opt/confluent/client"),
+            patch(
+                "kantrip.session._run_child",
+                return_value=subprocess.CompletedProcess(["kafka-avro-console-consumer"], 0),
+            ) as run,
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kafka-avro-console-consumer", "--consumer-property", "group.id=readers"],
+                environment={},
+            )
+        self.assertIn("group.id=readers", run.call_args.args[0])
 
     def test_schema_registry_command_requires_registry_configuration(self) -> None:
         del self.profile["registry"]
@@ -1594,6 +1634,11 @@ class TestProfileSession(unittest.TestCase):
             ("-F", "other.conf"),
             ("-r", "http://other.invalid:8081"),
             ("-X", "schema.registry.url=http://other.invalid:8081"),
+            ("-b", "other.invalid:9092"),
+            ("-bother.invalid:9092",),
+            ("-X", "security.protocol=PLAINTEXT"),
+            ("-Xsasl.username=other",),
+            ("-X", "dump"),
         ):
             with (
                 self.subTest(arguments=arguments),
@@ -1601,6 +1646,22 @@ class TestProfileSession(unittest.TestCase):
                 self.assertRaisesRegex(SessionError, "cannot override"),
             ):
                 run_profile_session("local", self.profile, ["kcat", *arguments], environment={})
+
+    def test_kcat_keeps_safe_group_and_address_family_properties(self) -> None:
+        with (
+            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+            patch(
+                "kantrip.session._run_child",
+                return_value=subprocess.CompletedProcess(["kcat"], 0),
+            ) as run,
+        ):
+            run_profile_session(
+                "local",
+                self.profile,
+                ["kcat", "-C", "-X", "group.id=readers", "-Xbroker.address.family=v4"],
+                environment={},
+            )
+        self.assertIn("group.id=readers", run.call_args.args[0])
 
     def test_kcat_avro_deserializer_uses_profile_registry_url(self) -> None:
         with (

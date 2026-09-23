@@ -834,6 +834,69 @@ uv run --locked kantrip describe sandbox-apicurio
 uv run --locked python -m scripts.tests --suite e2e
 ```
 
+Create the human QA profiles below in the private sandbox database. Enter each
+Registry password or OAuth client secret only at Kantrip's no-echo prompt;
+never pass a secret as a command argument or print the sourced variables.
+
+```bash
+uv run --locked kantrip add qa-registry-basic -b localhost:9092 \
+  --registry-provider confluent --registry-url https://localhost:8083 \
+  --registry-ca-file sandbox/.state/ca.crt --registry-auth basic \
+  --registry-username "$KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME"
+uv run --locked kantrip add qa-registry-oauth -b localhost:9092 \
+  --registry-provider confluent --registry-url https://localhost:8085 \
+  --registry-ca-file sandbox/.state/ca.crt --registry-auth oauth \
+  --registry-oauth-token-url https://localhost:8443/realms/kantrip/protocol/openid-connect/token \
+  --registry-oauth-client-id "$KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID" \
+  --registry-oauth-ca-file sandbox/.state/ca.crt \
+  --registry-oauth-logical-cluster lsrc-sandbox
+uv run --locked kantrip add qa-registry-mtls -b localhost:9092 \
+  --registry-provider confluent --registry-url https://localhost:8086 \
+  --registry-ca-file sandbox/.state/ca.crt --registry-auth mtls \
+  --registry-client-certificate-file "$KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE" \
+  --registry-client-key-file "$KANTRIP_SANDBOX_REGISTRY_MTLS_KEY"
+uv run --locked kantrip add qa-apicurio-basic -b localhost:9092 \
+  --registry-provider apicurio \
+  --registry-url https://localhost:8084/apis/registry/v3 \
+  --registry-ca-file sandbox/.state/ca.crt --registry-auth basic \
+  --registry-username "$KANTRIP_SANDBOX_APICURIO_CLIENT_ID"
+uv run --locked kantrip add qa-apicurio-oauth -b localhost:9092 \
+  --registry-provider apicurio \
+  --registry-url https://localhost:8084/apis/registry/v3 \
+  --registry-ca-file sandbox/.state/ca.crt --registry-auth oauth \
+  --registry-oauth-token-url https://localhost:8443/realms/kantrip/protocol/openid-connect/token \
+  --registry-oauth-client-id "$KANTRIP_SANDBOX_APICURIO_CLIENT_ID" \
+  --registry-oauth-ca-file sandbox/.state/ca.crt \
+  --registry-oauth-scope openid
+```
+
+Run the same user-facing read probe for every profile, then test one wrong
+password through Kantrip's replacement prompt and restore it through the same
+prompt. The Kafka part must retain its result when Registry authentication
+fails. Remove these exact test profiles afterward with `kantrip remove NAME`.
+
+```bash
+for profile in qa-registry-basic qa-registry-oauth qa-registry-mtls \
+  qa-apicurio-basic qa-apicurio-oauth; do
+  uv run --locked kantrip ping "$profile"
+  uv run --locked kantrip describe "$profile" --output json
+done
+uv run --locked kantrip edit qa-registry-basic --replace-secret registry/password
+uv run --locked kantrip ping qa-registry-basic
+uv run --locked kantrip edit qa-registry-basic --replace-secret registry/password
+uv run --locked kantrip ping qa-registry-basic
+```
+
+The first replacement intentionally uses a wrong synthetic password; the
+second restores the generated sandbox password, both entered without echo.
+For each authenticated profile, a successful Registry result proves only the
+documented list/search read and the anonymous denial on that exact route.
+Kantrip's normal output must not contain credentials. The fixed-bearer mode
+has no sandbox issuer fixture, and the native Apicurio mTLS profile has no
+server-required mTLS fixture here; record those manual cells as unsupported
+by this laboratory, not as passes. The automated E2E matrix covers real
+Confluent console and Kaskade Registry decoding and long-lived OAuth renewal.
+
 Refresh the short-lived OAuth bearer sessions without printing either client
 secrets or tokens:
 

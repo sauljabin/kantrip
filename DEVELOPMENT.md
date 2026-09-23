@@ -34,6 +34,14 @@ uv sync --locked
 uv run pre-commit install
 ```
 
+The pre-commit hook builds a wheel from Git's staged index in a temporary
+checkout, installs that wheel into a separate environment, and runs the full
+E2E suite against the already-running sandbox. Provision the sandbox and pinned
+released clients first; a missing native keyring or service is a failed hook,
+not a skipped test. The hook links the existing private sandbox state into its
+temporary checkout without copying or caching secrets. Record the elapsed time
+before claiming a local performance target.
+
 Run the editable CLI directly from the checkout:
 
 ```bash
@@ -141,9 +149,12 @@ uv run --locked keyring diagnose
 uv run --locked kantrip doctor --verbose
 ```
 
-Tests must inject synthetic in-memory implementations of Kantrip's narrow
+Offline unit tests inject synthetic in-memory implementations of Kantrip's narrow
 `SecretStore` protocol. They must not read or modify a developer's real
-credential store.
+credential store. The separate E2E suite intentionally exercises an approved
+native backend: macOS Keychain locally or a real Secret Service session on
+Linux CI. Its temporary credentials and profiles are owned and cleaned by the
+suite; it does not substitute a fake keyring.
 
 Secret-bearing profile changes use the transaction engine in
 `kantrip/credential_mutations.py`. Each replacement receives a new credential
@@ -301,6 +312,15 @@ clients, creates isolated profiles and exact test-owned topics/schemas/artifacts
 and leaves the sandbox running. CI runs the same command on Ubuntu with a real
 DBus Secret Service/GNOME Keyring session and always collects sanitized resource
 diagnostics before removing its CI-owned sandbox.
+The full hosted E2E matrix runs on `main` pushes and explicit workflow dispatch,
+not on every pull request. Maintainers can opt a draft pull request in by adding
+the `run-e2e` label; remove it after the one-off hosted check. Release publishing
+requires another complete E2E run
+against the exact wheel built and verified by the tag's build job. The hosted
+client cache is keyed by OS, architecture, pinned versions, and workflow setup;
+only checksum-verified downloaded clients and builds are saved, never sandbox
+state or credentials. Pull requests still run quality, the full Python/OS unit
+matrix, and package verification.
 The E2E Zsh launcher skips host-global startup files with Zsh's `-d` option to
 avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs.
 

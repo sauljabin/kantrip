@@ -60,7 +60,9 @@ release authorization, requesting it only if absent.
   store rather than Kantrip's development environment.
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,
   including the supported Python and Linux/macOS matrix and packaging jobs.
-  Refresh evidence for changes made during release preparation.
+  Confirm a separate full [E2E acceptance](.github/workflows/e2e.yml) run for
+  the candidate commit; pull-request CI does not run it. Refresh evidence for
+  changes made during release preparation.
 - [ ] Build and verify the wheel and source distribution using
   [Build artifacts](DEVELOPMENT.md#build-artifacts). Install the wheel in an
   isolated environment and smoke-test `kantrip --version`, `kantrip --help`, and
@@ -133,8 +135,9 @@ release authorization, requesting it only if absent.
   [Release](DEVELOPMENT.md#release) for a clean, current `main`, tag creation,
   protected approvals, and failure recovery.
 - [ ] Follow the [release workflow](.github/workflows/release.yml) through tag
-  validation, artifact verification, attestation, and protected publishing.
-  Preserve its build-once distribution bundle and review generated release notes.
+  validation, artifact verification, complete E2E against the exact built wheel,
+  attestation, and protected publishing. Preserve its build-once distribution
+  bundle and review generated release notes.
 - [ ] Verify the expected version is available on PyPI and installs successfully
   in an isolated environment; check version reporting, CLI help, and diagnostics.
 - [ ] Verify the GitHub release tag, prerelease status when applicable,
