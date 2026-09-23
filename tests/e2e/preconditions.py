@@ -43,6 +43,7 @@ def check_preconditions(environment: Mapping[str, str]) -> None:
         versions["KCAT_MACOS_VERSION"] if sys.platform == "darwin" else versions["KCAT_VERSION"]
     )
     _require_exact_version("kcat", ("kcat", "-V"), kcat_version)
+    _require_librdkafka_version(versions["LIBRDKAFKA_MIN_VERSION"])
     _require_sandbox_files()
     _wait_for_workloads()
     _require_host_endpoints()
@@ -76,6 +77,18 @@ def _require_exact_version(name: str, command: Sequence[str], expected: str) -> 
     output = f"{result.stdout}\n{result.stderr}"
     if result.returncode != 0 or re.search(rf"(?<!\d){re.escape(expected)}(?!\d)", output) is None:
         raise E2ESetupError(f"{name} {expected} is required by {VERSIONS_FILE}")
+
+
+def _require_librdkafka_version(minimum: str) -> None:
+    result = subprocess.run(("kcat", "-V"), capture_output=True, text=True, check=False, timeout=15)
+    output = f"{result.stdout}\n{result.stderr}"
+    match = re.search(r"librdkafka (\d+)\.(\d+)\.(\d+)", output)
+    if (
+        result.returncode != 0
+        or match is None
+        or tuple(map(int, match.groups())) < tuple(map(int, minimum.split(".")))
+    ):
+        raise E2ESetupError(f"kcat must link librdkafka >= {minimum}; found: {output.strip()}")
 
 
 def _require_sandbox_files() -> None:

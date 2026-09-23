@@ -308,7 +308,7 @@ avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs
 
 | Area | Released clients and operation evidence |
 | --- | --- |
-| Kafka plaintext | Apache Kafka 4.3.1 and Confluent Platform 8.3.1 topic/admin, producer, consumer, group, config, ACL, and broker-API commands; kcat/kafkacat 1.7.0 on macOS and 1.7.1 on Ubuntu for metadata/produce/consume; Kaskade 5.0.1 admin/consume; Bash, Zsh, and Fish sessions |
+| Kafka plaintext | Apache Kafka 4.3.1 and Confluent Platform 8.3.1 topic/admin, producer, consumer, group, config, ACL, and broker-API commands; kcat/kafkacat 1.7.0 on macOS and 1.7.1 on Ubuntu linked against librdkafka 2.6.1+ for metadata/produce/consume; Kaskade 5.0.1 admin/consume; Bash, Zsh, and Fish sessions |
 | Kafka authentication | Verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth profiles; real Java produce/consume, librdkafka metadata, all three shells, prefix ACL denial, and no-resource-ACL ping proof |
 | Schema formats | Confluent Avro, JSON Schema, and Protobuf console producer/consumer pairs with decoded markers and exact topic cleanup |
 | Registry security | Confluent Basic, OAuth, and mTLS plus native Apicurio Basic and OAuth profile probes; invalid credentials/identity/CA/hostname and anonymous-access controls |

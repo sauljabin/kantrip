@@ -78,7 +78,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            dbus-x11 fish gnome-keyring kafkacat libsecret-1-0 openjdk-21-jre-headless zsh
+            build-essential dbus-x11 fish gnome-keyring kafkacat libcurl4-openssl-dev liblz4-dev \
+            libsasl2-dev libsecret-1-0 libssl-dev libzstd-dev openjdk-21-jre-headless zsh
       - name: Set up uv and Python
         uses: astral-sh/setup-uv@v10.1.0
         with:
@@ -109,6 +110,22 @@ jobs:
           source tests/e2e/versions.env
           tool_root="$RUNNER_TEMP/kantrip-e2e-tools"
           mkdir -p "$tool_root/bin"
+          curl --fail --location --retry 3 \
+            "https://github.com/confluentinc/librdkafka/archive/refs/tags/v${LIBRDKAFKA_MIN_VERSION}.tar.gz" \
+            -o "$RUNNER_TEMP/librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz"
+          printf '%s  %s\n' "$LIBRDKAFKA_SOURCE_SHA256" \
+            "librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz" \
+            | (cd "$RUNNER_TEMP" && sha256sum --check -)
+          tar -xzf "$RUNNER_TEMP/librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz" -C "$tool_root"
+          (
+            cd "$tool_root/librdkafka-${LIBRDKAFKA_MIN_VERSION}"
+            ./configure --prefix="$tool_root/librdkafka"
+            make -j2
+            make install
+          )
+          export LD_LIBRARY_PATH="$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          kcat -V
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
           curl --fail --location --retry 3 \
             "https://archive.apache.org/dist/kafka/${APACHE_KAFKA_VERSION}/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" \
             -o "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz"
