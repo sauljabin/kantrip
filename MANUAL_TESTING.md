@@ -688,15 +688,29 @@ internal TLS/SCRAM-SHA-512 listener on port 9099.
 
 ### Setup
 
-Start the Kubernetes sandbox and load the generated environment in this shell.
-Repeat the command here deliberately so this section can be run independently:
+Start the Kubernetes sandbox and create a private directory for this section.
+The helper reads one Kubernetes Secret field, but must never be invoked alone
+for a password or key: capture public identifiers in command substitutions and
+redirect certificate material to private files. This setup is independent of
+the Registry section below.
 
 ```bash
-set +a
-. sandbox/.state/credentials.env
+uv run --locked python -m sandbox up
+umask 077
+export KANTRIP_MANUAL_KAFKA_ROOT="$PWD/sandbox/.state/manual-kafka"
+install -d -m 700 "$KANTRIP_MANUAL_KAFKA_ROOT"
+export KANTRIP_DATABASE="$KANTRIP_MANUAL_KAFKA_ROOT/profiles.db"
+sandbox_secret_field() {
+  kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+    get secret "$1" -o json |
+    python3 -c 'import base64, json, sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["data"][sys.argv[1]]))' "$2"
+}
+export KANTRIP_SANDBOX_CA="$KANTRIP_MANUAL_KAFKA_ROOT/ca.crt"
+sandbox_secret_field sandbox-root-ca ca.crt > "$KANTRIP_SANDBOX_CA"
 ```
 
-The lifecycle tool has already written private Java client properties.
+The sandbox lifecycle also wrote private Java client properties below
+`sandbox/.state`. Do not display those files or export their contents.
 
 ### Exercise
 
@@ -707,22 +721,43 @@ sandbox. It includes Bash, Zsh, and Fish:
 uv run --locked python -m scripts.tests --suite e2e
 ```
 
-Exercise plaintext, server-authenticated TLS, SCRAM-SHA-512, and mTLS through
-Kantrip:
+#### Plaintext, no authentication
+
+This listener has neither TLS nor a credential, so no Kubernetes value is
+needed. `ping` should prove broker connectivity only.
 
 ```bash
-export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
 uv run --locked kantrip add sandbox-plaintext \
   --bootstrap-servers localhost:9092
 uv run --locked kantrip ping sandbox-plaintext
+```
 
+#### Verified TLS, no client authentication
+
+The CA file in the shared setup comes from `secret/sandbox-root-ca` key
+`ca.crt`. The broker certificate must verify without `--insecure` or disabled
+hostname checks.
+
+```bash
 uv run --locked kantrip add sandbox-tls \
   --bootstrap-servers localhost:9093 \
   --transport tls \
   --ca-file "$KANTRIP_SANDBOX_CA"
 uv run --locked kantrip ping sandbox-tls
 uv run --locked kantrip exec sandbox-tls -- kafka-topics --list
+```
 
+#### SCRAM-SHA-512 over verified TLS
+
+The public username is the Strimzi `kantrip-scram` KafkaUser Secret's name. At
+Kantrip's no-echo password prompt use that Secret's `password` field; do not
+print it or put it in a command argument.
+
+```bash
+export KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME="$(
+  kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+    get secret kantrip-scram -o jsonpath='{.metadata.name}'
+)"
 uv run --locked kantrip add sandbox-scram \
   --bootstrap-servers localhost:9094 \
   --transport tls \
@@ -731,7 +766,21 @@ uv run --locked kantrip add sandbox-scram \
   --username "$KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"
 uv run --locked kantrip ping sandbox-scram
 uv run --locked kantrip exec sandbox-scram -- kafka-topics --list
+```
 
+Expect an authenticated broker connection and resource results bounded by
+this principal's ACLs.
+
+#### Kafka client mTLS
+
+Write `secret/kantrip-mtls` keys `user.crt` and `user.key` to private files. The
+shell variables hold only paths; Kantrip validates the certificate/key pair.
+
+```bash
+export KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE="$KANTRIP_MANUAL_KAFKA_ROOT/user.crt"
+export KANTRIP_SANDBOX_KAFKA_MTLS_KEY="$KANTRIP_MANUAL_KAFKA_ROOT/user.key"
+sandbox_secret_field kantrip-mtls user.crt > "$KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE"
+sandbox_secret_field kantrip-mtls user.key > "$KANTRIP_SANDBOX_KAFKA_MTLS_KEY"
 uv run --locked kantrip add sandbox-mtls \
   --bootstrap-servers localhost:9095 \
   --transport tls \
@@ -743,24 +792,126 @@ uv run --locked kantrip ping sandbox-mtls
 uv run --locked kantrip exec sandbox-mtls -- kafka-topics --list
 ```
 
-At the SCRAM password prompt, enter the generated
-`KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD` through a secure terminal paste without
-printing it. The E2E suite creates the equivalent OAuth profile through
-Kantrip's no-echo client-secret prompt and exercises both Java and librdkafka;
-the property command below remains an independent fixture check.
+Expect verified server TLS plus the configured client identity. A mismatched
+key should be rejected before the profile is changed.
+
+#### SASL/PLAIN over verified TLS
+
+The username comes from `secret/kafka-custom-users` key `plain-username`; use
+the matching `plain-password` only at Kantrip's no-echo prompt. PLAIN here is
+authenticated and encrypted, unlike the plaintext listener above.
+
+```bash
+export KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME="$(
+  sandbox_secret_field kafka-custom-users plain-username
+)"
+uv run --locked kantrip add sandbox-plain \
+  --bootstrap-servers localhost:9097 \
+  --transport tls \
+  --ca-file "$KANTRIP_SANDBOX_CA" \
+  --auth plain \
+  --username "$KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME"
+uv run --locked kantrip ping sandbox-plain
+uv run --locked kantrip exec sandbox-plain -- kafka-topics --list
+```
+
+Expect an authenticated broker connection; neither the command line nor
+Kantrip output should contain the password.
+
+#### SCRAM-SHA-256 over verified TLS
+
+The provisioning Job owns this identity. Read only the username from
+`secret/kafka-custom-users` key `scram-256-username`; enter the matching
+`scram-256-password` at the no-echo prompt.
+
+```bash
+export KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME="$(
+  sandbox_secret_field kafka-custom-users scram-256-username
+)"
+uv run --locked kantrip add sandbox-scram-256 \
+  --bootstrap-servers localhost:9098 \
+  --transport tls \
+  --ca-file "$KANTRIP_SANDBOX_CA" \
+  --auth scram-sha-256 \
+  --username "$KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME"
+uv run --locked kantrip ping sandbox-scram-256
+uv run --locked kantrip exec sandbox-scram-256 -- kafka-topics --list
+```
+
+Expect success before and after the broker restart below, without rerunning
+the provisioning Job.
+
+#### Kafka OAuth
+
+`secret/keycloak-realm` key `realm.json` contains the client ID and secret.
+Extract only the public ID here, then enter its matching secret at Kantrip's
+no-echo prompt. The token endpoint and broker use the sandbox CA.
+
+```bash
+export KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID="$(
+  sandbox_secret_field keycloak-realm realm.json |
+    python3 -c 'import json, sys; print(next(c["clientId"] for c in json.load(sys.stdin)["clients"] if c["clientId"].endswith("-kafka")))'
+)"
+uv run --locked kantrip add sandbox-oauth \
+  --bootstrap-servers localhost:9096 \
+  --transport tls \
+  --ca-file "$KANTRIP_SANDBOX_CA" \
+  --auth oauth \
+  --oauth-token-url https://localhost:8443/realms/kantrip/protocol/openid-connect/token \
+  --oauth-client-id "$KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID" \
+  --oauth-ca-file "$KANTRIP_SANDBOX_CA"
+uv run --locked kantrip ping sandbox-oauth
+uv run --locked kantrip exec sandbox-oauth -- kafka-topics --list
+```
+
+Expect broker authentication and only the OAuth principal's permitted resource
+operations. The E2E suite keeps Java and librdkafka clients alive across token
+expiry and revocation; a one-shot `ping` does not prove refresh.
+
+For all password and OAuth cases, the named Kubernetes field has the matching
+value in private `sandbox/.state/credentials.env`, generated by `sandbox up`.
+Transfer it to Kantrip's no-echo prompt through your approved private manual
+procedure. Never print it in a terminal, put it in shell history or arguments,
+or export it to child processes.
 
 Exercise the prepared authenticated listeners directly with the official Kafka
-CLI. These property files contain credentials and must remain private:
+CLI. These property files contain credentials and must remain private. Each
+check is independent of the Kantrip profile created above.
+
+#### Native SCRAM-SHA-512 client
 
 ```bash
 kafka-topics --bootstrap-server localhost:9094 \
   --command-config sandbox/.state/kafka-scram.properties --list
+```
+
+#### Native mTLS client
+
+```bash
 kafka-topics --bootstrap-server localhost:9095 \
   --command-config sandbox/.state/kafka-mtls.properties --list
+```
+
+#### Native SASL/PLAIN client
+
+```bash
 kafka-topics --bootstrap-server localhost:9097 \
   --command-config sandbox/.state/kafka-plain.properties --list
+```
+
+#### Native SCRAM-SHA-256 client
+
+```bash
 kafka-topics --bootstrap-server localhost:9098 \
   --command-config sandbox/.state/kafka-scram-256.properties --list
+```
+
+#### Native Kafka OAuth client
+
+The JVM option permits the sandbox token endpoint without disabling TLS
+verification; the private properties file supplies the client credentials.
+
+```bash
 KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://localhost:8443/realms/kantrip/protocol/openid-connect/token' \
   kafka-topics --bootstrap-server localhost:9096 \
   --command-config sandbox/.state/kafka-oauth.properties --list
@@ -799,6 +950,15 @@ uv run --locked python -m scripts.tests --suite e2e
 - Wrong credentials, client identity, CA, hostname, and unavailable broker
   cases fail cleanly without revealing credential values.
 
+After recording results, remove only the seven manual Kafka profiles:
+
+```bash
+for profile in sandbox-plaintext sandbox-tls sandbox-scram sandbox-mtls \
+  sandbox-plain sandbox-scram-256 sandbox-oauth; do
+  uv run --locked kantrip remove "$profile" --force
+done
+```
+
 ## Exercise authenticated registries
 
 The authenticated Registry endpoints require HTTPS. Schema Registry exposes
@@ -809,18 +969,30 @@ credentials and tokens do not appear in command arguments.
 
 ### Setup
 
-Start the sandbox and load the generated environment in this shell:
+Start the sandbox, then prepare a private manual-test directory. This helper
+reads one Kubernetes Secret field; use it only in command substitutions or
+redirects, never by itself for a password or private key. It does not print a
+whole Secret or store credentials in command arguments.
 
 ```bash
-set +a
-. sandbox/.state/credentials.env
+uv run --locked python -m sandbox up
+umask 077
+export KANTRIP_MANUAL_SANDBOX_ROOT="$PWD/sandbox/.state/manual-registry"
+install -d -m 700 "$KANTRIP_MANUAL_SANDBOX_ROOT"
+export KANTRIP_DATABASE="$KANTRIP_MANUAL_SANDBOX_ROOT/profiles.db"
+sandbox_secret_field() {
+  kubectl --context kind-kantrip-sandbox -n kantrip-sandbox \
+    get secret "$1" -o json |
+    python3 -c 'import base64, json, sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["data"][sys.argv[1]]))' "$2"
+}
+export KANTRIP_SANDBOX_CA="$KANTRIP_MANUAL_SANDBOX_ROOT/ca.crt"
+sandbox_secret_field sandbox-root-ca ca.crt > "$KANTRIP_SANDBOX_CA"
 ```
 
-Create profiles for the two baseline Registry endpoints, then run the complete
-authenticated profile matrix:
+Run the automated matrix separately; it supplements the human checks below.
+For a baseline comparison without Registry authentication, create two profiles:
 
 ```bash
-export KANTRIP_DATABASE="$PWD/sandbox/.state/profiles.db"
 uv run --locked kantrip add sandbox-schema-registry \
   --bootstrap-servers localhost:9092 \
   --registry-provider confluent \
@@ -834,61 +1006,153 @@ uv run --locked kantrip describe sandbox-apicurio
 uv run --locked python -m scripts.tests --suite e2e
 ```
 
-Create the human QA profiles below in the private sandbox database. Enter each
-Registry password or OAuth client secret only at Kantrip's no-echo prompt;
-never pass a secret as a command argument or print the sourced variables.
+Each case below starts from the shared setup and uses a distinct profile. The
+Kubernetes commands capture only public IDs in shell variables. At Kantrip's
+no-echo prompt, supply the matching private value generated by `sandbox up`;
+the exact Kubernetes source is named in each case. Do not print Secret content,
+put a password in an argument, or export it into child environments.
+
+#### Confluent Schema Registry Basic
+
+`schema-registry-auth/password.properties` contains the Basic identity. Extract
+only the username; use its matching password at Kantrip's no-echo prompt. The
+same value is in the private `sandbox/.state/credentials.env` generated by the
+sandbox lifecycle.
 
 ```bash
+export KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME="$(
+  sandbox_secret_field schema-registry-auth password.properties |
+    python3 -c 'import sys; print(sys.stdin.readline().split(": ", 1)[0])'
+)"
 uv run --locked kantrip add qa-registry-basic -b localhost:9092 \
   --registry-provider confluent --registry-url https://localhost:8083 \
-  --registry-ca-file sandbox/.state/ca.crt --registry-auth basic \
+  --registry-ca-file "$KANTRIP_SANDBOX_CA" --registry-auth basic \
   --registry-username "$KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME"
+uv run --locked kantrip ping qa-registry-basic
+uv run --locked kantrip describe qa-registry-basic --output json
+```
+
+Expect Kafka and Registry success with no password in output. To test failure,
+replace `registry/password` with a wrong synthetic value at the prompt, run
+`ping`, then repeat the replacement with the original sandbox password. Kafka
+must retain its successful result while Registry fails, and both must succeed
+after restoration:
+
+```bash
+uv run --locked kantrip edit qa-registry-basic --replace-secret registry/password
+uv run --locked kantrip ping qa-registry-basic
+uv run --locked kantrip edit qa-registry-basic --replace-secret registry/password
+uv run --locked kantrip ping qa-registry-basic
+```
+
+#### Confluent Schema Registry OAuth
+
+The client ID and secret are in `keycloak-realm/realm.json`. Parse the public ID
+without printing the embedded client secret; enter that secret at Kantrip's
+no-echo prompt. The Registry and token endpoint both use the sandbox CA.
+
+```bash
+export KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID="$(
+  sandbox_secret_field keycloak-realm realm.json |
+    python3 -c 'import json, sys; print(next(c["clientId"] for c in json.load(sys.stdin)["clients"] if c["clientId"].endswith("-schema-registry")))'
+)"
 uv run --locked kantrip add qa-registry-oauth -b localhost:9092 \
   --registry-provider confluent --registry-url https://localhost:8085 \
-  --registry-ca-file sandbox/.state/ca.crt --registry-auth oauth \
+  --registry-ca-file "$KANTRIP_SANDBOX_CA" --registry-auth oauth \
   --registry-oauth-token-url https://localhost:8443/realms/kantrip/protocol/openid-connect/token \
   --registry-oauth-client-id "$KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID" \
-  --registry-oauth-ca-file sandbox/.state/ca.crt \
+  --registry-oauth-ca-file "$KANTRIP_SANDBOX_CA" \
   --registry-oauth-logical-cluster lsrc-sandbox
+uv run --locked kantrip ping qa-registry-oauth
+uv run --locked kantrip describe qa-registry-oauth --output json
+```
+
+Expect the protected `/subjects?limit=1` read and anonymous-denial control to
+succeed. This one-shot ping does not prove token renewal; the E2E matrix tests
+expiry and revocation in a long-lived client.
+
+#### Confluent Schema Registry mTLS
+
+Read the client certificate and key from `secret/registry-mtls-client` into
+private files. The exported variables name files, never the key bytes.
+
+```bash
+export KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE="$KANTRIP_MANUAL_SANDBOX_ROOT/registry-client.crt"
+export KANTRIP_SANDBOX_REGISTRY_MTLS_KEY="$KANTRIP_MANUAL_SANDBOX_ROOT/registry-client.key"
+sandbox_secret_field registry-mtls-client tls.crt > "$KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE"
+sandbox_secret_field registry-mtls-client tls.key > "$KANTRIP_SANDBOX_REGISTRY_MTLS_KEY"
 uv run --locked kantrip add qa-registry-mtls -b localhost:9092 \
   --registry-provider confluent --registry-url https://localhost:8086 \
-  --registry-ca-file sandbox/.state/ca.crt --registry-auth mtls \
+  --registry-ca-file "$KANTRIP_SANDBOX_CA" --registry-auth mtls \
   --registry-client-certificate-file "$KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE" \
   --registry-client-key-file "$KANTRIP_SANDBOX_REGISTRY_MTLS_KEY"
+uv run --locked kantrip ping qa-registry-mtls
+uv run --locked kantrip describe qa-registry-mtls --output json
+```
+
+Expect verified TLS and the configured client-certificate exchange. Repeat a
+probe without a client certificate against this server-required mTLS fixture to
+confirm denial; do not interpret a server that merely requests an optional
+certificate as proof of client authentication.
+
+#### Native Apicurio Basic
+
+The public client ID is `registry-clients/apicurio-client-id`; its matching
+password is `registry-clients/apicurio-client-secret`. Capture only the ID in a
+shell variable and enter the secret at Kantrip's no-echo prompt.
+
+```bash
+export KANTRIP_SANDBOX_APICURIO_CLIENT_ID="$(
+  sandbox_secret_field registry-clients apicurio-client-id
+)"
 uv run --locked kantrip add qa-apicurio-basic -b localhost:9092 \
   --registry-provider apicurio \
   --registry-url https://localhost:8084/apis/registry/v3 \
-  --registry-ca-file sandbox/.state/ca.crt --registry-auth basic \
+  --registry-ca-file "$KANTRIP_SANDBOX_CA" --registry-auth basic \
   --registry-username "$KANTRIP_SANDBOX_APICURIO_CLIENT_ID"
+uv run --locked kantrip ping qa-apicurio-basic
+uv run --locked kantrip describe qa-apicurio-basic --output json
+```
+
+Expect a successful protected version-search read and anonymous denial on the
+same URL. This proves the fixture's `sr-readonly` access to that query, not
+write access or a particular artifact permission.
+
+#### Native Apicurio OAuth
+
+Read the public ID from `registry-clients` again; `keycloak-realm/realm.json`
+contains the corresponding OAuth client secret. Enter it at Kantrip's no-echo
+prompt without placing it in an environment variable.
+
+```bash
+export KANTRIP_SANDBOX_APICURIO_CLIENT_ID="$(
+  sandbox_secret_field registry-clients apicurio-client-id
+)"
 uv run --locked kantrip add qa-apicurio-oauth -b localhost:9092 \
   --registry-provider apicurio \
   --registry-url https://localhost:8084/apis/registry/v3 \
-  --registry-ca-file sandbox/.state/ca.crt --registry-auth oauth \
+  --registry-ca-file "$KANTRIP_SANDBOX_CA" --registry-auth oauth \
   --registry-oauth-token-url https://localhost:8443/realms/kantrip/protocol/openid-connect/token \
   --registry-oauth-client-id "$KANTRIP_SANDBOX_APICURIO_CLIENT_ID" \
-  --registry-oauth-ca-file sandbox/.state/ca.crt \
+  --registry-oauth-ca-file "$KANTRIP_SANDBOX_CA" \
   --registry-oauth-scope openid
+uv run --locked kantrip ping qa-apicurio-oauth
+uv run --locked kantrip describe qa-apicurio-oauth --output json
 ```
 
-Run the same user-facing read probe for every profile, then test one wrong
-password through Kantrip's replacement prompt and restore it through the same
-prompt. The Kafka part must retain its result when Registry authentication
-fails. Remove these exact test profiles afterward with `kantrip remove NAME`.
+Expect the same protected version-search read as the Basic case. Scope handling
+requires published Kaskade 5.0.1+ only when a Kaskade Registry consumer is
+launched; `ping` itself does not prove native client refresh.
+
+Remove the exact manual profiles after recording results:
 
 ```bash
-for profile in qa-registry-basic qa-registry-oauth qa-registry-mtls \
-  qa-apicurio-basic qa-apicurio-oauth; do
-  uv run --locked kantrip ping "$profile"
-  uv run --locked kantrip describe "$profile" --output json
+for profile in sandbox-schema-registry sandbox-apicurio qa-registry-basic \
+  qa-registry-oauth qa-registry-mtls qa-apicurio-basic qa-apicurio-oauth; do
+  uv run --locked kantrip remove "$profile" --force
 done
-uv run --locked kantrip edit qa-registry-basic --replace-secret registry/password
-uv run --locked kantrip ping qa-registry-basic
-uv run --locked kantrip edit qa-registry-basic --replace-secret registry/password
-uv run --locked kantrip ping qa-registry-basic
 ```
 
-The first replacement intentionally uses a wrong synthetic password; the
-second restores the generated sandbox password, both entered without echo.
 For each authenticated profile, a successful Registry result proves only the
 documented list/search read and the anonymous denial on that exact route.
 Kantrip's normal output must not contain credentials. The fixed-bearer mode
