@@ -19,7 +19,7 @@ classifiers = [
 requires-python = ">=3.10,<3.15"
 dependencies = [
     "click>=8.2,<9",
-    "cloup>=3.1,<4",
+    "cloup>=3.1,<5",
     "confluent-kafka>=2.15,<3",
     "cryptography>=44,<51",
     "jsonschema>=4.25,<5",
