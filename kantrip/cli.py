@@ -1858,6 +1858,7 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
                 snapshot.document,
                 timeout=timeout,
                 kafka=snapshot.kafka,
+                resolved_registry=snapshot.registry,
             )
     except ProfileStoreError as error:
         if not quiet:
@@ -1917,6 +1918,7 @@ def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
             command,
             profile_revision=snapshot.revision,
             resolved_kafka=snapshot.kafka,
+            resolved_registry=snapshot.registry,
         )
     except (ProfileStoreError, SessionError) as error:
         raise click.ClickException(str(error)) from error

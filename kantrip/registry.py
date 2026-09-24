@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -36,6 +37,12 @@ REGISTRY_CLIENT_KEY_FILENAME = "registry-client.key"
 
 class RegistryProfileError(ValueError):
     """Raised when Registry connection metadata is unsafe or unsupported."""
+
+
+class _UnresolvedRegistry(Enum):
+    """Distinguish an absent resolved Registry from a direct helper's fallback."""
+
+    VALUE = auto()
 
 
 @dataclass(frozen=True)

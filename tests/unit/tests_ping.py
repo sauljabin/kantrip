@@ -17,6 +17,7 @@ from kantrip.ping import (
     _NoRedirect,
     ping_profile,
 )
+from kantrip.registry import RegistryConnection
 from kantrip.secret_store import secret_reference
 from tests.unit.pki import synthetic_pki
 
@@ -50,6 +51,37 @@ class _Store:
 
 
 class TestPing(unittest.TestCase):
+    def test_explicit_resolved_registry_never_reads_store_or_profile_again(self) -> None:
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["broker-1:9092"],
+                "transport": "plaintext",
+                "auth": {"type": "none"},
+            },
+            "registry": {"invalid": True},
+        }
+        resolved = RegistryConnection(
+            "confluent",
+            "https://registry.invalid:8083",
+            "schema.registry.url",
+            auth_type="basic",
+            username="synthetic-user",
+            password="synthetic-password",
+        )
+        registry_result = RegistryPingResult("confluent", "server-tls", "authenticated-read")
+        with (
+            patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
+            patch("kantrip.ping.registry_connection", side_effect=AssertionError),
+            patch("kantrip.ping.load_secret_store", side_effect=AssertionError),
+            patch("kantrip.ping._registry_connectivity", return_value=registry_result) as probe,
+        ):
+            result = ping_profile(profile, resolved_registry=resolved)
+            absent = ping_profile(profile, resolved_registry=None)
+
+        self.assertEqual(registry_result, result.registry)
+        self.assertIsNone(absent.registry)
+        probe.assert_called_once()
+
     def test_profile_uses_polling_connection_state_without_resource_apis(self) -> None:
         profile = {
             "kafka": {

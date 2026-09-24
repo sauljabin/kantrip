@@ -42,6 +42,7 @@ from kantrip.registry import (
     REGISTRY_OAUTH_CA_BUNDLE_FILENAME,
     RegistryConnection,
     RegistryProfileError,
+    _UnresolvedRegistry,
     confluent_console_properties,
     kaskade_registry_properties,
     registry_connection,
@@ -89,6 +90,7 @@ def run_profile_session(
     environment: Mapping[str, str] | None = None,
     profile_revision: int = 1,
     resolved_kafka: KafkaConnection | None = None,
+    resolved_registry: RegistryConnection | None | _UnresolvedRegistry = _UnresolvedRegistry.VALUE,
     secret_store: SecretStore | None = None,
 ) -> int:
     """Run a command or interactive shell in a temporary profile session."""
@@ -112,7 +114,11 @@ def run_profile_session(
             kafka = resolve_kafka_connection(kafka, selected_store)
     except (KafkaProfileError, SecretStoreError) as error:
         raise SessionError(str(error)) from error
-    registry = _profile_registry(profile, selected_store)
+    registry = (
+        _profile_registry(profile, selected_store)
+        if isinstance(resolved_registry, _UnresolvedRegistry)
+        else resolved_registry
+    )
 
     try:
         cleanup_abandoned_sessions(env)

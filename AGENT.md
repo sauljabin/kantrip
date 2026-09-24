@@ -124,7 +124,9 @@
   over verified TLS. Resolve their exact profile-owned references through
   `SecretStore`, validate mTLS certificate/key correspondence, construct Java
   JAAS internally, and keep Java and librdkafka rendering independent. Resolve
-  one UUID/revision snapshot under the maintenance lock before launch.
+  one UUID/revision snapshot with both Kafka and Registry credentials resolved
+  through one store under the maintenance lock before ping or launch. Do not
+  re-read Registry secrets after releasing that lock.
 - Copy user-selected Kafka CA bundles into the profile as validated public PEM
   material. TLS always verifies certificates and hostnames. Materialize a
   custom CA only inside the private session and use canonical Java and
@@ -265,12 +267,23 @@
 
 ## Verification
 
-Run these checks after code, environment, schema, tooling, or documentation work:
+Run analysis, unit tests, and build verification after code, environment,
+schema, tooling, or documentation work. Run E2E for runtime, schema,
+dependency, packaging, sandbox, E2E tooling, or workflow changes; skip it for
+prose-only docs, images/site assets, templates, license, and unit-test-only
+changes. Mixed, renamed/deleted runtime, or unknown paths require E2E. The
+shared staged/`main` selection policy lives in `scripts/tests.py` and
+is documented in [Development](DEVELOPMENT.md#sandbox-services-and-e2e-workflow).
+Force E2E explicitly when docs change executable behavior. PRs run it only on
+a newly applied `run-e2e` label or explicit workflow dispatch; releases always
+run it against the exact wheel, regardless of changed paths.
+
+Run the applicable checks:
 
 ```text
 uv run --locked python -m scripts.analyze
 uv run --locked python -m scripts.tests --suite unit
-# With the sandbox and released external clients already provisioned:
+# For E2E-impacting changes, with sandbox and released clients provisioned:
 uv run --locked python -m scripts.tests --suite e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist

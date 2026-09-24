@@ -29,14 +29,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.14"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Analyze
         run: uv run --locked python -m scripts.analyze
 
@@ -55,20 +52,44 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Run unit tests
         run: uv run --locked python -m scripts.tests --suite unit
 
+  e2e-selection:
+    name: E2E selection
+    runs-on: ubuntu-latest
+    outputs:
+      run_e2e: ${{ steps.decide.outputs.run_e2e }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select E2E
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action || '' }}
+          EVENT_LABEL: ${{ github.event.label.name || '' }}
+          BEFORE: ${{ github.event.before || '' }}
+          AFTER: ${{ github.sha }}
+        run: |
+          selected="$(python3 scripts/tests.py --ci-event "$EVENT_NAME" \
+            --action "$EVENT_ACTION" --label "$EVENT_LABEL" \
+            --before "$BEFORE" --after "$AFTER")"
+          echo "run_e2e=$selected" >> "$GITHUB_OUTPUT"
+          echo "E2E selected: $selected"
+
   e2e-tests:
     name: E2E / Ubuntu / released clients
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
+    needs: [e2e-selection]
+    if: needs.e2e-selection.outputs.run_e2e == 'true'
     uses: ./.github/workflows/e2e.yml
 
   build:
@@ -81,14 +102,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.10"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Verify lockfile
         run: uv lock --check
       - name: Build distributions
@@ -99,22 +117,24 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [quality, unit-tests, e2e-tests, build]
+    needs: [quality, unit-tests, e2e-selection, e2e-tests, build]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - name: Require successful jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
+          SELECT_RESULT: ${{ needs.e2e-selection.result }}
+          E2E_SELECTED: ${{ needs.e2e-selection.outputs.run_e2e }}
           E2E_RESULT: ${{ needs.e2e-tests.result }}
-          E2E_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'run-e2e') }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
-          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$E2E_REQUESTED" != true ]]; then
-            test "$E2E_RESULT" = skipped
-          else
-            test "$E2E_RESULT" = success
-          fi
+          test "$SELECT_RESULT" = success
+          python3 scripts/tests.py --verify-e2e-result "$E2E_SELECTED" "$E2E_RESULT"
           test "$BUILD_RESULT" = success

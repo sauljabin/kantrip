@@ -49,14 +49,11 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
           echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.10"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Analyze
         run: uv run --locked python -m scripts.analyze
       - name: Run unit tests

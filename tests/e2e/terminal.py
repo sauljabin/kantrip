@@ -62,10 +62,16 @@ class TerminalProcess:
 
     def close(self) -> None:
         """Ask the application to quit, then terminate only if it remains alive."""
+        # An OAuth failure can terminate the child between the last read and cleanup.
+        self._poll(0)
         if self.status is not None:
             os.close(self.master)
             return
-        self.write("q")
+        try:
+            self.write("q")
+        except OSError as error:
+            if error.errno != errno.EIO:
+                raise
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and self.status is None:
             self._poll(0.1)
@@ -83,7 +89,14 @@ class TerminalProcess:
         return "\n".join(line.rstrip() for line in self.screen.display if line.rstrip())
 
     def _poll(self, timeout: float) -> None:
-        waited, status = os.waitpid(self.child, os.WNOHANG)
+        if self.status is not None:
+            return
+        try:
+            waited, status = os.waitpid(self.child, os.WNOHANG)
+        except ChildProcessError:
+            # Another poll already reaped the child during terminal teardown.
+            self.status = -1
+            return
         if waited:
             self.status = status
         readable, _, _ = select.select((self.master,), (), (), max(0, timeout))

@@ -8,6 +8,7 @@ from kantrip.adapters import (
     KAFKA_EXECUTABLE_OPTIONS,
     KCAT_EXECUTABLES,
     AdapterError,
+    _kcat_uses_schema_registry,
     _reject_kafka_overrides,
     _reject_kaskade_overrides,
     _reject_kcat_overrides,
@@ -22,7 +23,9 @@ def main() -> int:
         if executable in KAFKA_EXECUTABLE_OPTIONS:
             _reject_kafka_overrides(executable, arguments, KAFKA_EXECUTABLE_OPTIONS[executable])
         elif executable in KCAT_EXECUTABLES:
-            _reject_kcat_overrides(executable, arguments)
+            options = _reject_kcat_overrides(executable, arguments)
+            if _kcat_uses_schema_registry(options):
+                print("schema-registry")
         elif executable == "kaskade":
             _reject_kaskade_overrides(arguments)
         else:

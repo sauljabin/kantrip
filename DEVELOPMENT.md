@@ -34,13 +34,21 @@ uv sync --locked
 uv run pre-commit install
 ```
 
-The pre-commit hook builds a wheel from Git's staged index in a temporary
-checkout, installs that wheel into a separate environment, and runs the full
+The pre-commit hook first classifies staged paths without building a wheel or
+touching the sandbox. For E2E-impacting changes, it builds a wheel from Git's
+staged index in a temporary checkout, installs it separately, and runs the full
 E2E suite against the already-running sandbox. Provision the sandbox and pinned
-released clients first; a missing native keyring or service is a failed hook,
-not a skipped test. The hook links the existing private sandbox state into its
-temporary checkout without copying or caching secrets. Record the elapsed time
-before claiming a local performance target.
+released clients for those changes; a missing native keyring or service is then
+a failed hook, not a skipped test. The hook links existing private sandbox state
+without copying or caching secrets. A documentation-only commit skips local E2E.
+Set `KANTRIP_E2E_FORCE=1` on the hook invocation when documentation changes
+executable behavior or when an explicit full check is needed.
+
+The hook calls `python3 scripts/tests.py --staged-wheel` directly. This mode
+uses only Python's standard library until it selects E2E, then uses uv and the
+project's locked Python to build and test the staged wheel. The same script
+owns CI selection (`--ci-event`) and result validation
+(`--verify-e2e-result`); `--suite unit|e2e` runs a suite directly.
 
 Run the editable CLI directly from the checkout:
 
@@ -312,15 +320,29 @@ clients, creates isolated profiles and exact test-owned topics/schemas/artifacts
 and leaves the sandbox running. CI runs the same command on Ubuntu with a real
 DBus Secret Service/GNOME Keyring session and always collects sanitized resource
 diagnostics before removing its CI-owned sandbox.
-The full hosted E2E matrix runs on `main` pushes and explicit workflow dispatch,
-not on every pull request. Maintainers can opt a draft pull request in by adding
-the `run-e2e` label; remove it after the one-off hosted check. Release publishing
-requires another complete E2E run
+The same path classification drives local staged checks and `main` push CI:
+
+| Change or event | Local staged hook | Hosted E2E |
+| --- | --- | --- |
+| Prose-only Markdown, images/site assets, issue/PR templates, `LICENSE`, or unit tests only | Skip E2E | Skip E2E on `main` |
+| Runtime code, schemas, dependencies/lockfiles, packaging, sandbox, E2E tests/tools, or E2E workflow/hook infrastructure | Run E2E | Run E2E on `main` |
+| Mixed changes, deleted/renamed runtime paths, or unknown paths | Run E2E | Run E2E on `main` |
+| PR opened, synchronized, or reopened | Classify staged changes independently | Fast CI only |
+| Newly applied `run-e2e` PR label or explicit CI workflow dispatch | Not applicable | Run full E2E once |
+| Release tag | Not applicable | Run full E2E against the exact release wheel |
+
+The PR label is a one-shot request: subsequent pushes do not repeat E2E merely
+because the label remains. Remove and reapply it to request another run. The
+`main` selector compares the complete push range; a missing base or an unknown
+path selects E2E conservatively. Documentation that changes an executable
+contract needs an explicit force: `KANTRIP_E2E_FORCE=1` locally, a fresh
+`run-e2e` label event on the PR, or workflow dispatch on `main`. Quality, the
+full Python/OS unit matrix, and package verification still run for all PRs and
+`main` pushes. Release publishing always requires another complete E2E run
 against the exact wheel built and verified by the tag's build job. The hosted
 client cache is keyed by OS, architecture, pinned versions, and workflow setup;
 only checksum-verified downloaded clients and builds are saved, never sandbox
-state or credentials. Pull requests still run quality, the full Python/OS unit
-matrix, and package verification.
+state or credentials.
 The E2E Zsh launcher skips host-global startup files with Zsh's `-d` option to
 avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs.
 

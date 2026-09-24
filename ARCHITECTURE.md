@@ -15,15 +15,17 @@ the active execution.
 
 For each command or subshell, the user selects a profile. Kantrip then:
 
-1. Loads one UUID/revision generation and resolves its credentials under the mutation lock.
+1. Loads one UUID/revision generation and resolves both Kafka and Registry
+   credentials through one store under the mutation lock.
 2. Builds the plaintext or verified-TLS connection model.
 3. Renders the native connection properties required by the client.
 4. Supervises the client in a bounded session.
 5. Removes session-owned connection material.
 
 The immutable resolved snapshot is released from the mutation lock before
-rendering or networking. Adapters and shims never query SQLite or the credential
-store again during that session.
+rendering or networking. Profile rotation or removal after that point cannot
+mix generations or invalidate credentials already held in memory. Adapters and
+shims never query SQLite or the credential store again during that session.
 
 Kantrip prepares the connection for one execution; it does not perform the
 Kafka or Registry operation itself. It does not install or replace clients,

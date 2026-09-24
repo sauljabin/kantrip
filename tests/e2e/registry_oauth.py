@@ -85,9 +85,7 @@ def exercise_registry_oauth_renewal(
         _wait_for_java(java, b"java-first", java_output, credentials)
 
         first_events = {
-            provider: _client_login_count(
-                credentials, _client_id(provider, credentials), admin_token
-            )
+            provider: _client_login_ids(credentials, _client_id(provider, credentials), admin_token)
             for provider in ("confluent", "apicurio")
         }
         lifetime = max(confluent.token_lifetime, apicurio.token_lifetime)
@@ -101,10 +99,8 @@ def exercise_registry_oauth_renewal(
         clients["apicurio"].wait_for(("apicurio-second",), timeout=60)
         _wait_for_java(java, b"java-second", java_output, credentials)
         for provider in ("confluent", "apicurio"):
-            current = _client_login_count(
-                credentials, _client_id(provider, credentials), admin_token
-            )
-            if current <= first_events[provider]:
+            current = _client_login_ids(credentials, _client_id(provider, credentials), admin_token)
+            if not current.difference(first_events[provider]):
                 raise RegistryOAuthFailure(
                     f"{provider} showed no second successful IdP token issuance after expiry"
                 )
@@ -585,9 +581,9 @@ def _admin_role(headers: Mapping[str, str]) -> tuple[dict[str, object], bool]:
     return role, True
 
 
-def _client_login_count(
+def _client_login_ids(
     credentials: Mapping[str, str], client_id: str, admin_token: AdminToken
-) -> int:
+) -> frozenset[str]:
     context = ssl.create_default_context(cafile=str(CA_FILE))
     token = admin_token(credentials, context)
     events = _admin_json(
@@ -595,9 +591,12 @@ def _client_login_count(
         {"Authorization": f"Bearer {token}", "Accept": "application/json"},
         params={"client": client_id, "type": "CLIENT_LOGIN", "max": "100"},
     )
-    if not isinstance(events, list):
+    if not isinstance(events, list) or any(
+        not isinstance(event, dict) or not isinstance(event.get("id"), str) for event in events
+    ):
         raise RegistryOAuthFailure("Keycloak returned invalid client login events")
-    return len(events)
+    # A long-lived sandbox can already have 100 events; count cannot grow at the cap.
+    return frozenset(event["id"] for event in events)
 
 
 def _admin_json(

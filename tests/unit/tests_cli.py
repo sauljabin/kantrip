@@ -701,7 +701,12 @@ class TestCli(unittest.TestCase):
             "[passed] Kafka transport: plaintext reachable; authentication: not configured",
             result.output,
         )
-        ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5, kafka=unittest.mock.ANY)
+        ping.assert_called_once_with(
+            unittest.mock.ANY,
+            timeout=1.5,
+            kafka=unittest.mock.ANY,
+            resolved_registry=None,
+        )
 
     def test_ping_reports_confluent_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():

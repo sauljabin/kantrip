@@ -32,6 +32,7 @@ from kantrip.registry import (
     RegistryConnection,
     RegistryProfileError,
     RegistryProvider,
+    _UnresolvedRegistry,
     registry_connection,
     resolve_registry_connection,
 )
@@ -84,18 +85,27 @@ def ping_profile(
     *,
     timeout: float = 5.0,
     kafka: KafkaConnection | None = None,
+    resolved_registry: RegistryConnection | None | _UnresolvedRegistry = _UnresolvedRegistry.VALUE,
     secret_store: SecretStore | None = None,
 ) -> PingResult:
     """Verify one real broker connection and the current Registry endpoint."""
     deadline = time.monotonic() + timeout
     try:
-        registry = registry_connection(profile)
+        registry = (
+            registry_connection(profile)
+            if isinstance(resolved_registry, _UnresolvedRegistry)
+            else resolved_registry
+        )
         connection = kafka or kafka_connection(profile)
         selected_store = secret_store
         if connection.requires_secrets and kafka is None:
             selected_store = selected_store or load_secret_store()
             connection = resolve_kafka_connection(connection, selected_store)
-        if registry is not None and registry.requires_secrets:
+        if (
+            isinstance(resolved_registry, _UnresolvedRegistry)
+            and registry is not None
+            and registry.requires_secrets
+        ):
             selected_store = selected_store or load_secret_store()
             registry = resolve_registry_connection(registry, selected_store)
     except (KafkaProfileError, RegistryProfileError, SecretStoreError) as error:

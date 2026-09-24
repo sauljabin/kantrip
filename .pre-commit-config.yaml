@@ -35,8 +35,8 @@ repos:
         pass_filenames: false
         entry: uv run --locked python -m scripts.tests --suite unit
       - id: staged-e2e
-        name: testing the staged wheel against the sandbox
+        name: selecting and testing E2E-impacting staged changes
         language: system
         always_run: true
         pass_filenames: false
-        entry: uv run --locked python -m scripts.precommit_e2e
+        entry: python3 scripts/tests.py --staged-wheel

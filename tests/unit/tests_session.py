@@ -47,6 +47,36 @@ class TestProfileSession(unittest.TestCase):
             },
         }
 
+    def test_explicit_resolved_registry_never_reads_store_or_profile_again(self) -> None:
+        self.profile["registry"] = {"invalid": True}
+        resolved = RegistryConnection(
+            "confluent",
+            "https://registry.invalid:8083",
+            "schema.registry.url",
+            auth_type="basic",
+            username="synthetic-user",
+            password="synthetic-password",
+        )
+        with (
+            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+            patch("kantrip.session._profile_registry", side_effect=AssertionError),
+            patch("kantrip.session.load_secret_store", side_effect=AssertionError),
+            patch(
+                "kantrip.session._run_child",
+                return_value=subprocess.CompletedProcess(["kcat"], 0),
+            ),
+        ):
+            self.assertEqual(
+                0,
+                run_profile_session(
+                    "local",
+                    self.profile,
+                    ["kcat", "-L"],
+                    environment={},
+                    resolved_registry=resolved,
+                ),
+            )
+
     def test_kaskade_apicurio_scopes_reject_unsupported_releases(self) -> None:
         connection = RegistryConnection(
             "apicurio",
@@ -1639,6 +1669,11 @@ class TestProfileSession(unittest.TestCase):
             ("-X", "security.protocol=PLAINTEXT"),
             ("-Xsasl.username=other",),
             ("-X", "dump"),
+            ("-LXdump",),
+            ("-Lbother.invalid:9092",),
+            ("-LFother.conf",),
+            ("-Lrhttp://other.invalid:8081",),
+            ("-L", "-Xdump"),
         ):
             with (
                 self.subTest(arguments=arguments),
@@ -1646,6 +1681,13 @@ class TestProfileSession(unittest.TestCase):
                 self.assertRaisesRegex(SessionError, "cannot override"),
             ):
                 run_profile_session("local", self.profile, ["kcat", *arguments], environment={})
+
+    def test_kcat_unknown_option_fails_closed(self) -> None:
+        with (
+            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+            self.assertRaisesRegex(SessionError, "not supported by Kantrip"),
+        ):
+            run_profile_session("local", self.profile, ["kcat", "-Y"], environment={})
 
     def test_kcat_keeps_safe_group_and_address_family_properties(self) -> None:
         with (
@@ -1663,34 +1705,44 @@ class TestProfileSession(unittest.TestCase):
             )
         self.assertIn("group.id=readers", run.call_args.args[0])
 
-    def test_kcat_avro_deserializer_uses_profile_registry_url(self) -> None:
-        with (
-            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
-            patch(
-                "kantrip.session._run_child",
-                return_value=subprocess.CompletedProcess(["kcat"], 0),
-            ) as run,
+    def test_kcat_parses_clusters_without_treating_values_as_options(self) -> None:
+        for arguments in (
+            ("-CqXgroup.id=readers",),
+            ("-C", "-t", "topic-b-Xdump"),
+            ("-Cf", "payload -b -Xdump"),
+            ("-C", "--", "-Xdump"),
         ):
-            run_profile_session(
-                "local",
-                self.profile,
-                ["kcat", "-C", "-s", "value=avro", "-t", "orders"],
-                environment={},
-            )
+            with (
+                self.subTest(arguments=arguments),
+                patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+                patch(
+                    "kantrip.session._run_child",
+                    return_value=subprocess.CompletedProcess(["kcat"], 0),
+                ) as run,
+            ):
+                run_profile_session("local", self.profile, ["kcat", *arguments], environment={})
+                self.assertEqual(["kcat", *arguments], run.call_args.args[0])
 
-        self.assertEqual(
-            [
-                "kcat",
-                "-r",
-                "http://registry.invalid:8081",
-                "-C",
-                "-s",
-                "value=avro",
-                "-t",
-                "orders",
-            ],
-            run.call_args.args[0],
-        )
+    def test_kcat_avro_deserializer_uses_profile_registry_url(self) -> None:
+        for arguments in (("-C", "-s", "value=avro"), ("-Csvalue=avro",)):
+            with (
+                self.subTest(arguments=arguments),
+                patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+                patch(
+                    "kantrip.session._run_child",
+                    return_value=subprocess.CompletedProcess(["kcat"], 0),
+                ) as run,
+            ):
+                run_profile_session(
+                    "local",
+                    self.profile,
+                    ["kcat", *arguments, "-t", "orders"],
+                    environment={},
+                )
+                self.assertEqual(
+                    ["kcat", "-r", "http://registry.invalid:8081", *arguments, "-t", "orders"],
+                    run.call_args.args[0],
+                )
 
     def test_authenticated_profile_resolves_once_and_launches(self) -> None:
         profile_id = "018f8f13-7c21-7cee-8000-000000000010"

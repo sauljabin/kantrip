@@ -81,6 +81,8 @@ _KASKADE_CONNECTION_OPTIONS = (
     "-b",
 )
 _SAFE_RUNTIME_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
+_KCAT_FLAG_OPTIONS = frozenset("CPLQqvEVhlTZeJOuU")
+_KCAT_VALUE_OPTIONS = frozenset("GtpbDKcmFXdzkHofsr")
 _KAFKA_CLIENT_PROPERTY_OPTIONS = frozenset(
     {"--command-property", "--consumer-property", "--producer-property"}
 )
@@ -412,8 +414,8 @@ def prepare_command(
 
 def _prepare_kcat(prepared: list[str], registry: RegistryConnection | None) -> list[str]:
     executable = Path(prepared[0]).name
-    _reject_kcat_overrides(executable, prepared[1:])
-    if _kcat_uses_schema_registry(prepared[1:]):
+    options = _reject_kcat_overrides(executable, prepared[1:])
+    if _kcat_uses_schema_registry(options):
         connection = _require_confluent_registry(executable, registry)
         _require_registry_authentication(executable, connection)
         return [prepared[0], "-r", connection.url, *prepared[1:]]
@@ -579,30 +581,58 @@ def _safe_runtime_kafka_property(value: str) -> bool:
     return name != "broker.address.family" or setting in {"v4", "v6", "any"}
 
 
-def _reject_kcat_overrides(executable: str, arguments: Sequence[str]) -> None:
-    for index, argument in enumerate(arguments):
-        if argument.startswith(("-F", "-r", "-b")):
-            option = argument[:2]
+def _reject_kcat_overrides(
+    executable: str, arguments: Sequence[str]
+) -> tuple[tuple[str, str | None], ...]:
+    options = _kcat_options(executable, arguments)
+    for option, value in options:
+        if option in {"-F", "-r", "-b"}:
             raise AdapterError(
                 f"{executable} option '{option}' cannot override the selected Kantrip profile"
             )
-        property_value: str | None = None
-        if argument == "-X" and index + 1 < len(arguments):
-            property_value = arguments[index + 1]
-        elif argument.startswith("-X"):
-            property_value = argument[2:]
-        if property_value is not None and not _safe_runtime_kafka_property(property_value):
+        if option == "-X" and (value is None or not _safe_runtime_kafka_property(value)):
             raise AdapterError(
                 f"{executable} option '-X' cannot override the selected Kantrip profile"
             )
-        if argument == "-X" and index + 1 >= len(arguments):
-            raise AdapterError(f"{executable} option '-X' requires a safe property")
+    return options
 
 
-def _kcat_uses_schema_registry(arguments: Sequence[str]) -> bool:
+def _kcat_options(executable: str, arguments: Sequence[str]) -> tuple[tuple[str, str | None], ...]:
+    """Parse short getopt clusters and consume option values before scanning again."""
+    options: list[tuple[str, str | None]] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            break
+        if not argument.startswith("-") or argument == "-":
+            index += 1
+            continue
+        if argument.startswith("--"):
+            raise AdapterError(f"{executable} option '{argument}' is not supported by Kantrip")
+        for position, letter in enumerate(argument[1:], start=2):
+            option = f"-{letter}"
+            if letter in _KCAT_FLAG_OPTIONS:
+                options.append((option, None))
+                continue
+            if letter not in _KCAT_VALUE_OPTIONS:
+                raise AdapterError(f"{executable} option '{option}' is not supported by Kantrip")
+            value = argument[position:]
+            if not value:
+                index += 1
+                if index >= len(arguments):
+                    raise AdapterError(f"{executable} option '{option}' requires a value")
+                value = arguments[index]
+            options.append((option, value))
+            break
+        index += 1
+    return tuple(options)
+
+
+def _kcat_uses_schema_registry(options: Sequence[tuple[str, str | None]]) -> bool:
     return any(
-        value.lower() in {"avro", "key=avro", "value=avro"}
-        for value in _option_values(arguments, "-s")
+        option == "-s" and value is not None and value.lower() in {"avro", "key=avro", "value=avro"}
+        for option, value in options
     )
 
 
@@ -807,9 +837,12 @@ exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers
 
 
 def _adapter_guard_command(name: str) -> str:
+    return _adapter_guard_invocation(name) + " || exit $?"
+
+
+def _adapter_guard_invocation(name: str) -> str:
     return (
-        f"{shlex.quote(sys.executable)} -I -m kantrip._adapter_guard "
-        f'{shlex.quote(name)} "$@" || exit $?'
+        f"{shlex.quote(sys.executable)} -I -m kantrip._adapter_guard " f'{shlex.quote(name)} "$@"'
     )
 
 
@@ -890,23 +923,8 @@ def _render_kcat_shim(
     registry_url = shlex.quote(registry.url if registry is not None else "")
     return f"""#!/bin/sh
 export KCAT_CONFIG={shlex.quote(str(config_path))}
-{_adapter_guard_command(name)}
-schema_deserializer=
-previous_argument=
-for argument in "$@"; do
-  case "$previous_argument:$argument" in
-    -s:avro|-s:key=avro|-s:value=avro)
-      schema_deserializer=1
-      ;;
-  esac
-  case "$argument" in
-    -savro|-skey=avro|-svalue=avro)
-      schema_deserializer=1
-      ;;
-  esac
-  previous_argument="$argument"
-done
-if [ -n "$schema_deserializer" ]; then
+schema_deserializer="$({_adapter_guard_invocation(name)})" || exit $?
+if [ "$schema_deserializer" = schema-registry ]; then
   {registry_guard}  exec {shlex.quote(executable)} -r {registry_url} "$@"
 fi
 exec {shlex.quote(executable)} "$@"

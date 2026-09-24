@@ -12,7 +12,11 @@ publishing and do not report readiness while required checks remain unverified.
 This checklist does not authorize tagging or publication. Use existing explicit
 release authorization, requesting it only if absent.
 
-## First Release — Additional Gate
+## First Stable Release — Additional Gate
+
+These roadmap-completion checks apply to the first stable release, not to an
+intermediate alpha or beta. Pre-releases use the shared preparation and
+pre-release sections below; their exact-wheel release E2E remains mandatory.
 
 - [ ] Complete the [first-release manual QA](MVP.md#manual-qa--first-release-checklist),
   or its implemented scenarios moved to [Manual Testing](MANUAL_TESTING.md),
@@ -61,8 +65,10 @@ release authorization, requesting it only if absent.
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,
   including the supported Python and Linux/macOS matrix and packaging jobs.
   Confirm a separate full [E2E acceptance](.github/workflows/e2e.yml) run for
-  the candidate commit; pull-request CI does not run it. Refresh evidence for
-  changes made during release preparation.
+  the candidate commit; pull-request CI runs it only on a fresh `run-e2e` label
+  event, while `main` skips non-runtime-only pushes. Refresh evidence for
+  changes made during release preparation. The tag workflow always runs E2E
+  against the exact release wheel, even for documentation-only changes.
 - [ ] Build and verify the wheel and source distribution using
   [Build artifacts](DEVELOPMENT.md#build-artifacts). Install the wheel in an
   isolated environment and smoke-test `kantrip --version`, `kantrip --help`, and

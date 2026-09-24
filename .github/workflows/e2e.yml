@@ -33,12 +33,11 @@ jobs:
           sudo apt-get install --yes \
             build-essential dbus-x11 fish gnome-keyring kafkacat libcurl4-openssl-dev liblz4-dev \
             libsasl2-dev libsecret-1-0 libssl-dev libzstd-dev openjdk-21-jre-headless zsh
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.13"
-          enable-cache: true
       - name: Set up Kind
         uses: helm/kind-action@v1.14.0
         with:
@@ -53,8 +52,6 @@ jobs:
         uses: azure/setup-helm@v5.0.1
         with:
           version: v4.1.1
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Download exact release distribution bundle
         if: inputs.candidate-artifact != ''
         uses: actions/download-artifact@v8.0.1
@@ -62,87 +59,11 @@ jobs:
           name: ${{ inputs.candidate-artifact }}
       - name: Validate E2E Zsh startup
         run: uv run --locked python -m tests.e2e.shell_environment
-      - name: Restore verified released clients
-        id: released-clients
-        uses: actions/cache/restore@v6.1.0
+      - name: Install verified released E2E clients
+        uses: ./.github/actions/released-e2e-tools
         with:
-          path: ${{ runner.temp }}/kantrip-e2e-tools
-          key: released-clients-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/versions.env', '.github/workflows/e2e.yml') }}
-      - name: Install pinned released client tools
-        if: steps.released-clients.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          source tests/e2e/versions.env
-          tool_root="$RUNNER_TEMP/kantrip-e2e-tools"
-          mkdir -p "$tool_root/bin"
-          curl --fail --location --retry 3 \
-            "https://github.com/confluentinc/librdkafka/archive/refs/tags/v${LIBRDKAFKA_MIN_VERSION}.tar.gz" \
-            -o "$RUNNER_TEMP/librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz"
-          printf '%s  %s\n' "$LIBRDKAFKA_SOURCE_SHA256" \
-            "librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz" \
-            | (cd "$RUNNER_TEMP" && sha256sum --check -)
-          tar -xzf "$RUNNER_TEMP/librdkafka-v${LIBRDKAFKA_MIN_VERSION}.tar.gz" -C "$tool_root"
-          (
-            cd "$tool_root/librdkafka-${LIBRDKAFKA_MIN_VERSION}"
-            ./configure --prefix="$tool_root/librdkafka"
-            make -j2 libs
-            make install
-          )
-          export LD_LIBRARY_PATH="$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          kcat -V
-          kcat -X list | grep -E '^https[.]ca[.]location[[:space:]]+[|]' > /dev/null
-          curl --fail --location --retry 3 \
-            "https://archive.apache.org/dist/kafka/${APACHE_KAFKA_VERSION}/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" \
-            -o "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz"
-          curl --fail --location --retry 3 \
-            "https://archive.apache.org/dist/kafka/${APACHE_KAFKA_VERSION}/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz.sha512" \
-            -o "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz.sha512"
-          apache_checksum="$(sed 's/^[^:]*: //' "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz.sha512" \
-            | tr -d '[:space:]')"
-          printf '%s  %s\n' "$apache_checksum" "kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" \
-            | (cd "$RUNNER_TEMP" && sha512sum --check -)
-          tar -xzf "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" -C "$tool_root"
-          curl --fail --location --retry 3 \
-            "https://packages.confluent.io/archive/8.3/confluent-${CONFLUENT_VERSION}.tar.gz" \
-            -o "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz"
-          curl --fail --location --retry 3 \
-            "https://packages.confluent.io/archive/8.3/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt" \
-            -o "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt"
-          (cd "$RUNNER_TEMP" && sha256sum --check "confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt")
-          tar -xzf "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz" -C "$tool_root"
-          ln -s "$(command -v kcat)" "$tool_root/bin/kafkacat"
-          UV_TOOL_DIR="$tool_root/uv" UV_TOOL_BIN_DIR="$tool_root/bin" \
-            uv tool install --python 3.13 "kaskade==${KASKADE_VERSION}"
-      - name: Activate and verify released clients
-        run: |
-          set -euo pipefail
-          source tests/e2e/versions.env
-          tool_root="$RUNNER_TEMP/kantrip-e2e-tools"
-          test -x "$tool_root/bin/kaskade"
-          test -x "$tool_root/confluent-${CONFLUENT_VERSION}/bin/kafka-avro-console-consumer"
-          test -x "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin/kafka-console-consumer.sh"
-          test -f "$tool_root/librdkafka/lib/librdkafka.so"
-          "$tool_root/bin/kaskade" --version | grep -F "$KASKADE_VERSION"
-          "$tool_root/confluent-${CONFLUENT_VERSION}/bin/kafka-topics" --version \
-            | grep -F "$CONFLUENT_VERSION"
-          "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin/kafka-topics.sh" --version \
-            | grep -F "$APACHE_KAFKA_VERSION"
-          LD_LIBRARY_PATH="$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            kcat -V | grep -F "$KCAT_VERSION" | grep -F "$LIBRDKAFKA_MIN_VERSION"
-          LD_LIBRARY_PATH="$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            kcat -X list | grep -E '^https[.]ca[.]location[[:space:]]+[|]' > /dev/null
-          echo "LD_LIBRARY_PATH=$tool_root/librdkafka/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          {
-            echo "$tool_root/bin"
-            echo "$tool_root/confluent-${CONFLUENT_VERSION}/bin"
-            echo "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin"
-          } >> "$GITHUB_PATH"
-      - name: Save verified released clients
-        if: steps.released-clients.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6.1.0
-        with:
-          path: ${{ runner.temp }}/kantrip-e2e-tools
-          key: released-clients-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/versions.env', '.github/workflows/e2e.yml') }}
+          python-version: "3.13"
+          uv-version: ${{ env.UV_VERSION }}
       - name: Build or select and install candidate wheel
         env:
           CANDIDATE_ARTIFACT_NAME: ${{ inputs.candidate-artifact }}

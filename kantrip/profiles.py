@@ -61,8 +61,10 @@ from kantrip.reconciliation import (
 )
 from kantrip.registry import (
     CONFLUENT_PROVIDER,
+    RegistryConnection,
     RegistryProfileError,
     registry_connection,
+    resolve_registry_connection,
 )
 from kantrip.secret_store import (
     SecretStore,
@@ -225,6 +227,7 @@ class ProfileSnapshot:
     revision: int
     document: Mapping[str, Any]
     kafka: KafkaConnection
+    registry: RegistryConnection | None
 
 
 def resolve_database_path(environment: Mapping[str, str] | None = None) -> Path:
@@ -305,17 +308,22 @@ def resolve_profile_snapshot(
             document = deepcopy(collection.profile(profile_name))
             revision = collection.revision(profile_name)
             parsed = kafka_connection(document)
-            if parsed.requires_secrets:
+            registry = registry_connection(document)
+            if parsed.requires_secrets or registry is not None and registry.requires_secrets:
                 selected_store = secret_store or load_secret_store()
-                parsed = resolve_kafka_connection(parsed, selected_store)
+                if parsed.requires_secrets:
+                    parsed = resolve_kafka_connection(parsed, selected_store)
+                if registry is not None and registry.requires_secrets:
+                    registry = resolve_registry_connection(registry, selected_store)
             return ProfileSnapshot(
                 profile_name,
                 str(document["id"]),
                 revision,
                 document,
                 parsed,
+                registry,
             )
-    except (KafkaProfileError, SecretStoreError) as error:
+    except (KafkaProfileError, RegistryProfileError, SecretStoreError) as error:
         raise ProfileStoreError(str(error)) from error
     except sqlite3.Error as error:
         raise ProfileStoreError("profile snapshot could not be resolved safely") from error

@@ -574,6 +574,90 @@ class TestProfiles(unittest.TestCase):
             active_reference = edited.profile("local")["kafka"]["auth"]["passwordRef"]
             self.assertEqual("new-secret", store.values[active_reference])
 
+    def test_registry_only_snapshot_survives_a_concurrent_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="old-registry-secret"
+                ),
+                secret_store=store,
+            ).profile("local")
+            old_reference = added["registry"]["auth"]["passwordRef"]
+            entered = Event()
+            release = Event()
+            blocking_store = _OneShotBlockingGetStore(store, entered, release)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                snapshot_future = executor.submit(
+                    resolve_profile_snapshot, "local", path, secret_store=blocking_store
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                edit_future = executor.submit(
+                    edit_profile,
+                    "local",
+                    path,
+                    registry_auth=RegistryAuthInput(
+                        "basic", username="synthetic-user", password="new-registry-secret"
+                    ),
+                    secret_store=store,
+                )
+                release.set()
+                snapshot = snapshot_future.result()
+                edited = edit_future.result()
+
+            self.assertEqual(1, snapshot.revision)
+            self.assertIsNotNone(snapshot.registry)
+            assert snapshot.registry is not None
+            self.assertEqual("old-registry-secret", snapshot.registry.password)
+            self.assertEqual(2, edited.revision("local"))
+            self.assertIn(old_reference, store.deleted)
+            self.assertNotIn(old_reference, store.values)
+
+    def test_combined_snapshot_survives_a_concurrent_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput("plain", username="kafka-user", password="old-kafka-secret"),
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="registry-user", password="old-registry-secret"
+                ),
+                secret_store=store,
+            ).profile("local")
+            kafka_reference = added["kafka"]["auth"]["passwordRef"]
+            registry_reference = added["registry"]["auth"]["passwordRef"]
+            entered = Event()
+            release = Event()
+            blocking_store = _OneShotBlockingGetStore(store, entered, release)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                snapshot_future = executor.submit(
+                    resolve_profile_snapshot, "local", path, secret_store=blocking_store
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                remove_future = executor.submit(remove_profile, "local", path, secret_store=store)
+                release.set()
+                snapshot = snapshot_future.result()
+                removed = remove_future.result()
+
+            self.assertEqual(1, snapshot.revision)
+            self.assertEqual("old-kafka-secret", snapshot.kafka.password)
+            self.assertIsNotNone(snapshot.registry)
+            assert snapshot.registry is not None
+            self.assertEqual("old-registry-secret", snapshot.registry.password)
+            self.assertEqual({}, removed.profiles)
+            self.assertNotIn(kafka_reference, store.values)
+            self.assertNotIn(registry_reference, store.values)
+
     def test_repair_and_secret_staging_are_serialized_by_the_maintenance_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
