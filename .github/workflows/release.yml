@@ -49,14 +49,11 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
           echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.10"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Analyze
         run: uv run --locked python -m scripts.analyze
       - name: Run unit tests
@@ -111,9 +108,16 @@ jobs:
         with:
           subject-path: dist/*
 
+  e2e-tests:
+    name: E2E / exact release wheel
+    needs: build
+    uses: ./.github/workflows/e2e.yml
+    with:
+      candidate-artifact: release-bundle
+
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, attest-packages]
+    needs: [build, attest-packages, e2e-tests]
     runs-on: ubuntu-latest
     environment:
       name: release

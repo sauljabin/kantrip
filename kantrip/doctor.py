@@ -43,7 +43,7 @@ from kantrip.profiles import (
     resolve_database_path,
 )
 from kantrip.reconciliation import ReconciliationError
-from kantrip.registry import RegistryProfileError, plain_registry_connection
+from kantrip.registry import RegistryProfileError, registry_connection
 from kantrip.runtime import (
     AUTOMATIC_SCAN_LIMIT,
     SessionRuntimeError,
@@ -468,7 +468,7 @@ def _check_registry_profiles(profiles: ProfileCollection) -> list[DoctorCheck]:
             continue
         configured += 1
         try:
-            plain_registry_connection(profile)
+            registry_connection(profile)
         except RegistryProfileError as error:
             checks.append(
                 DoctorCheck(

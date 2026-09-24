@@ -67,6 +67,7 @@ spec:
               configure_scram_256 \
                 /mnt/auth-users/scram-256-username \
                 /mnt/auth-users/scram-256-password
+              add_prefix_acls "$(cat /mnt/auth-users/scram-256-username)" kantrip-auth-
               configure_scram_256 \
                 /mnt/auth-users/scram-256-no-acl-username \
                 /mnt/auth-users/scram-256-no-acl-password

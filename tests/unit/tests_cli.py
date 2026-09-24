@@ -16,7 +16,7 @@ from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult, ping_profile
 from kantrip.profiles import ProfileStoreError, add_profile, load_profiles
 from kantrip.secret_store import SecretNotFoundError
-from tests.pki import synthetic_pki, temporary_pki_files
+from tests.unit.pki import synthetic_pki, temporary_pki_files
 
 
 class TestCli(unittest.TestCase):
@@ -146,6 +146,7 @@ class TestCli(unittest.TestCase):
         )
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "confluent",
                 "schema.registry.url": "http://registry.example.com:8081",
             },
@@ -417,6 +418,73 @@ class TestCli(unittest.TestCase):
         self.assertNotIn("synthetic-password-one", added.output + edited.output)
         self.assertNotIn("synthetic-password-two", added.output + edited.output)
 
+    def test_registry_oauth_edit_retains_secret_and_clears_public_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            store = _MemorySecretStore()
+            with (
+                temporary_pki_files(ca=synthetic_pki().ca) as paths,
+                patch("kantrip.profiles.load_secret_store", return_value=store),
+                patch(
+                    "kantrip.cli._secret_prompt",
+                    return_value="synthetic-registry-oauth-secret",
+                ),
+            ):
+                added = self.runner.invoke(
+                    cli,
+                    [
+                        "add",
+                        "secure-registry",
+                        "--registry-url",
+                        "https://registry.invalid",
+                        "--registry-auth",
+                        "oauth",
+                        "--registry-ca-file",
+                        str(paths["ca"]),
+                        "--registry-oauth-token-url",
+                        "https://idp.invalid/token",
+                        "--registry-oauth-client-id",
+                        "registry-client",
+                        "--registry-oauth-scope",
+                        "registry.read",
+                        "--registry-oauth-ca-file",
+                        str(paths["ca"]),
+                        "--registry-oauth-logical-cluster",
+                        "lsrc-1",
+                        "--registry-oauth-identity-pool-id",
+                        "pool-1",
+                    ],
+                    env=environment,
+                )
+                before = load_profiles(database_path).profile("secure-registry")
+                edited = self.runner.invoke(
+                    cli,
+                    [
+                        "edit",
+                        "secure-registry",
+                        "--registry-default-trust",
+                        "--clear-registry-oauth-scopes",
+                        "--registry-oauth-default-trust",
+                        "--clear-registry-oauth-logical-cluster",
+                        "--clear-registry-oauth-identity-pool-id",
+                    ],
+                    env=environment,
+                )
+                after = load_profiles(database_path).profile("secure-registry")
+
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual(0, edited.exit_code, edited.output)
+        self.assertEqual(
+            before["registry"]["auth"]["clientSecretRef"],
+            after["registry"]["auth"]["clientSecretRef"],
+        )
+        self.assertEqual([], after["registry"]["auth"]["scopes"])
+        self.assertNotIn("caCertificates", after["registry"]["auth"])
+        self.assertNotIn("logicalCluster", after["registry"]["auth"])
+        self.assertNotIn("identityPoolId", after["registry"]["auth"])
+        self.assertNotIn("tls", after["registry"])
+
     def test_required_secret_without_controlling_terminal_fails_with_guidance(self) -> None:
         with patch("kantrip.cli.os.open", side_effect=OSError("no tty")):
             result = self.runner.invoke(
@@ -633,7 +701,12 @@ class TestCli(unittest.TestCase):
             "[passed] Kafka transport: plaintext reachable; authentication: not configured",
             result.output,
         )
-        ping.assert_called_once_with(unittest.mock.ANY, timeout=1.5, kafka=unittest.mock.ANY)
+        ping.assert_called_once_with(
+            unittest.mock.ANY,
+            timeout=1.5,
+            kafka=unittest.mock.ANY,
+            resolved_registry=None,
+        )
 
     def test_ping_reports_confluent_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
@@ -649,7 +722,7 @@ class TestCli(unittest.TestCase):
                     RegistryPingResult(
                         "confluent",
                         "plaintext reachable",
-                        "provider metadata validated",
+                        "read query validated",
                     ),
                 ),
             ):
@@ -666,7 +739,7 @@ class TestCli(unittest.TestCase):
             "[passed] Confluent Schema Registry transport: plaintext reachable; proof:",
             result.output,
         )
-        self.assertIn("provider metadata validated", " ".join(result.output.split()))
+        self.assertIn("read query validated", " ".join(result.output.split()))
 
     def test_ping_reports_apicurio_registry_connectivity(self) -> None:
         with self.runner.isolated_filesystem():
@@ -682,7 +755,7 @@ class TestCli(unittest.TestCase):
                     RegistryPingResult(
                         "apicurio",
                         "plaintext reachable",
-                        "provider metadata validated",
+                        "read query validated",
                     ),
                 ),
             ):
@@ -697,7 +770,7 @@ class TestCli(unittest.TestCase):
             "[passed] Apicurio Registry transport: plaintext reachable; proof:",
             result.output,
         )
-        self.assertIn("provider metadata validated", " ".join(result.output.split()))
+        self.assertIn("read query validated", " ".join(result.output.split()))
 
     def test_add_apicurio_requires_and_persists_its_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

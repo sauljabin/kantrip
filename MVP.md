@@ -65,10 +65,10 @@ Implementation navigation (extend these tests; do not duplicate whole suites):
 
 | PR | Main existing code and test seams |
 | --- | --- |
-| 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/tests_registry.py`, `tests/tests_schemas.py`, `tests/tests_credential_mutations.py`, `tests/tests_redaction.py`, client integration fixtures |
-| 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/tests_sandbox.py` |
+| 2 | `registry.py`, schema, `secret_store.py`, shared lifecycle/resolution/probe modules; `tests/unit/tests_registry.py`, `tests/unit/tests_schemas.py`, `tests/unit/tests_credential_mutations.py`, `tests/unit/tests_redaction.py`, E2E client integration fixtures |
+| 3 | New focused input parser/normalizer modules feeding `profiles.py`; parser unit tests, CLI tests, `sandbox/__main__.py`, `tests/unit/tests_sandbox.py` |
 | 4 | Adapter/rendering/capability seams from PRs 1–2, `shells.py`, `doctor.py`; session, shell, smoke, and PTY contract tests |
-| 5 | Lifecycle/resolution/adapter/rendering seams from PRs 1–4; platform integration evidence, `scripts/verify_release.py`, `scripts/smoke.py`, docs, examples, packaging/workflow checks |
+| 5 | Lifecycle/resolution/adapter/rendering seams from PRs 1–4; platform integration evidence, `scripts/verify_release.py`, `tests/e2e`, docs, examples, packaging/workflow checks |
 | 6 | New `site/` static sources and focused site build/validation script; `.github/workflows/`, existing artwork, `README.md`, `DEVELOPMENT.md` |
 | 7 | All root guides and their anchors, schemas/examples, site links, `pyproject.toml` sdist includes, `scripts/verify_release.py` required files, templates/workflows |
 
@@ -187,53 +187,38 @@ credential rotation/recovery/removal, wrong endpoint trust, invalid secret,
 expired fixed token, and no leakage from wrapped HTTP errors. Keep a real Java
 and librdkafka session alive across token expiry and demonstrate successful
 refresh and later revocation failure. Repeat native Registry refresh for each
-advertised client. A successful short ping is not refresh evidence.
+distinct implementation and credential/trust path: Confluent Java, Confluent
+Python, and native Apicurio. Equivalent console formats, direct commands, and
+shell shims keep short adapter coverage but do not repeat the same expiry wait.
+A successful short ping is not refresh evidence.
 
 ### 2.3 Registry authentication probes with minimum authorization
 
-**Finding:** current unauthenticated profiles use Confluent-compatible
-`/schemas/types` and native Apicurio `/system/info`. These non-resource metadata
-responses prove provider-shaped connectivity only; they do not prove that a
-secured Registry accepted the configured identity. Subject, artifact, config,
-and mode operations can require provider- and deployment-specific roles. Sources:
+**Finding:** Registry HTTP authentication cannot be proven independently of an
+allowed route. Deployments commonly block auxiliary identity and system routes
+while exposing only the read/search APIs used by their clients. Subject,
+artifact, config, and mode operations can require provider- and
+deployment-specific roles. Sources:
 [Confluent operation authorization](https://docs.confluent.io/platform/current/confluent-security-plugins/schema-registry/authorization/index.html)
 and [Apicurio security](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-registry-security.html).
 
-**Decision:** introduce explicit provider probe strategies in `ping.py` using
-`ssl.SSLContext`, safe Authorization headers, and the common deadline. First
-validate a non-resource endpoint: Confluent-compatible `/schemas/types`
-([API](https://docs.confluent.io/platform/current/schema-registry/develop/api.html))
-and native Apicurio `/users/me`
-([API](https://javadoc.io/static/io.apicurio/apicurio-registry-common/3.0.10/io/apicurio/registry/rest/v3/UsersResource.html)).
-These are endpoint candidates with version/deployment verification gates, not
-a claim that all servers protect them identically. Apicurio ccompat remains a
-separate compatibility case; do not rewrite its base URL into native mode.
+**Decision:** use one fixed, non-mutating read query per provider:
+Confluent-compatible `GET /subjects?limit=1` and native Apicurio v3
+`GET /search/versions?limit=1`. Apicurio ccompat uses the Confluent strategy at
+its configured base URL; never rewrite it into native mode. Validate JSON
+content type and the exact provider response envelope. A valid empty collection
+succeeds, does not require user-supplied IDs or canary resources, and proves
+only permission for this list/search query. Confluent classifies subject listing
+as `GLOBAL_READ`, not `SCHEMA_READ`; Apicurio's standard `sr-readonly` role
+permits version search. Do not claim that every application invokes these
+endpoints or that success proves access to a particular schema.
 
-For each pinned server/security deployment, prefer a probe where a valid
-identity without resource roles succeeds and invalid credentials fail. Validate
-response shape/content type, and for `/users/me` require non-anonymous identity
-when auth is configured. Do not accept an HTML login page as success. A
-credentialed 200 from a public endpoint or a token issued by an IdP alone is
-insufficient evidence that the Registry accepted the credentials.
-
-When a provider/version/security configuration cannot prove authentication
-without resource authorization, use one reviewed, non-mutating protected
-operation with the minimum permission needed for that exact deployment. The
-choice may be a subject, artifact, config, mode, or another provider operation
-only after its authorization and response contract are verified; none is a
-universal fallback. Do not grant administrative or broad read roles merely for
-diagnostics. `USAGE.md` must then state the exact provider/version/configuration,
-operation, and minimum role or permission required for ping. This future
-documentation lands with the supported authenticated Registry feature; current
-`USAGE.md` continues to describe only unauthenticated metadata connectivity.
-
-Keep a reviewed provider/version probe contract recording whether the endpoint
-authenticates, needs a role, or is public. Do not infer this from a product name
-or optional version header alone. For a credentialed 200 without an identity
-response, make a bounded anonymous control request to the same endpoint within
-the same deadline: anonymous 401 followed by credentialed 200 establishes an
-authentication gate. An anonymous 200 does not. Do not submit deliberately wrong
-passwords during normal ping, or add a user-controlled arbitrary probe URL.
+For a credentialed 200, make a bounded anonymous control request to the exact
+same URL within the same deadline: anonymous 401/403 followed by credentialed
+200 establishes the configured deployment's authentication gate. An anonymous
+200 does not. Do not probe `/users/me`, `/system/info`, `/schemas/types`, or
+artifact search as a fallback, submit deliberately wrong passwords during
+normal ping, or add a user-controlled arbitrary probe URL.
 For mTLS use verified handshake evidence from the actual configured connection;
 never claim that optional client certificates were required by the server.
 If authentication cannot be established for a deployment, report `transport
@@ -241,15 +226,12 @@ verified; authentication unverified` and return `1`. For `auth: none`, a
 validated provider response suffices for connectivity but says nothing about
 resource access. Never downgrade an authenticated profile to this result.
 
-An HTTP 401 is authentication failure. A 403 can identify insufficient
-authorization only when the pinned server contract establishes that ordering;
-it is still a failed ping, not authentication success. Any ambiguous 401/403 is
-inconclusive and must never be accepted as success or mislabeled as a bad
-password. For a minimum-permission protected probe, success requires the
-expected validated response, normally 200, from an identity granted exactly
-the documented permission. Document that arbitrary proxies and authorization
-filters can make a universally role-independent authentication check
-impossible.
+A credentialed HTTP 401 is authentication failure and a credentialed 403 is an
+authorization failure; 404 and unrelated failures remain failures without
+fallback. For the anonymous control only, 401 or 403 is conclusive rejection
+after the same route succeeded with credentials. Success requires the expected
+validated 200 response from an identity granted exactly the documented read
+permission. Document that proxies must expose the chosen route.
 
 Disable redirects for authenticated and token requests; never forward
 Authorization to another origin or downgrade HTTPS. Ignore inherited HTTP
@@ -258,16 +240,13 @@ Bound reads and retries as well as connection time. Preserve partial service
 results: Kafka success plus Registry failure is an overall failure with both
 outcomes visible in normal mode. Quiet mode remains fully silent.
 
-**Acceptance:** test a real valid identity without a resource role wherever the
-selected endpoint supports it, and an identity with only the documented minimum
-permission wherever a protected fallback is required. Also test the same valid
-identity without that required permission, wrong credentials, public endpoint,
-401, verified and ambiguous 403, unsupported endpoint, invalid response,
-redirects, revoked/expired tokens, custom CA, and server-required mTLS. Assert
-distinct connectivity, authentication, and authorization outcomes; an
-ambiguous 401/403 never passes. Current sandbox Registry role filters are not
-evidence of a role-free probe. Add separate provider/version/security
-configurations and record every remaining deployment limitation.
+**Acceptance:** test empty and non-empty results, an identity with only the
+documented read permission, the same identity without permission, wrong
+credentials, public read, credentialed 401/403/404, invalid response,
+redirects, revoked/expired tokens, custom CA, and server-required mTLS. Include
+a synthetic reverse proxy that permits only the selected read endpoints and
+blocks auxiliary routes. Add separate provider/version/security configurations
+and record every remaining deployment limitation.
 
 ## PR 3 — Properties and Strimzi input sources
 
@@ -457,10 +436,10 @@ which duplication or responsibility problem each substantial refactor resolves.
 ### 5.2 Integration evidence and release gates
 
 Run and record supported Linux/macOS and Python 3.10–3.14 checks; use actual
-macOS Keychain and Linux Secret Service for store integration. Offline tests
-remain offline. Keep the existing smoke workflow and PTY shell contract; add
-secure integrations separately rather than making ordinary tests require
-Docker or keyring access. Pin test clients and retain sanitized evidence for
+macOS Keychain and Linux Secret Service for store integration. Unit tests remain
+offline. Keep the PTY shell contract in `tests/unit`; run secure integrations
+only through `python -m scripts.tests --suite e2e` so ordinary tests never
+require Docker or keyring access. Pin test clients and retain sanitized evidence for
 minimum and representative current versions.
 
 Fill any remaining infrastructure gaps: PLAIN/SCRAM-SHA-256, authorizer-enabled
@@ -477,7 +456,7 @@ Required existing gates for every PR:
 
 ```bash
 uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests
+uv run --locked python -m scripts.tests --suite unit
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
@@ -485,8 +464,7 @@ uv run --locked python -m scripts.verify_release dist
 Release integration also runs:
 
 ```bash
-uv run --locked python -m scripts.verify_shell_contract
-uv run --locked python -m scripts.smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
 Complete the manual QA below against the built wheel, record candidate commit,
@@ -710,7 +688,7 @@ adapter mapping or a capability error.
 | URL | `schema.registry.url` | `apicurio.registry.url` |
 | Basic | `basic.auth.credentials.source=USER_INFO`, `basic.auth.user.info` | `apicurio.registry.auth.username`, `.password` |
 | Fixed bearer | `bearer.auth.credentials.source=STATIC_TOKEN`, `bearer.auth.token` | Unsupported |
-| OAuth | `bearer.auth.credentials.source=OAUTHBEARER`, `.issuer.endpoint.url`, `.client.id`, `.client.secret`, `.scope` | `apicurio.registry.auth.service.token.endpoint`, `.client.id`, `.client.secret` |
+| OAuth | `bearer.auth.credentials.source=OAUTHBEARER`, `.issuer.endpoint.url`, `.client.id`, `.client.secret`, `.scope` | `apicurio.registry.auth.service.token.endpoint`, `.client.id`, `.client.secret`, plus version-gated `apicurio.registry.auth.client.scope` |
 | Routing | `bearer.auth.logical.cluster`, `bearer.auth.identity.pool.id` | No invented equivalents |
 | TLS/mTLS | Standard client `ssl.*` PEM trust/key fields, correctly prefixed when combined with Kafka | Version-verified `apicurio.registry.tls.*` PEM trust, certificates, verify-host and client identity properties |
 
@@ -886,13 +864,14 @@ with a non-secret value from the pinned fixture's setup instructions.
   Repeat HTTPS/no-auth, fixed token for Confluent, and server-required mTLS with
   PR 2's fixtures and the corresponding `--registry-auth`/certificate flags.
 
-- [ ] With PR 2's no-role fixtures run `kantrip ping PROFILE --timeout 5`, then
-  use the fixture's resource-list request to demonstrate denied authorization.
-  Verify ping succeeds only where authentication is independently proven.
-  Repeat invalid credentials, anonymous/public endpoint, ambiguous 403, and
-  wrong-origin redirect. Expect `1`/unverified for insufficient proof and no
-  credential forwarding. Test Apicurio ccompat separately from native mode.
-  Record any deployment limitation in compatibility instead of adding a role.
+- [ ] Verify `GET /subjects?limit=1` for Confluent-compatible profiles and
+  `GET /search/versions?limit=1` for native Apicurio v3 with empty and non-empty
+  results. Use read-only and no-role identities, then repeat invalid credentials,
+  anonymous/public read, credentialed 401/403/404, and wrong-origin redirect.
+  A synthetic proxy must allow only these selected endpoints while blocking
+  `/users/me`, `/system/info`, `/schemas/types`, and artifact search. Expect
+  `1` for insufficient proof and no credential forwarding. Test Apicurio
+  ccompat separately without rewriting its base URL.
 
 ### QA 7 — OAuth and refresh
 

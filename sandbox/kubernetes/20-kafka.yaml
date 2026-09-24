@@ -97,7 +97,7 @@ spec:
             oauthbearer.sasl.server.callback.handler.class: >-
               io.strimzi.kafka.oauth.server.JaasServerOauthValidatorCallbackHandler
             oauthbearer.sasl.jaas.config: 'org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required unsecuredLoginStringClaim_sub="unused" oauth.valid.issuer.uri="https://localhost:8443/realms/kantrip" oauth.jwks.endpoint.uri="https://keycloak:8443/realms/kantrip/protocol/openid-connect/certs" oauth.username.claim="preferred_username" oauth.ssl.truststore.location="/mnt/oauth-ca/ca.crt" oauth.ssl.truststore.type="PEM";'
-            connections.max.reauth.ms: 3600000
+            connections.max.reauth.ms: 10000
         configuration:
           brokerCertChainAndKey:
             secretName: kafka-listeners-tls
@@ -202,4 +202,4 @@ spec:
       userOperatorContainer:
         env:
           - name: STRIMZI_IGNORED_USERS_PATTERN
-            value: ^ANONYMOUS$
+            value: ^(ANONYMOUS|kantrip-scram-256|kantrip-scram-256-no-acl)$

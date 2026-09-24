@@ -12,12 +12,16 @@ publishing and do not report readiness while required checks remain unverified.
 This checklist does not authorize tagging or publication. Use existing explicit
 release authorization, requesting it only if absent.
 
-## First Release — Additional Gate
+## First Stable Release — Additional Gate
+
+These roadmap-completion checks apply to the first stable release, not to an
+intermediate alpha or beta. Pre-releases use the shared preparation and
+pre-release sections below; their exact-wheel release E2E remains mandatory.
 
 - [ ] Complete the [first-release manual QA](MVP.md#manual-qa--first-release-checklist),
   or its implemented scenarios moved to [Manual Testing](MANUAL_TESTING.md),
   against the candidate wheel on Linux and macOS. Record actual results;
-  automated tests and smoke do not replace the human checklist.
+  automated unit and E2E tests do not replace the human checklist.
 - [ ] Confirm every required CLI/protocol/authentication/input-format cell in
   [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
   conditional and unsupported cells explicitly, including ping proof limits.
@@ -53,11 +57,18 @@ release authorization, requesting it only if absent.
   prior released sequence. Verify rollback, uniquely timestamped private
   backups, preservation of earlier backups, migration history, and
   `PRAGMA user_version` before publishing a schema change.
-- [ ] Verify lockfile consistency, code analysis, unit tests, and the shell
-  contract using the workflows in [Development](DEVELOPMENT.md#development-scripts).
+- [ ] Verify lockfile consistency, code analysis, the offline unit suite, and the
+  sandbox E2E suite using the workflows in
+  [Development](DEVELOPMENT.md#development-scripts). Confirm E2E used the
+  candidate wheel, pinned released clients, and the native platform credential
+  store rather than Kantrip's development environment.
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,
   including the supported Python and Linux/macOS matrix and packaging jobs.
-  Refresh evidence for changes made during release preparation.
+  Confirm a separate full [E2E acceptance](.github/workflows/e2e.yml) run for
+  the candidate commit; pull-request CI runs it only on a fresh `run-e2e` label
+  event, while `main` skips non-runtime-only pushes. Refresh evidence for
+  changes made during release preparation. The tag workflow always runs E2E
+  against the exact release wheel, even for documentation-only changes.
 - [ ] Build and verify the wheel and source distribution using
   [Build artifacts](DEVELOPMENT.md#build-artifacts). Install the wheel in an
   isolated environment and smoke-test `kantrip --version`, `kantrip --help`, and
@@ -130,8 +141,9 @@ release authorization, requesting it only if absent.
   [Release](DEVELOPMENT.md#release) for a clean, current `main`, tag creation,
   protected approvals, and failure recovery.
 - [ ] Follow the [release workflow](.github/workflows/release.yml) through tag
-  validation, artifact verification, attestation, and protected publishing.
-  Preserve its build-once distribution bundle and review generated release notes.
+  validation, artifact verification, complete E2E against the exact built wheel,
+  attestation, and protected publishing. Preserve its build-once distribution
+  bundle and review generated release notes.
 - [ ] Verify the expected version is available on PyPI and installs successfully
   in an isolated environment; check version reporting, CLI help, and diagnostics.
 - [ ] Verify the GitHub release tag, prerelease status when applicable,

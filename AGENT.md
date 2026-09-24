@@ -8,8 +8,10 @@
   schema, fixture, example, template, and command. Replace obsolete or duplicate
   guidance.
 - Do not add empty modules or speculative adapters. Keep cyclomatic complexity
-  at or below 10; repository-wide Ruff `C901` runs in `scripts.analyze`, so use
-  focused helpers instead of suppressions.
+  at or below 10 for new and materially changed functions; repository-wide Ruff
+  `C901` runs in `scripts.analyze`. Five existing functions carry narrow
+  suppressions; remove those through focused refactors rather than adding new
+  suppressions.
 - Importing `kantrip` must have no filesystem, logging, console, or network side
   effects. Classify and redact values before presentation; keep behavior
   independent from Rich.
@@ -122,7 +124,9 @@
   over verified TLS. Resolve their exact profile-owned references through
   `SecretStore`, validate mTLS certificate/key correspondence, construct Java
   JAAS internally, and keep Java and librdkafka rendering independent. Resolve
-  one UUID/revision snapshot under the maintenance lock before launch.
+  one UUID/revision snapshot with both Kafka and Registry credentials resolved
+  through one store under the maintenance lock before ping or launch. Do not
+  re-read Registry secrets after releasing that lock.
 - Copy user-selected Kafka CA bundles into the profile as validated public PEM
   material. TLS always verifies certificates and hostnames. Materialize a
   custom CA only inside the private session and use canonical Java and
@@ -155,8 +159,9 @@
   explicit. `kantrip add --registry-url` selects and persists `confluent` when
   `--registry-provider` is omitted. Confluent uses the official
   `schema.registry.url` serializer/deserializer property and native Apicurio
-  uses `apicurio.registry.url`. The providers are mutually exclusive and only
-  plain `http://` URLs are supported.
+  uses `apicurio.registry.url`. The providers are mutually exclusive. Plain
+  `http://` requires no authentication or TLS material; secure profiles use
+  verified HTTPS with typed Basic, fixed-token, mTLS, or OAuth variants.
 - Confluent's Avro, JSON Schema, and Protobuf console producers and consumers
   are unsuffixed. They receive the matching Kafka producer/consumer config file
   and a Confluent-compatible `schema.registry.url`; connection overrides and
@@ -164,20 +169,37 @@
 - Kaskade `admin` and `consumer` receive a private INI file through
   `--config-file`; registry deserializers select a second private file with a
   provider-specific `[registry]` section. Kaskade alone supports native
-  Apicurio Avro, JSON Schema, and Protobuf decoding. Do not assume a Kaskade
+  Apicurio Avro, JSON Schema, and Protobuf decoding. Allow only `group.id` and
+  `broker.address.family` as explicit `--kafka` runtime properties; reject
+  connection and authentication overrides. Do not assume a Kaskade
   environment variable until Kaskade implements that contract.
+- Preserve Apicurio's official shared `apicurio.registry.tls.certificates`
+  trust contract for Registry and OAuth. Kaskade 5.0.1 separates the HTTP/TLS
+  contexts so Registry client identity does not reach the IdP, and implements
+  the official scope plus cleanup contract. Require Kaskade 5.0.1 or newer only
+  when native Apicurio OAuth scopes are configured; preserve compatible older
+  modes that do not need that property.
+- Confluent Java uses one official `ssl.*` trust configuration for Registry and
+  OAuth. Confluent Python has no token-CA property; only for a Kaskade Registry
+  OAuth child, provide a private `SSL_CERT_FILE` containing platform default
+  roots plus the profile's IdP CA. Never mutate the parent or system trust.
 - Bash, Zsh, and Fish sessions preserve startup files and history, neutralize
   adapter shadows, scrub reserved Kafka/Registry/sandbox and JVM injection
   variables, and restore the owned environment and private shim path. Never
   install persistent aliases.
 - Adapters must reject connection arguments that override the selected profile.
+  Keep one argument policy shared by direct execution and shell shims. Apply
+  explicit per-client rules to native connection, configuration-file, and
+  runtime-property options while preserving resource and presentation options.
 - `kantrip ping` polls Confluent Kafka's `AdminClient` statistics and error
   callbacks for a configured/learned addressable broker reaching `UP`; never use
-  topic/group/schema/cluster resource APIs for Kafka success. It checks
-  `/schemas/types` for Confluent-compatible registries and `/system/info` for
-  native Apicurio. These current unauthenticated probes prove provider-shaped
-  connectivity only. Apply one bounded deadline and never overstate
-  authentication or authorization.
+  topic/group/schema/cluster resource APIs for Kafka success. Registry ping uses
+  `GET /subjects?limit=1` for Confluent-compatible endpoints and
+  `GET /search/versions?limit=1` for native Apicurio v3. It validates empty or
+  non-empty provider shapes and, for authenticated profiles, requires the same
+  anonymous request to fail with explicit authentication evidence. Apply one
+  bounded deadline and never claim schema-specific read, write access, or
+  long-lived OAuth refresh.
 
 ## Sensitive Values and Output
 
@@ -197,10 +219,10 @@
 
 ## Tests, Scripts, and Sandbox
 
-- Tests live in `tests` and remain offline. Generate PKI in memory or in
-  test-owned temporary directories; never commit certificate/key fixtures. Shared workflow
-  helpers belong in `scripts/__init__.py`; other script modules are executable
-  workflows.
+- Offline tests live in `tests/unit`; infrastructure acceptance lives in
+  `tests/e2e`. Generate PKI in memory or in test-owned temporary directories;
+  never commit certificate/key fixtures. Shared workflow helpers belong in
+  `scripts/__init__.py`; other script modules are executable workflows.
 - Keep Kind configuration, Kubernetes manifests, pinned versions, synthetic
   bootstrap data, and lifecycle tooling in `sandbox`. Bind every host endpoint
   to loopback. Offline tests may inspect manifests and import side-effect-free
@@ -225,28 +247,44 @@
   Both Apicurio variants use KafkaSQL with isolated journal and snapshot topics,
   delete cleanup policy, and infinite retention so their data survives Apicurio
   pod restarts. Destroying the Kind cluster intentionally removes sandbox data.
-- `python -m scripts.smoke` runs the adapter smoke workflow against the active
-  plaintext listener on `localhost:9092`, with locally installed clients and
-  optional shells. It is a pre-commit hook, not an offline or packaged E2E test.
-- `python -m scripts.auth_smoke` runs the real authenticated lifecycle,
-  producer/consumer/admin, Bash/Zsh/Fish, and no-ACL ping acceptance matrix.
-  It uses the native credential backend and must delete its temporary profiles.
-- `python -m scripts.verify_shell_contract` tests Bash, Zsh, and Fish through PTYs
-  and fake clients. Keep assertions in Python and delete safe-metadata event logs
-  with their temporary directory.
+- `python -m scripts.tests --suite unit` is the default offline gate. It includes
+  the Bash, Zsh, and Fish PTY contract with generated fake clients.
+- `python -m scripts.tests --suite e2e` is the sole external acceptance entry
+  point. It requires an explicitly provisioned sandbox, the pinned released
+  clients in `tests/e2e/versions.env`, the candidate wheel installed separately,
+  and a real approved native credential backend. It must never create or remove
+  the caller's sandbox. It owns exact temporary profiles, topics, schemas, and
+  artifacts and cleans only those resources.
+- E2E preconditions must distinguish missing tooling or infrastructure from
+  product assertion failures. Exercise real operations, not help/version output;
+  parse TUI behavior through terminal state, not raw redraw bytes. Serialize the
+  shared OAuth identities and prove refresh and post-revocation failure in the
+  same long-lived client processes.
 - Keep reproducible, high-value exploratory scenarios in `MANUAL_TESTING.md`.
   Every scenario needs explicit setup, actions, and expected results.
   `DEVELOPMENT.md` contains environment and contributor workflows, not manual
-  test cases. Manual checks complement rather than replace offline tests and the
-  sandbox smoke workflow.
+  test cases. Manual checks complement rather than replace unit and E2E tests.
 
 ## Verification
 
-Run these checks after code, environment, schema, tooling, or documentation work:
+Run analysis, unit tests, and build verification after code, environment,
+schema, tooling, or documentation work. Run E2E for runtime, schema,
+dependency, packaging, sandbox, E2E tooling, or workflow changes; skip it for
+prose-only docs, images/site assets, templates, license, and unit-test-only
+changes. Mixed, renamed/deleted runtime, or unknown paths require E2E. The
+shared staged/`main` selection policy lives in `scripts/tests.py` and
+is documented in [Development](DEVELOPMENT.md#sandbox-services-and-e2e-workflow).
+Force E2E explicitly when docs change executable behavior. PRs run it only on
+a newly applied `run-e2e` label or explicit workflow dispatch; releases always
+run it against the exact wheel, regardless of changed paths.
+
+Run the applicable checks:
 
 ```text
 uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests
+uv run --locked python -m scripts.tests --suite unit
+# For E2E-impacting changes, with sandbox and released clients provisioned:
+uv run --locked python -m scripts.tests --suite e2e
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
@@ -256,6 +294,9 @@ when the banner, console theme, or SVG helper changes.
 
 ## Releases and Contributions
 
+- Use explicit published version tags for third-party GitHub Actions in every
+  workflow. Verify each tag against its upstream release before changing it;
+  avoid commit hashes and floating major tags.
 - Annotated stable and PEP 440 pre-release tags (`vMAJOR.MINOR.PATCH`, plus
   `aN`, `bN`, or `rcN` suffixes) on `main` are the only release version source;
   Hatchling and hatch-vcs derive package metadata from Git. GitHub Releases are

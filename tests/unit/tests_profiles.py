@@ -23,6 +23,7 @@ from kantrip.profiles import (
     DATABASE_SCHEMA_VERSION,
     KafkaAuthInput,
     ProfileStoreError,
+    RegistryAuthInput,
     add_profile,
     database_maintenance_lock,
     edit_profile,
@@ -35,7 +36,7 @@ from kantrip.profiles import (
 )
 from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
-from tests.pki import synthetic_pki
+from tests.unit.pki import synthetic_pki
 
 
 class TestProfiles(unittest.TestCase):
@@ -573,6 +574,90 @@ class TestProfiles(unittest.TestCase):
             active_reference = edited.profile("local")["kafka"]["auth"]["passwordRef"]
             self.assertEqual("new-secret", store.values[active_reference])
 
+    def test_registry_only_snapshot_survives_a_concurrent_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="old-registry-secret"
+                ),
+                secret_store=store,
+            ).profile("local")
+            old_reference = added["registry"]["auth"]["passwordRef"]
+            entered = Event()
+            release = Event()
+            blocking_store = _OneShotBlockingGetStore(store, entered, release)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                snapshot_future = executor.submit(
+                    resolve_profile_snapshot, "local", path, secret_store=blocking_store
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                edit_future = executor.submit(
+                    edit_profile,
+                    "local",
+                    path,
+                    registry_auth=RegistryAuthInput(
+                        "basic", username="synthetic-user", password="new-registry-secret"
+                    ),
+                    secret_store=store,
+                )
+                release.set()
+                snapshot = snapshot_future.result()
+                edited = edit_future.result()
+
+            self.assertEqual(1, snapshot.revision)
+            self.assertIsNotNone(snapshot.registry)
+            assert snapshot.registry is not None
+            self.assertEqual("old-registry-secret", snapshot.registry.password)
+            self.assertEqual(2, edited.revision("local"))
+            self.assertIn(old_reference, store.deleted)
+            self.assertNotIn(old_reference, store.values)
+
+    def test_combined_snapshot_survives_a_concurrent_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput("plain", username="kafka-user", password="old-kafka-secret"),
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="registry-user", password="old-registry-secret"
+                ),
+                secret_store=store,
+            ).profile("local")
+            kafka_reference = added["kafka"]["auth"]["passwordRef"]
+            registry_reference = added["registry"]["auth"]["passwordRef"]
+            entered = Event()
+            release = Event()
+            blocking_store = _OneShotBlockingGetStore(store, entered, release)
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                snapshot_future = executor.submit(
+                    resolve_profile_snapshot, "local", path, secret_store=blocking_store
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                remove_future = executor.submit(remove_profile, "local", path, secret_store=store)
+                release.set()
+                snapshot = snapshot_future.result()
+                removed = remove_future.result()
+
+            self.assertEqual(1, snapshot.revision)
+            self.assertEqual("old-kafka-secret", snapshot.kafka.password)
+            self.assertIsNotNone(snapshot.registry)
+            assert snapshot.registry is not None
+            self.assertEqual("old-registry-secret", snapshot.registry.password)
+            self.assertEqual({}, removed.profiles)
+            self.assertNotIn(kafka_reference, store.values)
+            self.assertNotIn(registry_reference, store.values)
+
     def test_repair_and_secret_staging_are_serialized_by_the_maintenance_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
@@ -641,6 +726,7 @@ class TestProfiles(unittest.TestCase):
 
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "confluent",
                 "schema.registry.url": "http://localhost:8081",
             },
@@ -658,11 +744,158 @@ class TestProfiles(unittest.TestCase):
 
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "apicurio",
                 "apicurio.registry.url": "http://localhost:8082/apis/registry/v3",
             },
             profiles.profile("local")["registry"],
         )
+
+    def test_add_stages_registry_basic_secret_with_the_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            profiles = add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="synthetic-password"
+                ),
+                secret_store=store,
+            )
+
+        auth = profiles.profile("local")["registry"]["auth"]
+        self.assertEqual("basic", auth["type"])
+        self.assertEqual("synthetic-user", auth["username"])
+        self.assertNotIn("synthetic-password", json.dumps(profiles.profiles))
+        self.assertEqual("synthetic-password", store.values[auth["passwordRef"]])
+
+    def test_edit_rotates_and_removes_registry_credentials_recoverably(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="first-password"
+                ),
+                secret_store=store,
+            )
+            rotated = edit_profile(
+                "local",
+                path,
+                registry_auth=RegistryAuthInput(
+                    "basic", username="synthetic-user", password="second-password"
+                ),
+                secret_store=store,
+            ).profile("local")
+            reference = rotated["registry"]["auth"]["passwordRef"]
+            self.assertEqual("second-password", store.values[reference])
+            cleared = edit_profile(
+                "local",
+                path,
+                registry_auth=RegistryAuthInput("none"),
+                secret_store=store,
+            ).profile("local")
+
+        self.assertEqual({"type": "none"}, cleared["registry"]["auth"])
+        self.assertIn(reference, store.deleted)
+
+    def test_registry_mtls_edit_retains_omitted_private_key_and_password(self) -> None:
+        certificate, private_key = _client_identity("registry-key-password")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "mtls",
+                    client_certificate=certificate,
+                    private_key=private_key,
+                    private_key_password="registry-key-password",
+                ),
+                secret_store=store,
+            ).profile("local")
+            original_auth = added["registry"]["auth"]
+
+            edited = edit_profile(
+                "local",
+                path,
+                registry_auth=RegistryAuthInput(
+                    "mtls",
+                    client_certificate=certificate,
+                ),
+                secret_store=store,
+            ).profile("local")
+
+        self.assertEqual(original_auth, edited["registry"]["auth"])
+        self.assertEqual(certificate, edited["registry"]["tls"]["clientCertificate"])
+        self.assertEqual(private_key, store.values[original_auth["privateKeyRef"]])
+
+    def test_edit_stages_kafka_and_registry_credentials_in_one_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                transport="tls",
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="registry-user", password="old-registry-password"
+                ),
+                secret_store=store,
+            ).profile("local")
+            old_registry_reference = added["registry"]["auth"]["passwordRef"]
+
+            edited = edit_profile(
+                "local",
+                path,
+                auth=KafkaAuthInput("plain", username="kafka-user", password="kafka-password"),
+                registry_auth=RegistryAuthInput(
+                    "basic", username="registry-user", password="new-registry-password"
+                ),
+                secret_store=store,
+            ).profile("local")
+
+        kafka_reference = edited["kafka"]["auth"]["passwordRef"]
+        registry_reference = edited["registry"]["auth"]["passwordRef"]
+        self.assertEqual("kafka-password", store.values[kafka_reference])
+        self.assertEqual("new-registry-password", store.values[registry_reference])
+        self.assertNotEqual(old_registry_reference, registry_reference)
+        self.assertIn(old_registry_reference, store.deleted)
+
+    def test_remove_registry_retires_its_credentials_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "local",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput("plain", username="kafka-user", password="kafka-password"),
+                registry_url="https://registry.example.com",
+                registry_auth=RegistryAuthInput(
+                    "basic", username="registry-user", password="registry-password"
+                ),
+                secret_store=store,
+            ).profile("local")
+            kafka_reference = added["kafka"]["auth"]["passwordRef"]
+            registry_reference = added["registry"]["auth"]["passwordRef"]
+
+            edited = edit_profile("local", path, remove_registry=True, secret_store=store).profile(
+                "local"
+            )
+
+        self.assertNotIn("registry", edited)
+        self.assertEqual("kafka-password", store.values[kafka_reference])
+        self.assertNotIn(registry_reference, store.values)
+        self.assertIn(registry_reference, store.deleted)
 
     def test_edits_plain_profile_fields_and_advances_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -695,6 +928,7 @@ class TestProfiles(unittest.TestCase):
             self.assertEqual({"environment": "development", "owner": "platform"}, updated["labels"])
             self.assertEqual(
                 {
+                    "auth": {"type": "none"},
                     "provider": "apicurio",
                     "apicurio.registry.url": "http://localhost:8082/apis/registry/v3",
                 },
@@ -784,6 +1018,42 @@ class TestProfiles(unittest.TestCase):
             remove_profile("production", path, secret_store=store)
 
             self.assertNotIn(second_reference, store.values)
+
+    def test_adds_and_edits_kafka_oauth_with_independent_identity_and_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+            store = _RecordingSecretStore()
+            added = add_profile(
+                "production",
+                path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "oauth",
+                    oauth_token_url="https://idp.example.com/oauth/token",
+                    oauth_client_id="kafka-client",
+                    oauth_scopes=("openid", "kafka"),
+                    oauth_client_secret="first-client-secret",
+                    oauth_ca_certificates=synthetic_pki().ca,
+                ),
+                secret_store=store,
+            ).profile("production")
+            reference = added["kafka"]["auth"]["clientSecretRef"]
+
+            edited = edit_profile(
+                "production",
+                path,
+                auth=KafkaAuthInput(
+                    "oauth",
+                    oauth_scopes=("kafka",),
+                    oauth_default_trust=True,
+                ),
+                secret_store=store,
+            ).profile("production")
+
+        self.assertEqual("first-client-secret", store.values[reference])
+        self.assertEqual(reference, edited["kafka"]["auth"]["clientSecretRef"])
+        self.assertEqual(["kafka"], edited["kafka"]["auth"]["scopes"])
+        self.assertNotIn("caCertificates", edited["kafka"]["auth"])
 
     def test_password_authentication_requires_tls_and_expected_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -913,6 +1183,7 @@ class TestProfiles(unittest.TestCase):
 
         self.assertEqual(
             {
+                "auth": {"type": "none"},
                 "provider": "confluent",
                 "schema.registry.url": "http://localhost:8081",
             },
@@ -1000,7 +1271,10 @@ class TestProfiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
             cases = (
-                ({"registry_url": "https://registry.example.com"}, "supports only an http://"),
+                (
+                    {"registry_url": "http://user:secret@registry.example.com"},
+                    "must not contain credentials",
+                ),
                 ({"registry_provider": "apicurio"}, "requires --registry-url"),
             )
             for arguments, message in cases:

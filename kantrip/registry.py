@@ -1,50 +1,119 @@
-"""Resolve the plaintext registry connection selected by a profile."""
+"""Validate profile-owned Schema Registry connections without leaking credentials."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import Enum, auto
+from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
-RegistryProvider = Literal["apicurio", "confluent"]
+from kantrip.kafka import (
+    KafkaProfileError,
+    validate_ca_bundle,
+    validate_client_certificate,
+    validate_client_identity,
+)
+from kantrip.oauth import (
+    OAuthConnection,
+    OAuthProfileError,
+    validate_oauth_endpoint,
+    validate_oauth_identity,
+)
+from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
 
+RegistryProvider = Literal["apicurio", "confluent"]
+RegistryAuthType = Literal["none", "basic", "token", "mtls", "oauth"]
 APICURIO_PROVIDER: RegistryProvider = "apicurio"
 CONFLUENT_PROVIDER: RegistryProvider = "confluent"
 APICURIO_URL_PROPERTY = "apicurio.registry.url"
 CONFLUENT_URL_PROPERTY = "schema.registry.url"
+REGISTRY_CA_BUNDLE_FILENAME = "registry-ca.pem"
+REGISTRY_OAUTH_CA_BUNDLE_FILENAME = "registry-oauth-ca.pem"
+REGISTRY_CLIENT_CERTIFICATE_FILENAME = "registry-client.crt"
+REGISTRY_CLIENT_KEY_FILENAME = "registry-client.key"
 
 
 class RegistryProfileError(ValueError):
-    """Raised when a configured registry connection is not executable."""
+    """Raised when Registry connection metadata is unsafe or unsupported."""
+
+
+class _UnresolvedRegistry(Enum):
+    """Distinguish an absent resolved Registry from a direct helper's fallback."""
+
+    VALUE = auto()
 
 
 @dataclass(frozen=True)
 class RegistryConnection:
-    """A validated registry provider and its official serializer URL property."""
+    """Validated provider-specific Registry connection metadata."""
 
     provider: RegistryProvider
     url: str
     property_name: str
+    auth_type: RegistryAuthType = "none"
+    ca_certificates: str | None = None
+    username: str | None = None
+    password_reference: str | None = None
+    token_reference: str | None = None
+    client_certificate: str | None = None
+    private_key_reference: str | None = None
+    private_key_password_reference: str | None = None
+    oauth: OAuthConnection | None = None
+    oauth_logical_cluster: str | None = None
+    oauth_identity_pool_id: str | None = None
+    password: str | None = None
+    token: str | None = None
+    private_key: str | None = None
+    private_key_password: str | None = None
 
     @property
     def display_name(self) -> str:
-        """Return the provider's user-facing product name."""
         return (
             "Apicurio Registry"
             if self.provider == APICURIO_PROVIDER
             else "Confluent Schema Registry"
         )
 
+    @property
+    def requires_secrets(self) -> bool:
+        return self.auth_type != "none"
 
-def plain_registry_connection(profile: Mapping[str, Any]) -> RegistryConnection | None:
-    """Return a plaintext registry connection from a profile."""
+
+def registry_connection(profile: Mapping[str, Any]) -> RegistryConnection | None:
+    """Parse the strict supported Registry profile shape."""
     registry = profile.get("registry")
     if registry is None:
         return None
+    provider, property_name, url, auth, selected_auth = _registry_basics(registry)
+    tls = registry.get("tls")
+    ca_certificates, client_certificate = _parse_tls(tls)
+    if client_certificate is not None and selected_auth != "mtls":
+        raise RegistryProfileError("Registry client certificates require mTLS authentication")
+    _validate_url(url, secure=selected_auth != "none" or tls is not None)
+    if url.startswith("http://"):
+        if selected_auth != "none" or tls is not None:
+            raise RegistryProfileError(
+                "HTTP Registry connections require auth none and no TLS material"
+            )
+        return RegistryConnection(provider, url, property_name)
+    connection = RegistryConnection(
+        provider,
+        url,
+        property_name,
+        selected_auth,
+        ca_certificates,
+        client_certificate=client_certificate,
+    )
+    return _with_authentication(connection, auth, profile)
+
+
+def _registry_basics(
+    registry: object,
+) -> tuple[RegistryProvider, str, str, Mapping[str, Any], RegistryAuthType]:
     if not isinstance(registry, Mapping):
         raise RegistryProfileError("registry must be an object in the selected Kantrip profile")
-
     provider_value = registry.get("provider")
     if provider_value not in {APICURIO_PROVIDER, CONFLUENT_PROVIDER}:
         raise RegistryProfileError("registry.provider must be confluent or apicurio")
@@ -52,28 +121,116 @@ def plain_registry_connection(profile: Mapping[str, Any]) -> RegistryConnection 
     property_name = (
         APICURIO_URL_PROPERTY if provider == APICURIO_PROVIDER else CONFLUENT_URL_PROPERTY
     )
-    expected_keys = {"provider", property_name}
-    unknown_keys = sorted(str(key) for key in registry if key not in expected_keys)
-    if unknown_keys:
+    allowed = {"provider", property_name, "tls", "auth"}
+    unknown = sorted(str(key) for key in registry if key not in allowed)
+    if unknown:
         raise RegistryProfileError(
-            f"registry contains properties incompatible with provider {provider}: "
-            f"{', '.join(unknown_keys)}"
+            f"registry contains properties incompatible with provider {provider}: {', '.join(unknown)}"
         )
     url = registry.get(property_name)
     if not isinstance(url, str):
         raise RegistryProfileError(f"registry requires {property_name}")
-    _validate_plain_url(url)
-    return RegistryConnection(provider, url, property_name)
+    auth = registry.get("auth", {"type": "none"})
+    if not isinstance(auth, Mapping):
+        raise RegistryProfileError("Registry authentication configuration is invalid")
+    auth_type = auth.get("type")
+    if auth_type not in {"none", "basic", "token", "mtls", "oauth"}:
+        raise RegistryProfileError("Registry authentication type is not supported")
+    selected_auth = cast(RegistryAuthType, auth_type)
+    return provider, property_name, url, auth, selected_auth
+
+
+def _with_authentication(
+    connection: RegistryConnection,
+    auth: Mapping[str, Any],
+    profile: Mapping[str, Any],
+) -> RegistryConnection:
+    if connection.auth_type == "none":
+        _reject_auth_properties(auth, {"type"})
+        return connection
+    profile_id = profile.get("id")
+    if not isinstance(profile_id, str):
+        raise RegistryProfileError("Registry profile identity is invalid")
+    return _authenticated_connection(connection, auth, profile_id)
+
+
+def _authenticated_connection(
+    connection: RegistryConnection,
+    auth: Mapping[str, Any],
+    profile_id: str,
+) -> RegistryConnection:
+    if connection.auth_type == "basic":
+        return _with_basic(connection, auth, profile_id)
+    if connection.auth_type == "token":
+        _require_confluent_token(connection)
+        return _with_token(connection, auth, profile_id)
+    if connection.auth_type == "mtls":
+        return _with_mtls(connection, auth, profile_id)
+    return _with_oauth(connection, auth, profile_id)
+
+
+def _require_confluent_token(connection: RegistryConnection) -> None:
+    if connection.provider != CONFLUENT_PROVIDER:
+        raise RegistryProfileError(
+            "fixed Registry tokens are supported only for Confluent-compatible Registry"
+        )
+
+
+def resolve_registry_connection(
+    connection: RegistryConnection, store: SecretStore
+) -> RegistryConnection:
+    """Resolve exact Registry credentials only after validation."""
+    try:
+        if connection.auth_type == "basic":
+            assert connection.password_reference is not None
+            return replace(connection, password=_secret(store, connection.password_reference))
+        if connection.auth_type == "token":
+            assert connection.token_reference is not None
+            return replace(connection, token=_secret(store, connection.token_reference))
+        if connection.auth_type == "mtls":
+            return _resolve_mtls_connection(connection, store)
+        if connection.auth_type == "oauth":
+            assert connection.oauth is not None
+            return replace(
+                connection,
+                oauth=replace(
+                    connection.oauth,
+                    client_secret=_secret(store, connection.oauth.client_secret_reference),
+                ),
+            )
+    except SecretStoreError as error:
+        raise RegistryProfileError("Registry credentials could not be resolved") from error
+    return connection
+
+
+def _resolve_mtls_connection(
+    connection: RegistryConnection,
+    store: SecretStore,
+) -> RegistryConnection:
+    assert connection.private_key_reference is not None
+    key = store.get(connection.private_key_reference)
+    password = (
+        _secret(store, connection.private_key_password_reference)
+        if connection.private_key_password_reference
+        else None
+    )
+    try:
+        validate_client_identity(
+            connection.client_certificate or "",
+            key,
+            password=password,
+        )
+    except KafkaProfileError as error:
+        raise RegistryProfileError("Registry mTLS identity is invalid") from error
+    return replace(connection, private_key=key, private_key_password=password)
 
 
 def display_registry(profile: Mapping[str, Any]) -> str:
-    """Return a compact, redacted registry label for profile listings."""
+    """Return a compact redacted Registry label for profile listings."""
     registry = profile.get("registry")
     if not isinstance(registry, Mapping):
         return "-"
     provider = registry.get("provider")
-    if provider not in {APICURIO_PROVIDER, CONFLUENT_PROVIDER}:
-        return "-"
     property_name = (
         APICURIO_URL_PROPERTY if provider == APICURIO_PROVIDER else CONFLUENT_URL_PROPERTY
     )
@@ -84,32 +241,419 @@ def display_registry(profile: Mapping[str, Any]) -> str:
         parsed = urlsplit(url)
     except ValueError:
         return "-"
-    netloc = parsed.netloc.rsplit("@", 1)[-1]
-    redacted_url = urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+    redacted_url = urlunsplit(
+        (parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", "")
+    )
     name = "Apicurio" if provider == APICURIO_PROVIDER else "Confluent"
     return f"{name}: {redacted_url}"
 
 
-def _validate_plain_url(url: str) -> None:
-    try:
-        parsed = urlsplit(url)
-        port = parsed.port
-    except ValueError as error:
-        raise RegistryProfileError("registry URL is invalid") from error
-    valid = (
-        parsed.scheme == "http"
-        and parsed.hostname is not None
-        and parsed.username is None
-        and parsed.password is None
-        and parsed.query == ""
-        and parsed.fragment == ""
-        and (port is None or 1 <= port <= 65535)
-    )
-    if not valid:
-        raise RegistryProfileError(
-            "Kantrip currently supports only an http:// registry URL without credentials, "
-            "a query, or a fragment"
+def kaskade_registry_properties(
+    connection: RegistryConnection,
+    *,
+    ca_location: Path | None = None,
+    client_certificate_location: Path | None = None,
+    private_key_location: Path | None = None,
+) -> dict[str, str]:
+    """Render Kaskade's verified provider-specific private INI mapping."""
+    if connection.provider == APICURIO_PROVIDER:
+        properties = {
+            "provider": APICURIO_PROVIDER,
+            APICURIO_URL_PROPERTY: connection.url,
+        }
+        _add_apicurio_registry_security(
+            properties,
+            connection,
+            ca_location,
+            client_certificate_location,
+            private_key_location,
         )
+        return properties
+    properties = {"provider": CONFLUENT_PROVIDER, "url": connection.url}
+    _add_confluent_registry_security(
+        properties,
+        connection,
+        ca_location,
+        client_certificate_location,
+        private_key_location,
+        allow_independent_oauth_ca=True,
+    )
+    return properties
+
+
+def confluent_console_properties(
+    connection: RegistryConnection,
+    *,
+    ca_location: Path | None = None,
+    client_certificate_location: Path | None = None,
+    private_key_location: Path | None = None,
+) -> dict[str, str]:
+    """Render Confluent serializer properties inside a Kafka client file."""
+    if connection.provider != CONFLUENT_PROVIDER:
+        raise RegistryProfileError("Confluent consoles require a Confluent Registry profile")
+    native: dict[str, str] = {"url": connection.url}
+    _add_confluent_registry_security(
+        native,
+        connection,
+        ca_location,
+        client_certificate_location,
+        private_key_location,
+        java=True,
+    )
+    return {f"schema.registry.{name}": value for name, value in native.items()}
+
+
+def _add_confluent_registry_security(
+    properties: dict[str, str],
+    connection: RegistryConnection,
+    ca_location: Path | None,
+    client_certificate_location: Path | None,
+    private_key_location: Path | None,
+    *,
+    allow_independent_oauth_ca: bool = False,
+    java: bool = False,
+) -> None:
+    if java:
+        _add_confluent_java_tls(properties, connection, ca_location)
+    else:
+        _add_registry_tls_files(
+            properties,
+            connection,
+            ca_location,
+            client_certificate_location,
+            private_key_location,
+            prefix="ssl.",
+        )
+    if connection.auth_type == "none" or connection.auth_type == "mtls":
+        return
+    if connection.auth_type == "basic":
+        if connection.username is None or connection.password is None:
+            raise RegistryProfileError("Registry Basic credentials are not resolved")
+        properties.update(
+            {
+                "basic.auth.credentials.source": "USER_INFO",
+                "basic.auth.user.info": f"{connection.username}:{connection.password}",
+            }
+        )
+        return
+    if connection.auth_type == "token":
+        if connection.token is None:
+            raise RegistryProfileError("Registry token is not resolved")
+        properties.update(
+            {
+                "bearer.auth.credentials.source": "STATIC_TOKEN",
+                "bearer.auth.token": connection.token,
+            }
+        )
+        return
+    oauth = _resolved_registry_oauth(connection)
+    if (
+        not allow_independent_oauth_ca
+        and oauth.ca_certificates is not None
+        and oauth.ca_certificates != connection.ca_certificates
+    ):
+        raise RegistryProfileError(
+            "Confluent Java uses one ssl.* trust configuration for Registry and OAuth; "
+            "independent CA bundles are not supported"
+        )
+    properties.update(
+        {
+            "bearer.auth.credentials.source": "OAUTHBEARER",
+            "bearer.auth.issuer.endpoint.url": oauth.token_url,
+            "bearer.auth.client.id": oauth.client_id,
+            "bearer.auth.client.secret": oauth.client_secret or "",
+            "bearer.auth.scope": " ".join(oauth.scopes),
+        }
+    )
+    if connection.oauth_logical_cluster is not None:
+        properties["bearer.auth.logical.cluster"] = connection.oauth_logical_cluster
+    if connection.oauth_identity_pool_id is not None:
+        properties["bearer.auth.identity.pool.id"] = connection.oauth_identity_pool_id
+
+
+def _add_confluent_java_tls(
+    properties: dict[str, str],
+    connection: RegistryConnection,
+    ca_location: Path | None,
+) -> None:
+    if connection.ca_certificates is not None:
+        if ca_location is None:
+            raise RegistryProfileError("Registry CA bundle requires a private session file")
+        properties.update(
+            {
+                "ssl.truststore.location": str(ca_location),
+                "ssl.truststore.type": "PEM",
+            }
+        )
+    if connection.auth_type != "mtls":
+        return
+    if connection.client_certificate is None or connection.private_key is None:
+        raise RegistryProfileError("Registry mTLS credentials are not resolved")
+    properties.update(
+        {
+            "ssl.keystore.type": "PEM",
+            "ssl.keystore.certificate.chain": connection.client_certificate,
+            "ssl.keystore.key": connection.private_key,
+        }
+    )
+    if connection.private_key_password is not None:
+        properties["ssl.key.password"] = connection.private_key_password
+
+
+def _add_apicurio_registry_security(
+    properties: dict[str, str],
+    connection: RegistryConnection,
+    ca_location: Path | None,
+    client_certificate_location: Path | None,
+    private_key_location: Path | None,
+) -> None:
+    _add_registry_tls_files(
+        properties,
+        connection,
+        ca_location,
+        client_certificate_location,
+        private_key_location,
+        prefix="apicurio.registry.tls.",
+        apicurio=True,
+    )
+    if connection.auth_type == "none" or connection.auth_type == "mtls":
+        return
+    if connection.auth_type == "basic":
+        if connection.username is None or connection.password is None:
+            raise RegistryProfileError("Registry Basic credentials are not resolved")
+        properties["apicurio.registry.auth.username"] = connection.username
+        properties["apicurio.registry.auth.password"] = connection.password
+        return
+    if connection.auth_type == "token":
+        raise RegistryProfileError("Apicurio does not support fixed Registry tokens")
+    oauth = _resolved_registry_oauth(connection)
+    if oauth.ca_certificates is not None and oauth.ca_certificates != connection.ca_certificates:
+        raise RegistryProfileError(
+            "Apicurio uses apicurio.registry.tls.certificates for both Registry and OAuth; "
+            "independent CA bundles are not supported"
+        )
+    properties.update(
+        {
+            "apicurio.registry.auth.service.token.endpoint": oauth.token_url,
+            "apicurio.registry.auth.client.id": oauth.client_id,
+            "apicurio.registry.auth.client.secret": oauth.client_secret or "",
+        }
+    )
+    if oauth.scopes:
+        properties["apicurio.registry.auth.client.scope"] = " ".join(oauth.scopes)
+
+
+def _add_registry_tls_files(
+    properties: dict[str, str],
+    connection: RegistryConnection,
+    ca_location: Path | None,
+    client_certificate_location: Path | None,
+    private_key_location: Path | None,
+    *,
+    prefix: str,
+    apicurio: bool = False,
+) -> None:
+    if connection.ca_certificates is not None:
+        if ca_location is None:
+            raise RegistryProfileError("Registry CA bundle requires a private session file")
+        property_name = "certificates" if apicurio else "ca.location"
+        properties[f"{prefix}{property_name}"] = str(ca_location)
+    if connection.auth_type != "mtls":
+        return
+    if (
+        client_certificate_location is None
+        or private_key_location is None
+        or connection.private_key is None
+    ):
+        raise RegistryProfileError("Registry mTLS credentials require private session files")
+    certificate_name = "client-certificate" if apicurio else "certificate.location"
+    key_name = "client-key" if apicurio else "key.location"
+    properties[f"{prefix}{certificate_name}"] = str(client_certificate_location)
+    properties[f"{prefix}{key_name}"] = str(private_key_location)
+    if connection.private_key_password is not None:
+        if apicurio:
+            raise RegistryProfileError(
+                "Kaskade Apicurio does not support encrypted PEM client keys"
+            )
+        else:
+            properties["ssl.key.password"] = connection.private_key_password
+
+
+def _resolved_registry_oauth(connection: RegistryConnection) -> OAuthConnection:
+    oauth = connection.oauth
+    if oauth is None or oauth.client_secret is None:
+        raise RegistryProfileError("Registry OAuth credentials are not resolved")
+    return oauth
+
+
+def _parse_tls(tls: object) -> tuple[str | None, str | None]:
+    if tls is None:
+        return None, None
+    if not isinstance(tls, Mapping) or set(tls) - {"caCertificates", "clientCertificate"}:
+        raise RegistryProfileError("Registry TLS configuration is invalid")
+    ca, certificate = tls.get("caCertificates"), tls.get("clientCertificate")
+    try:
+        return (
+            validate_ca_bundle(ca) if ca is not None else None,
+            validate_client_certificate(certificate) if certificate is not None else None,
+        )
+    except KafkaProfileError as error:
+        raise RegistryProfileError(str(error).replace("Kafka", "Registry")) from error
+
+
+def _with_basic(
+    connection: RegistryConnection, auth: Mapping[str, Any], profile_id: str
+) -> RegistryConnection:
+    _reject_auth_properties(auth, {"type", "username", "passwordRef"})
+    username, reference = auth.get("username"), auth.get("passwordRef")
+    if (
+        not isinstance(username, str)
+        or not username
+        or any(character in username for character in (":", "\x00", "\r", "\n"))
+        or not isinstance(reference, str)
+    ):
+        raise RegistryProfileError("Registry basic authentication configuration is invalid")
+    _validate_reference(reference, profile_id, "registry/password")
+    return replace(connection, username=username, password_reference=reference)
+
+
+def _with_token(
+    connection: RegistryConnection, auth: Mapping[str, Any], profile_id: str
+) -> RegistryConnection:
+    _reject_auth_properties(auth, {"type", "tokenRef"})
+    reference = auth.get("tokenRef")
+    if not isinstance(reference, str):
+        raise RegistryProfileError("Registry token authentication configuration is invalid")
+    _validate_reference(reference, profile_id, "registry/token")
+    return replace(connection, token_reference=reference)
+
+
+def _with_mtls(
+    connection: RegistryConnection, auth: Mapping[str, Any], profile_id: str
+) -> RegistryConnection:
+    _reject_auth_properties(auth, {"type", "privateKeyRef", "privateKeyPasswordRef"})
+    if connection.client_certificate is None:
+        raise RegistryProfileError("Registry mTLS requires a client certificate")
+    reference, password_reference = auth.get("privateKeyRef"), auth.get("privateKeyPasswordRef")
+    if not isinstance(reference, str):
+        raise RegistryProfileError("Registry mTLS private key reference is invalid")
+    _validate_reference(reference, profile_id, "registry/tls/private-key")
+    if password_reference is not None:
+        if not isinstance(password_reference, str):
+            raise RegistryProfileError("Registry mTLS key password reference is invalid")
+        _validate_reference(password_reference, profile_id, "registry/tls/private-key-password")
+    return replace(
+        connection,
+        private_key_reference=reference,
+        private_key_password_reference=password_reference,
+    )
+
+
+def _with_oauth(
+    connection: RegistryConnection, auth: Mapping[str, Any], profile_id: str
+) -> RegistryConnection:
+    _reject_auth_properties(
+        auth,
+        {
+            "type",
+            "tokenUrl",
+            "clientId",
+            "scopes",
+            "clientSecretRef",
+            "caCertificates",
+            "logicalCluster",
+            "identityPoolId",
+        },
+    )
+    token_url, client_id, reference = (
+        auth.get("tokenUrl"),
+        auth.get("clientId"),
+        auth.get("clientSecretRef"),
+    )
+    scopes = auth.get("scopes", [])
+    if not isinstance(token_url, str) or not isinstance(reference, str):
+        raise RegistryProfileError("Registry OAuth configuration is invalid")
+    try:
+        validate_oauth_endpoint(token_url)
+        validated_client_id, validated_scopes = validate_oauth_identity(client_id, scopes)
+    except OAuthProfileError as error:
+        raise RegistryProfileError(str(error).replace("OAuth", "Registry OAuth", 1)) from error
+    _validate_reference(reference, profile_id, "registry/oauth/client-secret")
+    ca = auth.get("caCertificates")
+    try:
+        ca_certificates = validate_ca_bundle(ca) if ca is not None else None
+    except KafkaProfileError as error:
+        raise RegistryProfileError("Registry OAuth CA bundle is invalid") from error
+    logical_cluster, identity_pool_id = auth.get("logicalCluster"), auth.get("identityPoolId")
+    if connection.provider != CONFLUENT_PROVIDER and (
+        logical_cluster is not None or identity_pool_id is not None
+    ):
+        raise RegistryProfileError(
+            "Registry OAuth routing metadata requires a Confluent-compatible Registry"
+        )
+    if not all(
+        value is None or isinstance(value, str) and value
+        for value in (logical_cluster, identity_pool_id)
+    ):
+        raise RegistryProfileError("Registry OAuth routing metadata is invalid")
+    return replace(
+        connection,
+        oauth=OAuthConnection(
+            token_url,
+            validated_client_id,
+            validated_scopes,
+            reference,
+            ca_certificates,
+        ),
+        oauth_logical_cluster=logical_cluster,
+        oauth_identity_pool_id=identity_pool_id,
+    )
+
+
+def _validate_url(url: str, *, secure: bool) -> None:
+    try:
+        parsed, port = urlsplit(url), urlsplit(url).port
+    except ValueError as error:
+        raise RegistryProfileError("Registry URL is invalid") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise RegistryProfileError(
+            "Registry URL must not contain credentials, a query, or a fragment"
+        )
+    if secure and parsed.scheme != "https":
+        raise RegistryProfileError(
+            "authenticated or TLS Registry connections require an https:// URL"
+        )
+
+
+def _validate_reference(reference: str, profile_id: str, field: str) -> None:
+    try:
+        parsed = parse_secret_reference(reference)
+    except SecretStoreError as error:
+        raise RegistryProfileError("Registry credential reference is invalid") from error
+    if parsed.profile_id != profile_id or parsed.field != field:
+        raise RegistryProfileError("Registry credential reference does not match its profile")
+
+
+def _reject_auth_properties(auth: Mapping[str, Any], allowed: set[str]) -> None:
+    if set(auth) - allowed:
+        raise RegistryProfileError(
+            "Registry authentication configuration has unsupported properties"
+        )
+
+
+def _secret(store: SecretStore, reference: str) -> str:
+    value = store.get(reference)
+    if not value or any(character in value for character in ("\x00", "\r", "\n")):
+        raise RegistryProfileError("Registry credentials are empty or contain unsupported controls")
+    return value
 
 
 __all__ = [
@@ -117,9 +661,18 @@ __all__ = [
     "APICURIO_URL_PROPERTY",
     "CONFLUENT_PROVIDER",
     "CONFLUENT_URL_PROPERTY",
+    "REGISTRY_CA_BUNDLE_FILENAME",
+    "REGISTRY_CLIENT_CERTIFICATE_FILENAME",
+    "REGISTRY_CLIENT_KEY_FILENAME",
+    "REGISTRY_OAUTH_CA_BUNDLE_FILENAME",
+    "OAuthConnection",
+    "RegistryAuthType",
     "RegistryConnection",
     "RegistryProfileError",
     "RegistryProvider",
+    "confluent_console_properties",
     "display_registry",
-    "plain_registry_connection",
+    "kaskade_registry_properties",
+    "registry_connection",
+    "resolve_registry_connection",
 ]

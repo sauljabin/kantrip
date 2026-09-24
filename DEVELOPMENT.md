@@ -34,6 +34,22 @@ uv sync --locked
 uv run pre-commit install
 ```
 
+The pre-commit hook first classifies staged paths without building a wheel or
+touching the sandbox. For E2E-impacting changes, it builds a wheel from Git's
+staged index in a temporary checkout, installs it separately, and runs the full
+E2E suite against the already-running sandbox. Provision the sandbox and pinned
+released clients for those changes; a missing native keyring or service is then
+a failed hook, not a skipped test. The hook links existing private sandbox state
+without copying or caching secrets. A documentation-only commit skips local E2E.
+Set `KANTRIP_E2E_FORCE=1` on the hook invocation when documentation changes
+executable behavior or when an explicit full check is needed.
+
+The hook calls `python3 scripts/tests.py --staged-wheel` directly. This mode
+uses only Python's standard library until it selects E2E, then uses uv and the
+project's locked Python to build and test the staged wheel. The same script
+owns CI selection (`--ci-event`) and result validation
+(`--verify-e2e-result`); `--suite unit|e2e` runs a suite directly.
+
 Run the editable CLI directly from the checkout:
 
 ```bash
@@ -58,18 +74,19 @@ uv run python -m scripts.analyze
 Run the offline unit tests:
 
 ```bash
-uv run python -m scripts.tests
+uv run python -m scripts.tests --suite unit
 ```
 
-Run the shell contract independently:
+The default suite is `unit`. Select it explicitly in automation with:
 
 ```bash
-KANTRIP_REQUIRED_SHELLS=bash,zsh,fish \
-  uv run --locked python -m scripts.verify_shell_contract
+uv run --locked python -m scripts.tests --suite unit
 ```
 
-The shell contract uses generated fake clients and PTYs; it does not require
-Kafka, Docker, kcat, Kaskade, or Java.
+Unit tests live in `tests/unit`, including the shell contract with generated fake
+clients and PTYs. They do not require Kafka, Docker, kcat, Kaskade, or Java.
+Infrastructure acceptance lives in `tests/e2e` and uses the same entry point
+with `--suite e2e` after explicit provisioning.
 
 Generate the deterministic Rich README banner:
 
@@ -93,7 +110,7 @@ state explicitly; do not add aliases or silently reset user data.
 
 Implement the sequential PRs in [MVP.md](MVP.md), including their acceptance
 criteria and affected documentation. Its manual first-release QA is a separate
-human release gate; the offline suite and sandbox smoke remain required.
+human release gate; both unit and E2E suites remain required.
 
 ## Database migrations
 
@@ -140,9 +157,12 @@ uv run --locked keyring diagnose
 uv run --locked kantrip doctor --verbose
 ```
 
-Tests must inject synthetic in-memory implementations of Kantrip's narrow
+Offline unit tests inject synthetic in-memory implementations of Kantrip's narrow
 `SecretStore` protocol. They must not read or modify a developer's real
-credential store.
+credential store. The separate E2E suite intentionally exercises an approved
+native backend: macOS Keychain locally or a real Secret Service session on
+Linux CI. Its temporary credentials and profiles are owned and cleaned by the
+suite; it does not substitute a fake keyring.
 
 Secret-bearing profile changes use the transaction engine in
 `kantrip/credential_mutations.py`. Each replacement receives a new credential
@@ -152,7 +172,7 @@ the superseded reference. Profile removal commits the row deletion and cleanup
 records before it contacts the credential backend.
 
 Tests for this boundary use deterministic in-process failpoints and
-`tests/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
+`tests/unit/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
 new credential owner or input path is added:
 
 | Cut or race | Required invariant |
@@ -166,6 +186,11 @@ new credential owner or input path is added:
 | Repair versus staging or snapshot versus rotation | No live value is deleted; readers resolve one coherent generation |
 | Live reference appears in cleanup journal | Integrity error and no credential deletion |
 
+The multi-value rows apply to one combined Kafka/Registry mutation as well as
+to multiple fields owned by one service. Tests stage both owners together and
+fail before and after either store write; the active row remains one complete
+generation and every possibly written reference remains journaled.
+
 The subprocess suite uses pipe barriers and real `SIGKILL`, never timing sleeps,
 at durable intent, store readback, post-commit reload, and post-delete journal
 boundaries. It verifies exact journal/profile state, private permissions,
@@ -175,7 +200,7 @@ those platform boundaries separately. Assertions may inspect references and
 journal rows, but must never include a real credential value in diagnostic
 output.
 
-## Sandbox services and smoke workflow
+## Sandbox services and E2E workflow
 
 The sandbox is a local Kind laboratory with one operator-managed Strimzi Kafka
 cluster, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
@@ -218,25 +243,41 @@ The loopback-only endpoints are:
 - Schema Registry with HTTPS and Basic Auth: `https://localhost:8083`
 - Apicurio with HTTPS and Basic/OAuth: `https://localhost:8084`
 - Schema Registry with HTTPS and OAuth: `https://localhost:8085`
+- Schema Registry with HTTPS and mTLS: `https://localhost:8086`
 - Keycloak: `https://localhost:8443`
 
-The baseline registry endpoints keep today's unauthenticated Kantrip adapters
-executable. Schema Registry uses separate Basic and OAuth processes because its
-local JAAS property-file login and OAuth `AuthenticationHandler` are different
-server authentication paths; Apicurio accepts both mechanisms on one endpoint.
-These secure variants prepare authenticated Registry scenarios without claiming
-that those profile fields are already implemented. The single Kafka cluster's
+The baseline Registry endpoints retain unauthenticated adapter coverage. Schema
+Registry uses separate Basic and OAuth processes because its local JAAS
+property-file login and OAuth `AuthenticationHandler` are different server
+authentication paths; Apicurio accepts both mechanisms on one endpoint and
+assigns its service account the standard `sr-readonly` realm role.
+The E2E suite creates typed Kantrip profiles for every secure variant. The single Kafka cluster's
 `plaintext` listener means no authentication and no encryption. All other
 external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
 principals prove that `kantrip ping` does not depend on Kafka resource
 authorization. PLAIN JAAS is read from the mounted `kafka-custom-users` Secret.
+
+Registry OAuth pings in this workflow request one token in a new bounded process.
+Disabling the Keycloak client proves that a later acquisition fails; it does not
+prove refresh inside a long-lived Registry client. Native refresh acceptance is
+grouped by implementation rather than wrapper: one Confluent Java console case,
+one Kaskade Confluent Python case, and one Kaskade native Apicurio case.
+
+The native Apicurio OAuth contract is verified against the published
+[Kaskade 5.0.1 release](https://github.com/sauljabin/kaskade/releases/tag/v5.0.1).
+That is the minimum version only when scopes require the official
+`apicurio.registry.auth.client.scope` property. Keep scope-free profiles
+compatible with earlier Kaskade releases and test release gates with installed
+stable distributions rather than development-version strings alone.
 An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
 through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
 from a private temporary config file. `sandbox-admin` is the only superuser.
 
-Strimzi owns authenticated-client, OAuth, and Registry ACLs. The Job owns only
-the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe needed
-by the plaintext and server-only TLS smoke; `ANONYMOUS` is not a superuser. The
+Strimzi owns its authenticated-client, OAuth, and Registry ACLs. The Job owns
+both SCRAM-SHA-256 identities and the allowed identity's `kantrip-auth-` ACLs,
+plus the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe
+needed by the plaintext and server-only TLS smoke. The User Operator ignores
+these Job-owned principals; `ANONYMOUS` is not a superuser. The
 laboratory does not claim Kubernetes network isolation or production hardening.
 
 The Kafka cluster uses a disposable persistent volume, so broker data, ACLs,
@@ -252,30 +293,74 @@ Schema Registry topics are declared as Strimzi `KafkaTopic` resources with
 clients: `schema-registry`, `schema-registry-secure`, and
 `schema-registry-oauth`.
 
-Run the adapter smoke workflow against the active services:
+The Confluent console wrappers have two configuration consumers: the Kafka
+command and the schema formatter/reader. Both receive the private session file;
+the validated Registry URL is additionally supplied as a non-secret formatter
+or reader property to suppress Confluent's built-in localhost default. Registry
+OAuth sessions own the JVM URL allowlist and use Java PEM truststore properties
+for both the Registry and token endpoint.
+
+Install the exact released client versions listed in `tests/e2e/versions.env`
+outside Kantrip's environment. Build the candidate wheel and install it in a
+separate environment, then set `KANTRIP_E2E_KANTRIP` to that environment's
+`kantrip` executable. The test process validates all tools, sandbox workloads,
+host endpoints, private file modes, and the native credential store before any
+product assertion.
+
+Run the complete adapter, shell, authentication, authorization, and Registry
+renewal matrix against the already-running services:
 
 ```bash
-uv run --locked python -m scripts.smoke
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
-Include the interactive shell adapters with:
+The runner never invokes `sandbox up` or `sandbox down`; local and CI provisioners
+own that lifecycle. It holds a non-blocking lock while mutating shared OAuth
+clients, creates isolated profiles and exact test-owned topics/schemas/artifacts,
+and leaves the sandbox running. CI runs the same command on Ubuntu with a real
+DBus Secret Service/GNOME Keyring session and always collects sanitized resource
+diagnostics before removing its CI-owned sandbox.
+The same path classification drives local staged checks and `main` push CI:
 
-```bash
-uv run --locked python -m scripts.smoke \
-  --shell bash --shell zsh --shell fish
-```
+| Change or event | Local staged hook | Hosted E2E |
+| --- | --- | --- |
+| Prose-only Markdown, images/site assets, issue/PR templates, `LICENSE`, or unit tests only | Skip E2E | Skip E2E on `main` |
+| Runtime code, schemas, dependencies/lockfiles, packaging, sandbox, E2E tests/tools, or E2E workflow/hook infrastructure | Run E2E | Run E2E on `main` |
+| Mixed changes, deleted/renamed runtime paths, or unknown paths | Run E2E | Run E2E on `main` |
+| PR opened, synchronized, or reopened | Classify staged changes independently | Fast CI only |
+| Newly applied `run-e2e` PR label or explicit CI workflow dispatch | Not applicable | Run full E2E once |
+| Release tag | Not applicable | Run full E2E against the exact release wheel |
 
-Run the authenticated lifecycle, direct producer/consumer/admin, all-shell,
-invalid-authorization, and no-ACL ping matrix with:
+The PR label is a one-shot request: subsequent pushes do not repeat E2E merely
+because the label remains. Remove and reapply it to request another run. The
+`main` selector compares the complete push range; a missing base or an unknown
+path selects E2E conservatively. Documentation that changes an executable
+contract needs an explicit force: `KANTRIP_E2E_FORCE=1` locally, a fresh
+`run-e2e` label event on the PR, or workflow dispatch on `main`. Quality, the
+full Python/OS unit matrix, and package verification still run for all PRs and
+`main` pushes. Release publishing always requires another complete E2E run
+against the exact wheel built and verified by the tag's build job. The hosted
+client cache is keyed by OS, architecture, pinned versions, and workflow setup;
+only checksum-verified downloaded clients and builds are saved, never sandbox
+state or credentials.
+The E2E Zsh launcher skips host-global startup files with Zsh's `-d` option to
+avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs.
 
-```bash
-uv run --locked python -m scripts.auth_smoke
-```
+### Automated E2E acceptance matrix
 
-The smoke workflow remains a pre-commit hook. It creates isolated temporary
-profiles and topics and cleans them up. Keep the sandbox running when committing
-changes that execute the hook. See [Manual Testing](MANUAL_TESTING.md) for
-provider-specific invocations and expected results.
+| Area | Released clients and operation evidence |
+| --- | --- |
+| Kafka plaintext | Apache Kafka 4.3.1 and Confluent Platform 8.3.1 topic/admin, producer, consumer, group, config, ACL, and broker-API commands; kcat/kafkacat 1.7.0 on macOS and 1.7.1 on Ubuntu linked against librdkafka 2.11.0+ for metadata/produce/consume; Kaskade 5.0.1 admin/consume; Bash, Zsh, and Fish sessions |
+| Kafka authentication | Verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth profiles; real Java produce/consume, librdkafka metadata, all three shells, prefix ACL denial, and no-resource-ACL ping proof |
+| Schema formats | Confluent Avro, JSON Schema, and Protobuf console producer/consumer pairs with decoded markers and exact topic cleanup |
+| Registry security | Confluent Basic, OAuth, and mTLS plus native Apicurio Basic and OAuth profile probes; invalid credentials/identity/CA/hostname and anonymous-access controls |
+| OAuth lifetime | Native Kafka Java/librdkafka clients survive expiry; Confluent Java, Kaskade Confluent, and Kaskade native Apicurio consumers stay alive across fresh schema cache misses, show new IdP issuance, then fail token acquisition after client revocation without decoding the final record |
+| Ping boundary | Kafka proves broker protocol/authentication without topic APIs; Registry uses the documented read endpoint and requires anonymous denial for authenticated profiles; successful ping is followed by denied resource operations for no-ACL identities |
+
+Unsupported or conditional combinations remain explicit in `COMPATIBILITY.md`;
+an absent required executable or setup component is an E2E setup failure, never
+a skip or pass. See [Manual Testing](MANUAL_TESTING.md) for provider-specific
+exploratory checks and expected results.
 
 ## Build artifacts
 
@@ -317,7 +402,7 @@ git pull --ff-only origin main
 git status --short
 uv lock --check
 uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests
+uv run --locked python -m scripts.tests --suite unit
 uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```

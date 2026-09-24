@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,14 +29,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.14"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Analyze
         run: uv run --locked python -m scripts.analyze
 
@@ -53,45 +52,45 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Run unit tests
-        run: uv run --locked python -m scripts.tests
+        run: uv run --locked python -m scripts.tests --suite unit
 
-  shell-contract:
-    name: Shell contract / Bash, Zsh, Fish
+  e2e-selection:
+    name: E2E selection
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    outputs:
+      run_e2e: ${{ steps.decide.outputs.run_e2e }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Install shells
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes fish zsh
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
-        with:
-          version: ${{ env.UV_VERSION }}
-          python-version: "3.14"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
-      - name: Exercise interactive shell contracts with fake clients
+      - name: Select E2E
+        id: decide
         env:
-          CI: "1"
-          KANTRIP_REQUIRED_SHELLS: bash,zsh,fish
-          NO_COLOR: "1"
-        run: uv run --locked python -m scripts.verify_shell_contract
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action || '' }}
+          EVENT_LABEL: ${{ github.event.label.name || '' }}
+          BEFORE: ${{ github.event.before || '' }}
+          AFTER: ${{ github.sha }}
+        run: |
+          selected="$(python3 scripts/tests.py --ci-event "$EVENT_NAME" \
+            --action "$EVENT_ACTION" --label "$EVENT_LABEL" \
+            --before "$BEFORE" --after "$AFTER")"
+          echo "run_e2e=$selected" >> "$GITHUB_OUTPUT"
+          echo "E2E selected: $selected"
+
+  e2e-tests:
+    name: E2E / Ubuntu / released clients
+    needs: [e2e-selection]
+    if: needs.e2e-selection.outputs.run_e2e == 'true'
+    uses: ./.github/workflows/e2e.yml
 
   build:
     name: Package
@@ -103,14 +102,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Set up uv and Python
-        uses: astral-sh/setup-uv@v10.1.0
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
         with:
-          version: ${{ env.UV_VERSION }}
+          uv-version: ${{ env.UV_VERSION }}
           python-version: "3.10"
-          enable-cache: true
-      - name: Sync dependencies
-        run: uv sync --locked
       - name: Verify lockfile
         run: uv lock --check
       - name: Build distributions
@@ -121,17 +117,24 @@ jobs:
   result:
     name: CI result
     if: always()
-    needs: [quality, unit-tests, shell-contract, build]
+    needs: [quality, unit-tests, e2e-selection, e2e-tests, build]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - name: Require successful jobs
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
-          SHELL_CONTRACT_RESULT: ${{ needs.shell-contract.result }}
+          SELECT_RESULT: ${{ needs.e2e-selection.result }}
+          E2E_SELECTED: ${{ needs.e2e-selection.outputs.run_e2e }}
+          E2E_RESULT: ${{ needs.e2e-tests.result }}
           BUILD_RESULT: ${{ needs.build.result }}
         run: |
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
-          test "$SHELL_CONTRACT_RESULT" = success
+          test "$SELECT_RESULT" = success
+          python3 scripts/tests.py --verify-e2e-result "$E2E_SELECTED" "$E2E_RESULT"
           test "$BUILD_RESULT" = success

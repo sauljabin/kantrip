@@ -3,9 +3,9 @@
 This developer security analysis follows the boundaries and decisions in
 [Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
 credential lifecycle, authenticated Kafka execution, and local diagnostics.
-Secure Registry/OAuth connections and input parsers remain unimplemented; their
-required controls and acceptance evidence live in [MVP.md](MVP.md). Do not treat
-schema acceptance as an end-to-end security guarantee. See
+Secure Registry and OAuth connections use typed profiles, independent trust and
+credentials, private generated files, bounded authenticated probes, and
+client-specific capability checks. Schema acceptance alone is not an end-to-end security guarantee. See
 [Compatibility](COMPATIBILITY.md).
 
 Kantrip reduces accidental disclosure, profile confusion, unsafe connection
@@ -112,14 +112,23 @@ network isolation. `sandbox-admin` is the only broker superuser and is used only
 by the in-cluster provisioning Job over TLS/SCRAM-SHA-512. Runtime-generated
 credentials remain below private ignored state and mounted Secrets.
 
-Strimzi owns ACLs for authenticated clients, OAuth, and Registry identities.
-The Job owns only the `ANONYMOUS` `kantrip-smoke-` topic/group prefix and cluster
-Describe needed by unauthenticated smoke clients; `ANONYMOUS` is never a
-superuser. SCRAM-SHA-256 provisioning reads passwords from mounted files,
+Strimzi owns ACLs for its authenticated clients, OAuth, and Registry identities.
+The Job owns both SCRAM-SHA-256 identities, the allowed identity's
+`kantrip-auth-` ACLs, and the `ANONYMOUS` `kantrip-smoke-` topic/group prefix and
+cluster Describe needed by unauthenticated smoke clients. The User Operator
+ignores these Job-owned principals; `ANONYMOUS` is never a superuser.
+SCRAM-SHA-256 provisioning reads passwords from mounted files,
 writes a mode-restricted temporary config, passes its path rather than the
 password to Kafka tooling, and deletes it on exit. A privileged cluster
 administrator, compromised node, or process inside that short-lived container
 can still read the mounted or temporary value.
+
+The E2E runner accepts only an explicitly provisioned sandbox and never owns its
+lifecycle. It requires the approved native credential backend (macOS Keychain or
+Linux Secret Service), performs an exact temporary set/get/delete check, and
+serializes changes to shared OAuth identities. CI creates a fresh DBus/GNOME
+Keyring session and removes only its own sandbox after sanitized diagnostics are
+captured. Local E2E intentionally leaves the caller's sandbox running.
 
 ### Recovery boundary
 
@@ -282,16 +291,30 @@ Controls:
 - Keep Kafka certificate and hostname verification enabled.
 - Copy validated public CA material into the profile instead of depending on an
   externally mutable CA path during later sessions.
-- Reject non-HTTP or credential-bearing Registry configurations until their
-  secure execution paths are implemented.
-- Probe current unauthenticated registries only through fixed provider metadata
-  endpoints, never subject/artifact listings, and label the result as
-  reachability rather than authentication or authorization.
+- Reject non-HTTP(S), credential-bearing URL, and unverified authenticated
+  Registry configurations. Typed HTTPS trust and credentials use only reviewed
+  provider/client mappings.
+- Probe registries only through the fixed, non-mutating read query for their
+  provider: Confluent-compatible `/subjects?limit=1` or native Apicurio v3
+  `/search/versions?limit=1`. Authenticated probes repeat the same URL without
+  credentials and accept only an explicit 401/403 or the expected mTLS
+  client-certificate rejection; unrelated transport failures prove nothing.
+- Keep Kaskade's native Apicurio Registry and token endpoint in separate HTTP/TLS
+  contexts. Both use the official shared CA bundle, but Registry mTLS identity
+  never enters the IdP client.
+- Scope Confluent Python token trust to the Kaskade child. Its private
+  `SSL_CERT_FILE` combines platform default roots with the profile IdP CA and
+  overrides inherited SSL environment only in that process.
 
 Residual risk: plaintext Kafka and HTTP Registry connections provide neither
 transport confidentiality nor server authentication. A trusted CA can still
 validate a malicious endpoint. Remote authorization and child handling of data
-remain outside Kantrip's control.
+remain outside Kantrip's control. The corrected native Apicurio mapping is
+available in Kaskade 5.0.1; Kantrip rejects older or development builds when a
+native Apicurio OAuth scope needs that mapping. Shared CA contracts broaden
+trust to both destinations. `SSL_CERT_FILE` is process-wide, not
+hostname-specific, so other environment-aware HTTP clients inside the same
+Kaskade process also receive that bundle.
 
 ### Abandoned runtime artifacts and process escape
 

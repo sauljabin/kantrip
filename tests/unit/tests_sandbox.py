@@ -15,7 +15,7 @@ from sandbox.__main__ import (
     load_versions,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SANDBOX_ROOT = PROJECT_ROOT / "sandbox"
 VERSIONS_FILE = SANDBOX_ROOT / "versions.env"
 KIND_CONFIG = SANDBOX_ROOT / "kind.yaml"
@@ -70,7 +70,22 @@ class TestSandbox(unittest.TestCase):
         self.assertTrue(mappings)
         self.assertTrue(all(mapping["listenAddress"] == "127.0.0.1" for mapping in mappings))
         self.assertEqual(
-            {9092, 9093, 9094, 9095, 9096, 9097, 9098, 8081, 8082, 8083, 8084, 8085, 8443},
+            {
+                9092,
+                9093,
+                9094,
+                9095,
+                9096,
+                9097,
+                9098,
+                8081,
+                8082,
+                8083,
+                8084,
+                8085,
+                8086,
+                8443,
+            },
             {mapping["hostPort"] for mapping in mappings},
         )
 
@@ -114,7 +129,8 @@ class TestSandbox(unittest.TestCase):
         self.assertIn("kantrip-kafka-bootstrap:9099", script)
         self.assertIn("ANONYMOUS", script)
         self.assertNotIn("service-account-kantrip-kafka", script)
-        self.assertNotIn("kantrip-auth-", script)
+        self.assertIn("kantrip-auth-", script)
+        self.assertIn('add_prefix_acls "$(cat /mnt/auth-users/scram-256-username)"', script)
         volumes = job["spec"]["template"]["spec"]["volumes"]
         self.assertIn("sandbox-admin", {item["secret"]["secretName"] for item in volumes})
         self.assertIn("kafka-custom-users", {item["secret"]["secretName"] for item in volumes})
@@ -123,7 +139,10 @@ class TestSandbox(unittest.TestCase):
             "env"
         ]
         self.assertIn(
-            {"name": "STRIMZI_IGNORED_USERS_PATTERN", "value": "^ANONYMOUS$"},
+            {
+                "name": "STRIMZI_IGNORED_USERS_PATTERN",
+                "value": "^(ANONYMOUS|kantrip-scram-256|kantrip-scram-256-no-acl)$",
+            },
             user_operator_env,
         )
 
@@ -163,14 +182,14 @@ class TestSandbox(unittest.TestCase):
         self.assertEqual("tls", authentication["kantrip-mtls"])
         self.assertEqual("tls", authentication["kantrip-mtls-no-acl"])
         self.assertEqual("scram-sha-512", authentication["kantrip-plain"])
-        self.assertEqual("scram-sha-512", authentication["kantrip-scram-256"])
+        self.assertNotIn("kantrip-scram-256", authentication)
         self.assertEqual("scram-sha-512", authentication["service-account-kantrip-kafka"])
-        self.assertEqual(13, len(authentication))
+        self.assertEqual(12, len(authentication))
         by_name = {user["metadata"]["name"]: user for user in users}
         self.assertNotIn("authorization", by_name["sandbox-admin"]["spec"])
         self.assertNotIn("authorization", by_name["kantrip-scram-no-acl"]["spec"])
         self.assertNotIn("authorization", by_name["kantrip-mtls-no-acl"]["spec"])
-        for name in ("kantrip-plain", "kantrip-scram-256", "service-account-kantrip-kafka"):
+        for name in ("kantrip-plain", "service-account-kantrip-kafka"):
             self.assertEqual("simple", by_name[name]["spec"]["authorization"]["type"])
         for name in (
             "schema-registry-kafka",
@@ -197,12 +216,19 @@ class TestSandbox(unittest.TestCase):
 
         self.assertTrue(certificates["sandbox-root-ca"]["spec"]["isCA"])
         self.assertEqual(
-            {"sandbox-root-ca", "keycloak-tls", "kafka-listeners-tls", "registries-tls"},
+            {
+                "sandbox-root-ca",
+                "keycloak-tls",
+                "kafka-listeners-tls",
+                "registries-tls",
+                "registry-mtls-client",
+            },
             set(certificates),
         )
         for name in ("keycloak-tls", "kafka-listeners-tls", "registries-tls"):
             self.assertIn("localhost", certificates[name]["spec"]["dnsNames"])
         self.assertNotIn("ipAddresses", certificates["kafka-listeners-tls"]["spec"])
+        self.assertEqual(["client auth"], certificates["registry-mtls-client"]["spec"]["usages"])
 
     def test_plain_and_secure_registry_variants_are_explicit(self) -> None:
         deployments = {
@@ -215,6 +241,7 @@ class TestSandbox(unittest.TestCase):
             {
                 "schema-registry",
                 "schema-registry-secure",
+                "schema-registry-mtls",
                 "schema-registry-oauth",
                 "apicurio",
                 "apicurio-secure",
@@ -243,6 +270,8 @@ class TestSandbox(unittest.TestCase):
         self.assertEqual(
             "true", secure_apicurio_env["APICURIO_AUTHN_BASIC_CLIENT_CREDENTIALS_ENABLED"]
         )
+        self.assertEqual("token", secure_apicurio_env["APICURIO_AUTH_ROLE_SOURCE"])
+        self.assertNotIn("APICURIO_AUTH_AUTHENTICATED_READ_ACCESS_ENABLED", secure_apicurio_env)
         secure_schema_env = _environment(deployments["schema-registry-secure"])
         plain_schema_env = _environment(deployments["schema-registry"])
         self.assertEqual(
@@ -253,6 +282,8 @@ class TestSandbox(unittest.TestCase):
         )
         self.assertEqual("BASIC", secure_schema_env["SCHEMA_REGISTRY_AUTHENTICATION_METHOD"])
         self.assertNotIn("SCHEMA_REGISTRY_OAUTHBEARER_JWKS_ENDPOINT_URL", secure_schema_env)
+        mtls_schema_env = _environment(deployments["schema-registry-mtls"])
+        self.assertEqual("true", mtls_schema_env["SCHEMA_REGISTRY_SSL_CLIENT_AUTH"])
         oauth_schema_env = _environment(deployments["schema-registry-oauth"])
         self.assertEqual(
             "SASL_SSL", oauth_schema_env["SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL"]

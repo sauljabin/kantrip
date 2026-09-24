@@ -31,25 +31,6 @@ spec:
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
-  name: kantrip-scram-256
-  namespace: kantrip-sandbox
-  labels:
-    strimzi.io/cluster: kantrip
-spec:
-  authentication: {type: scram-sha-512}
-  authorization:
-    type: simple
-    acls:
-      - resource: {type: topic, name: kantrip-auth-, patternType: prefix}
-        operations: [All]
-      - resource: {type: group, name: kantrip-auth-, patternType: prefix}
-        operations: [All]
-      - resource: {type: cluster}
-        operations: [Describe]
----
-apiVersion: kafka.strimzi.io/v1
-kind: KafkaUser
-metadata:
   name: kantrip-scram
   namespace: kantrip-sandbox
   labels:

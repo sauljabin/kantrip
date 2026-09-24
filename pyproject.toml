@@ -45,6 +45,7 @@ dev = [
     "black",
     "mypy",
     "pre-commit",
+    "pyte>=0.8.2,<1",
     "ruff",
     "types-pyyaml",
     "typos",

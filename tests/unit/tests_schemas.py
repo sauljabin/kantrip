@@ -4,9 +4,9 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROFILE_SCHEMA = PROJECT_ROOT / "schemas" / "profile.schema.json"
-from tests.pki import synthetic_pki
+from tests.unit.pki import synthetic_pki
 
 
 class TestProfileSchema(unittest.TestCase):
@@ -56,9 +56,15 @@ class TestProfileSchema(unittest.TestCase):
                 profile["registry"] = registry
                 self.assertFalse(self._validator().is_valid(profile))
 
-    def test_secure_or_credentialed_registry_urls_are_rejected(self) -> None:
+    def test_https_registry_and_credentialed_urls_are_distinguished(self) -> None:
+        secure = _profile_configuration()
+        secure["registry"] = {
+            "provider": "confluent",
+            "schema.registry.url": "https://registry.example.com",
+            "auth": {"type": "none"},
+        }
+        self.assertTrue(self._validator().is_valid(secure))
         for url in (
-            "https://registry.example.com",
             "http://user:secret@registry.example.com",
             "http://registry.example.com?token=synthetic",
             "http://registry.example.com#fragment",
@@ -69,6 +75,33 @@ class TestProfileSchema(unittest.TestCase):
                     "provider": "confluent",
                     "schema.registry.url": url,
                 }
+                self.assertFalse(self._validator().is_valid(profile))
+
+    def test_registry_schema_enforces_transport_and_provider_auth_constraints(self) -> None:
+        profile_id = _profile_configuration()["id"]
+        credential_id = "018f8f13-7c21-7cee-8000-000000000011"
+        password_reference = f"profile/{profile_id}/{credential_id}/registry/password"
+        token_reference = f"profile/{profile_id}/{credential_id}/registry/token"
+        registries = (
+            {
+                "provider": "confluent",
+                "schema.registry.url": "http://registry.example.com",
+                "auth": {
+                    "type": "basic",
+                    "username": "synthetic",
+                    "passwordRef": password_reference,
+                },
+            },
+            {
+                "provider": "apicurio",
+                "apicurio.registry.url": "https://registry.example.com",
+                "auth": {"type": "token", "tokenRef": token_reference},
+            },
+        )
+        for registry in registries:
+            profile = _profile_configuration()
+            profile["registry"] = registry
+            with self.subTest(registry=registry):
                 self.assertFalse(self._validator().is_valid(profile))
 
     def test_legacy_schema_registry_contract_is_rejected(self) -> None:
@@ -107,6 +140,7 @@ class TestProfileSchema(unittest.TestCase):
         credential_id = "018f8f13-7c21-7cee-8000-000000000011"
         password_reference = f"profile/{profile_id}/{credential_id}/kafka/password"
         key_reference = f"profile/{profile_id}/{credential_id}/kafka/tls/private-key"
+        oauth_reference = f"profile/{profile_id}/{credential_id}/kafka/oauth/client-secret"
         for auth in (
             {"type": "plain", "username": "synthetic", "passwordRef": password_reference},
             {
@@ -123,6 +157,14 @@ class TestProfileSchema(unittest.TestCase):
                 "type": "mtls",
                 "clientCertificate": synthetic_pki().client_certificate,
                 "privateKeyRef": key_reference,
+            },
+            {
+                "type": "oauth",
+                "tokenUrl": "https://idp.invalid/oauth/token",
+                "clientId": "synthetic-client",
+                "scopes": ["openid", "profile"],
+                "clientSecretRef": oauth_reference,
+                "caCertificates": synthetic_pki().ca,
             },
         ):
             with self.subTest(auth=auth["type"]):

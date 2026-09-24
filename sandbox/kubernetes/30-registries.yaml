@@ -249,6 +249,109 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: schema-registry-mtls
+  namespace: kantrip-sandbox
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: schema-registry-mtls
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: schema-registry-mtls
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: build-https-keystore
+          image: quay.io/strimzi/kafka:${STRIMZI_VERSION}-kafka-${KAFKA_VERSION}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              openssl pkcs12 -export -in /source/tls.crt -inkey /source/tls.key \
+                -out /keystore/registry.p12 -name schema-registry \
+                -passout pass:sandbox-only
+              keytool -importcert -noprompt -alias sandbox-root \
+                -file /ca/ca.crt -keystore /keystore/ca.p12 \
+                -storetype PKCS12 -storepass sandbox-only
+              chmod 0644 /keystore/registry.p12 /keystore/ca.p12
+          volumeMounts:
+            - {name: tls, mountPath: /source, readOnly: true}
+            - {name: ca, mountPath: /ca, readOnly: true}
+            - {name: keystore, mountPath: /keystore}
+      containers:
+        - name: schema-registry
+          image: confluentinc/cp-schema-registry:${SCHEMA_REGISTRY_VERSION}
+          env:
+            - {name: SCHEMA_REGISTRY_HOST_NAME, value: schema-registry-mtls}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: SASL_SSL://kantrip-kafka-bootstrap:9099
+            - {name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC, value: schema-registry-secure}
+            - {name: SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR, value: "1"}
+            - {name: SCHEMA_REGISTRY_SCHEMA_REGISTRY_GROUP_ID, value: schema-registry-secure}
+            - {name: SCHEMA_REGISTRY_KAFKASTORE_SECURITY_PROTOCOL, value: SASL_SSL}
+            - {name: SCHEMA_REGISTRY_KAFKASTORE_SASL_MECHANISM, value: SCRAM-SHA-512}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: schema-registry-secure-kafka
+                  key: sasl.jaas.config
+            - {name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_TYPE, value: PEM}
+            - name: SCHEMA_REGISTRY_KAFKASTORE_SSL_TRUSTSTORE_LOCATION
+              value: /etc/kafka-ca/ca.crt
+            - {name: SCHEMA_REGISTRY_LISTENERS, value: "https://0.0.0.0:8081"}
+            - {name: SCHEMA_REGISTRY_INTER_INSTANCE_PROTOCOL, value: https}
+            - {name: SCHEMA_REGISTRY_SSL_KEYSTORE_TYPE, value: PKCS12}
+            - name: SCHEMA_REGISTRY_SSL_KEYSTORE_LOCATION
+              value: /etc/registry-keystore/registry.p12
+            - {name: SCHEMA_REGISTRY_SSL_KEYSTORE_PASSWORD, value: sandbox-only}
+            - {name: SCHEMA_REGISTRY_SSL_KEY_PASSWORD, value: sandbox-only}
+            - {name: SCHEMA_REGISTRY_SSL_TRUSTSTORE_TYPE, value: PKCS12}
+            - name: SCHEMA_REGISTRY_SSL_TRUSTSTORE_LOCATION
+              value: /etc/registry-keystore/ca.p12
+            - {name: SCHEMA_REGISTRY_SSL_TRUSTSTORE_PASSWORD, value: sandbox-only}
+            - {name: SCHEMA_REGISTRY_SSL_CLIENT_AUTH, value: "true"}
+          ports:
+            - {name: https, containerPort: 8081}
+          readinessProbe:
+            tcpSocket: {port: https}
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 768Mi}
+          volumeMounts:
+            - {name: keystore, mountPath: /etc/registry-keystore, readOnly: true}
+            - {name: kafka-ca, mountPath: /etc/kafka-ca, readOnly: true}
+      volumes:
+        - name: ca
+          secret:
+            secretName: sandbox-root-ca
+            items: [{key: ca.crt, path: ca.crt}]
+        - {name: tls, secret: {secretName: registries-tls}}
+        - {name: keystore, emptyDir: {}}
+        - name: kafka-ca
+          secret:
+            secretName: kantrip-cluster-ca-cert
+            items: [{key: ca.crt, path: ca.crt}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry-mtls
+  namespace: kantrip-sandbox
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: schema-registry-mtls
+  ports:
+    - {name: https, port: 8081, targetPort: https, nodePort: 30086}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: schema-registry-oauth
   namespace: kantrip-sandbox
 spec:
@@ -422,6 +525,10 @@ spec:
           env:
             - name: APICURIO_STORAGE_KIND
               value: kafkasql
+            - name: APICURIO_REST_DELETION_ARTIFACT_ENABLED
+              value: "true"
+            - name: APICURIO_REST_DELETION_GROUP_ENABLED
+              value: "true"
             - name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS
               value: kantrip-kafka-bootstrap:9099
             - name: APICURIO_KAFKASQL_TOPIC
@@ -532,6 +639,10 @@ spec:
           env:
             - name: APICURIO_STORAGE_KIND
               value: kafkasql
+            - name: APICURIO_REST_DELETION_ARTIFACT_ENABLED
+              value: "true"
+            - name: APICURIO_REST_DELETION_GROUP_ENABLED
+              value: "true"
             - name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS
               value: kantrip-kafka-bootstrap:9099
             - name: APICURIO_KAFKASQL_TOPIC
@@ -579,6 +690,10 @@ spec:
                 -Djavax.net.ssl.trustStorePassword=changeit
             - name: APICURIO_AUTHN_BASIC_CLIENT_CREDENTIALS_ENABLED
               value: "true"
+            - name: APICURIO_AUTH_ROLE_BASED_AUTHORIZATION
+              value: "true"
+            - name: APICURIO_AUTH_ROLE_SOURCE
+              value: token
           ports:
             - name: https
               containerPort: 8443

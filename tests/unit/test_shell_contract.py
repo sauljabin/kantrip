@@ -116,9 +116,24 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 f"{shlex.quote(sys.executable)} -m kantrip.cli current",
                 *_adapter_commands(),
                 "kcat -F other.conf >/dev/null 2>&1 || echo __KCAT_OVERRIDE_OK__",
+                "kcat -b other.invalid:9092 >/dev/null 2>&1 || echo __KCAT_BOOTSTRAP_BLOCKED__",
+                "kcat -X security.protocol=PLAINTEXT >/dev/null 2>&1 || echo __KCAT_AUTH_BLOCKED__",
+                "kcat -LXdump >/dev/null 2>&1 || echo __KCAT_GROUPED_DUMP_BLOCKED__",
+                "kcat -Lbother.invalid:9092 >/dev/null 2>&1 || echo __KCAT_GROUPED_BROKER_BLOCKED__",
+                "kcat -LFother.conf >/dev/null 2>&1 || echo __KCAT_GROUPED_FILE_BLOCKED__",
+                "kcat -Lrhttp://other.invalid:8081 >/dev/null 2>&1 || echo __KCAT_GROUPED_REGISTRY_BLOCKED__",
                 (
                     "kafka-topics --bootstrap-server other.invalid:9092 --list "
                     ">/dev/null 2>&1 || echo __KAFKA_OVERRIDE_OK__"
+                ),
+                (
+                    "kafka-console-consumer --consumer-property "
+                    "bootstrap.servers=other.invalid:9092 >/dev/null 2>&1 "
+                    "|| echo __JAVA_PROPERTY_BLOCKED__"
+                ),
+                (
+                    "kafka-console-consumer --command-config other.properties "
+                    ">/dev/null 2>&1 || echo __JAVA_CONFIG_BLOCKED__"
                 ),
                 (
                     "kaskade admin --config-file other.ini >/dev/null 2>&1 "
@@ -141,7 +156,15 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__STARTUP__loaded", output)
             self.assertIn("__PROFILE__contract", output)
             self.assertIn("__KCAT_OVERRIDE_OK__", output)
+            self.assertIn("__KCAT_BOOTSTRAP_BLOCKED__", output)
+            self.assertIn("__KCAT_AUTH_BLOCKED__", output)
+            self.assertIn("__KCAT_GROUPED_DUMP_BLOCKED__", output)
+            self.assertIn("__KCAT_GROUPED_BROKER_BLOCKED__", output)
+            self.assertIn("__KCAT_GROUPED_FILE_BLOCKED__", output)
+            self.assertIn("__KCAT_GROUPED_REGISTRY_BLOCKED__", output)
             self.assertIn("__KAFKA_OVERRIDE_OK__", output)
+            self.assertIn("__JAVA_PROPERTY_BLOCKED__", output)
+            self.assertIn("__JAVA_CONFIG_BLOCKED__", output)
             self.assertIn("__KASKADE_OVERRIDE_OK__", output)
             self.assertIn("__SCHEMA_OVERRIDE_OK__", output)
             self.assertIn("contract\r\n", output)
@@ -152,7 +175,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
-            self.assertEqual(len(ADAPTER_EXECUTABLES) + 4, len(records))
+            self.assertEqual(len(ADAPTER_EXECUTABLES) + 4 + len(KCAT_EXECUTABLES), len(records))
             for record in records:
                 self.assertEqual("contract", record["profile"])
                 self.assertTrue(record["config_exists"], record)
@@ -171,9 +194,12 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     self.assertEqual(0o600, record["registry_config_mode"])
                     self.assertEqual("http://registry.invalid:8081", record["registry_url"])
                     self.assertIn(
-                        "schema.registry.url=http://registry.invalid:8081", record["argv"]
+                        "schema.registry.url=http://registry.invalid:8081\n",
+                        record["config_contents"],
                     )
                 if record["name"] in KCAT_EXECUTABLES and "-s" in record["argv"]:
+                    self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
+                if record["name"] in KCAT_EXECUTABLES and "-Csvalue=avro" in record["argv"]:
                     self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
                 if record["name"] == "kaskade" and "registry" in record["argv"]:
                     self.assertIn(
@@ -321,8 +347,20 @@ def _adapter_commands() -> list[str]:
             commands.append(command)
     commands.append("; ".join(registry_commands))
     for executable in sorted(KCAT_EXECUTABLES):
-        commands.extend((f"{executable} -L", f"{executable} -C -s value=avro -t contract"))
-    commands.extend(("kaskade admin", "kaskade consumer", "kaskade consumer -v registry"))
+        commands.extend(
+            (
+                f"{executable} -L",
+                f"{executable} -C -s value=avro -t contract",
+                f"{executable} -Csvalue=avro -t contract",
+            )
+        )
+    commands.extend(
+        (
+            "kaskade admin",
+            "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
+            "kaskade consumer -v registry",
+        )
+    )
     return commands
 
 

@@ -7,7 +7,9 @@
     "noneAuth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
           "const": "none"
@@ -16,15 +18,23 @@
     },
     "secretReference": {
       "type": "string",
-      "pattern": "^profile/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:kafka/password|kafka/oauth/client-secret|kafka/tls/private-key|kafka/tls/private-key-password|registry/password|registry/token|registry/oauth/client-secret)$"
+      "pattern": "^profile/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(?:kafka/password|kafka/oauth/client-secret|kafka/tls/private-key|kafka/tls/private-key-password|registry/password|registry/token|registry/oauth/client-secret|registry/tls/private-key|registry/tls/private-key-password)$"
     },
     "passwordAuth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "username", "passwordRef"],
+      "required": [
+        "type",
+        "username",
+        "passwordRef"
+      ],
       "properties": {
         "type": {
-          "enum": ["plain", "scram-sha-256", "scram-sha-512"]
+          "enum": [
+            "plain",
+            "scram-sha-256",
+            "scram-sha-512"
+          ]
         },
         "username": {
           "type": "string",
@@ -34,8 +44,12 @@
         },
         "passwordRef": {
           "allOf": [
-            { "$ref": "#/$defs/secretReference" },
-            { "pattern": "/kafka/password$" }
+            {
+              "$ref": "#/$defs/secretReference"
+            },
+            {
+              "pattern": "/kafka/password$"
+            }
           ]
         }
       }
@@ -43,7 +57,11 @@
     "mtlsAuth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "clientCertificate", "privateKeyRef"],
+      "required": [
+        "type",
+        "clientCertificate",
+        "privateKeyRef"
+      ],
       "properties": {
         "type": {
           "const": "mtls"
@@ -56,15 +74,72 @@
         },
         "privateKeyRef": {
           "allOf": [
-            { "$ref": "#/$defs/secretReference" },
-            { "pattern": "/kafka/tls/private-key$" }
+            {
+              "$ref": "#/$defs/secretReference"
+            },
+            {
+              "pattern": "/kafka/tls/private-key$"
+            }
           ]
         },
         "privateKeyPasswordRef": {
           "allOf": [
-            { "$ref": "#/$defs/secretReference" },
-            { "pattern": "/kafka/tls/private-key-password$" }
+            {
+              "$ref": "#/$defs/secretReference"
+            },
+            {
+              "pattern": "/kafka/tls/private-key-password$"
+            }
           ]
+        }
+      }
+    },
+    "oauthAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "tokenUrl",
+        "clientId",
+        "scopes",
+        "clientSecretRef"
+      ],
+      "properties": {
+        "type": {
+          "const": "oauth"
+        },
+        "tokenUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
+        },
+        "clientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\r\\n\\u0000]+$"
+        },
+        "scopes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000]+$"
+          }
+        },
+        "clientSecretRef": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/secretReference"
+            },
+            {
+              "pattern": "/kafka/oauth/client-secret$"
+            }
+          ]
+        },
+        "caCertificates": {
+          "$ref": "#/$defs/kafkaTls/properties/caCertificates"
         }
       }
     },
@@ -83,7 +158,11 @@
     "kafka": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["bootstrapServers", "transport", "auth"],
+      "required": [
+        "bootstrapServers",
+        "transport",
+        "auth"
+      ],
       "allOf": [
         {
           "if": {
@@ -95,7 +174,9 @@
           },
           "then": {
             "not": {
-              "required": ["tls"]
+              "required": [
+                "tls"
+              ]
             }
           }
         },
@@ -105,7 +186,13 @@
               "auth": {
                 "properties": {
                   "type": {
-                    "enum": ["plain", "scram-sha-256", "scram-sha-512", "mtls"]
+                    "enum": [
+                      "plain",
+                      "scram-sha-256",
+                      "scram-sha-512",
+                      "mtls",
+                      "oauth"
+                    ]
                   }
                 }
               }
@@ -131,13 +218,25 @@
           }
         },
         "transport": {
-          "enum": ["plaintext", "tls"]
+          "enum": [
+            "plaintext",
+            "tls"
+          ]
         },
         "auth": {
           "oneOf": [
-            { "$ref": "#/$defs/noneAuth" },
-            { "$ref": "#/$defs/passwordAuth" },
-            { "$ref": "#/$defs/mtlsAuth" }
+            {
+              "$ref": "#/$defs/noneAuth"
+            },
+            {
+              "$ref": "#/$defs/passwordAuth"
+            },
+            {
+              "$ref": "#/$defs/mtlsAuth"
+            },
+            {
+              "$ref": "#/$defs/oauthAuth"
+            }
           ]
         },
         "tls": {
@@ -148,33 +247,441 @@
     "registryUrl": {
       "type": "string",
       "format": "uri",
-      "pattern": "^http://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
+      "pattern": "^https?://(?:\\[[0-9A-Fa-f:]+\\]|[^\\s/?#@:]+)(?::[0-9]{1,5})?(?:/[^\\s?#]*)?$"
     },
-    "registry": {
+    "registryTls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caCertificates": {
+          "$ref": "#/$defs/kafkaTls/properties/caCertificates"
+        },
+        "clientCertificate": {
+          "$ref": "#/$defs/mtlsAuth/properties/clientCertificate"
+        }
+      }
+    },
+    "registryAuth": {
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider", "schema.registry.url"],
+          "required": [
+            "type"
+          ],
           "properties": {
-            "provider": {
-              "const": "confluent"
-            },
-            "schema.registry.url": {
-              "$ref": "#/$defs/registryUrl"
+            "type": {
+              "const": "none"
             }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["provider", "apicurio.registry.url"],
+          "required": [
+            "type",
+            "username",
+            "passwordRef"
+          ],
+          "properties": {
+            "type": {
+              "const": "basic"
+            },
+            "username": {
+              "type": "string",
+              "minLength": 1
+            },
+            "passwordRef": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secretReference"
+                },
+                {
+                  "pattern": "/registry/password$"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "tokenRef"
+          ],
+          "properties": {
+            "type": {
+              "const": "token"
+            },
+            "tokenRef": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secretReference"
+                },
+                {
+                  "pattern": "/registry/token$"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "privateKeyRef"
+          ],
+          "properties": {
+            "type": {
+              "const": "mtls"
+            },
+            "privateKeyRef": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secretReference"
+                },
+                {
+                  "pattern": "/registry/tls/private-key$"
+                }
+              ]
+            },
+            "privateKeyPasswordRef": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secretReference"
+                },
+                {
+                  "pattern": "/registry/tls/private-key-password$"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "tokenUrl",
+            "clientId",
+            "scopes",
+            "clientSecretRef"
+          ],
+          "properties": {
+            "type": {
+              "const": "oauth"
+            },
+            "tokenUrl": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "clientId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "scopes": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "clientSecretRef": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/secretReference"
+                },
+                {
+                  "pattern": "/registry/oauth/client-secret$"
+                }
+              ]
+            },
+            "caCertificates": {
+              "$ref": "#/$defs/kafkaTls/properties/caCertificates"
+            },
+            "logicalCluster": {
+              "type": "string",
+              "minLength": 1
+            },
+            "identityPoolId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "registry": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "schema.registry.url"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "schema.registry.url": {
+                    "pattern": "^http://"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "tls"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "auth"
+                      ],
+                      "properties": {
+                        "auth": {
+                          "not": {
+                            "properties": {
+                              "type": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "auth"
+                ],
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "type": {
+                        "const": "mtls"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "tls"
+                ],
+                "properties": {
+                  "tls": {
+                    "required": [
+                      "clientCertificate"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "tls"
+                ],
+                "properties": {
+                  "tls": {
+                    "required": [
+                      "clientCertificate"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "auth"
+                ],
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "type": {
+                        "const": "mtls"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "properties": {
+            "provider": {
+              "const": "confluent"
+            },
+            "schema.registry.url": {
+              "$ref": "#/$defs/registryUrl"
+            },
+            "tls": {
+              "$ref": "#/$defs/registryTls"
+            },
+            "auth": {
+              "$ref": "#/$defs/registryAuth"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "apicurio.registry.url"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "apicurio.registry.url": {
+                    "pattern": "^http://"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "tls"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "auth"
+                      ],
+                      "properties": {
+                        "auth": {
+                          "not": {
+                            "properties": {
+                              "type": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "auth"
+                ],
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "type": {
+                        "const": "token"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "auth"
+                ],
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "type": {
+                        "const": "mtls"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "tls"
+                ],
+                "properties": {
+                  "tls": {
+                    "required": [
+                      "clientCertificate"
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "tls"
+                ],
+                "properties": {
+                  "tls": {
+                    "required": [
+                      "clientCertificate"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "auth"
+                ],
+                "properties": {
+                  "auth": {
+                    "properties": {
+                      "type": {
+                        "const": "mtls"
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  }
+                }
+              }
+            }
+          ],
           "properties": {
             "provider": {
               "const": "apicurio"
             },
             "apicurio.registry.url": {
               "$ref": "#/$defs/registryUrl"
+            },
+            "tls": {
+              "$ref": "#/$defs/registryTls"
+            },
+            "auth": {
+              "$ref": "#/$defs/registryAuth"
             }
           }
         }
@@ -183,7 +690,10 @@
     "profile": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kafka"],
+      "required": [
+        "id",
+        "kafka"
+      ],
       "properties": {
         "id": {
           "type": "string",

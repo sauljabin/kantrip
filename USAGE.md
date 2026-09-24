@@ -19,9 +19,9 @@ replacement for Kafka clients. Its responsibility ends at storing profiles,
 resolving the connection material supported by the installed release,
 generating the correct temporary configuration, and supervising active
 execution. It supports plaintext, server-authenticated TLS, SASL/PLAIN,
-SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Kafka authentication always requires
-verified TLS. OAuth remains unsupported and fails before a child or network
-client starts.
+SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth client credentials. Kafka
+authentication always requires verified TLS. OAuth token endpoints have
+independent identity, scopes, secret, and optional CA trust.
 
 ## Local diagnostics
 
@@ -77,18 +77,22 @@ not request topics, groups, schemas, or a cluster description. Plaintext proves
 reachability; server-only TLS proves server identity; SASL and mTLS report their
 configured authentication exchange. None proves application authorization.
 
-The current unauthenticated Registry probe validates provider metadata from
-`/schemas/types` on a Confluent-compatible registry or `/system/info` on native
-Apicurio. These endpoints avoid requiring subject/artifact-list permission, but
-current Registry profiles are plain HTTP with no authentication, so success
-proves only reachability and a valid provider response. It needs no external CLI
+The Registry probe performs one bounded read query: `/subjects?limit=1` on
+Confluent-compatible Registry, including Apicurio's ccompat API without URL
+rewriting, or `/search/versions?limit=1` on native Apicurio v3. Empty valid
+collections succeed. Authenticated profiles repeat the same query anonymously
+and require HTTP 401/403 (or a rejected no-client-certificate TLS exchange for
+mTLS), so a public response cannot falsely prove the configured credentials.
+OAuth first obtains one bounded client-credentials token. Each HTTPS hop
+verifies its independent configured trust. It needs no external CLI
 and applies one five-second deadline across configured services, configurable with
 `--timeout SECONDS`. Colored terminals animate checks; plain output uses
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
 
 Kafka success does not prove topic, group, schema, cluster, or administrative
-access. Registry success does not prove schema or subject access.
+access. Registry success proves only that the configured read/search query is
+allowed; it does not prove access to a particular schema or permission to write.
 
 For scripts that need only the exit status, suppress all output with:
 
@@ -171,6 +175,25 @@ kantrip add production-mtls \
 Certificate and key files must be bounded regular PEM files and must match.
 Encrypted keys prompt for their password without echo.
 
+OAuth uses the client-credentials grant and keeps broker and token-endpoint
+trust independent:
+
+```bash
+kantrip add production-oauth \
+  --bootstrap-servers kafka.example.com:9093 \
+  --transport tls \
+  --ca-file ./kafka-ca.pem \
+  --auth oauth \
+  --oauth-token-url https://identity.example.com/oauth/token \
+  --oauth-client-id kantrip-production \
+  --oauth-scope kafka.read \
+  --oauth-ca-file ./identity-ca.pem
+```
+
+The client secret is collected by a no-echo prompt. Repeat `--oauth-scope` to
+preserve scope order. `edit` keeps omitted OAuth fields; the explicit
+`--clear-oauth-scopes` and `--oauth-default-trust` flags remove them.
+
 Choose one or more broker addresses when needed:
 
 ```bash
@@ -193,6 +216,26 @@ kantrip add development-apicurio \
 ```
 
 `--registry-provider` without `--registry-url` is invalid.
+
+Secure Registry profiles use their own trust and credentials. For example:
+
+```bash
+kantrip add registry-oauth \
+  --registry-provider confluent \
+  --registry-url https://registry.example.com \
+  --registry-ca-file ./registry-ca.pem \
+  --registry-auth oauth \
+  --registry-oauth-token-url https://identity.example.com/oauth/token \
+  --registry-oauth-client-id registry-client \
+  --registry-oauth-scope registry.read \
+  --registry-oauth-ca-file ./identity-ca.pem
+```
+
+Registry Basic, fixed Confluent bearer tokens, mTLS, and OAuth use no-echo
+prompts or bounded private-key files. Kafka and Registry secrets and CA bundles
+are never inherited from one another. Use `--registry-default-trust`,
+`--registry-oauth-default-trust`, or the corresponding `--clear-*` flags only
+for an explicit removal. Changing provider requires a new Registry URL.
 
 `add` creates the database when needed and never overwrites a profile. `-l` is
 the short form of repeatable `--label KEY=VALUE`. Edit explicit fields without
@@ -580,7 +623,9 @@ identically.
 Kaskade supports Avro, JSON Schema, and Protobuf decoding with Confluent Schema
 Registry and native Apicurio Registry through this adapter. Native Apicurio uses
 its default `contentId` framing because Kantrip currently configures only the
-registry URL. Kantrip sets no Kaskade-specific environment variable.
+registry URL. Native Apicurio OAuth profiles with scopes require Kaskade 5.0.1
+or newer; profiles without scopes retain compatibility with earlier releases.
+Kantrip sets no Kaskade-specific environment variable.
 
 ## Profile storage
 
@@ -669,6 +714,7 @@ file contains the provider's official serializer/deserializer URL property.
 | --- | --- |
 | `SCHEMA_REGISTRY_URL` | Confluent-compatible registry URL |
 | `SCHEMA_REGISTRY_CONFIG_FILE` | Generated file containing `schema.registry.url` |
+| `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` | Private combined Kafka and prefixed Confluent Registry client properties |
 | `APICURIO_REGISTRY_URL` | Native Apicurio Core Registry API v3 URL |
 | `APICURIO_REGISTRY_CONFIG_FILE` | Generated file containing `apicurio.registry.url` |
 

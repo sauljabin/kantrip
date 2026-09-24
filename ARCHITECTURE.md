@@ -15,15 +15,17 @@ the active execution.
 
 For each command or subshell, the user selects a profile. Kantrip then:
 
-1. Loads one UUID/revision generation and resolves its credentials under the mutation lock.
+1. Loads one UUID/revision generation and resolves both Kafka and Registry
+   credentials through one store under the mutation lock.
 2. Builds the plaintext or verified-TLS connection model.
 3. Renders the native connection properties required by the client.
 4. Supervises the client in a bounded session.
 5. Removes session-owned connection material.
 
 The immutable resolved snapshot is released from the mutation lock before
-rendering or networking. Adapters and shims never query SQLite or the credential
-store again during that session.
+rendering or networking. Profile rotation or removal after that point cannot
+mix generations or invalidate credentials already held in memory. Adapters and
+shims never query SQLite or the credential store again during that session.
 
 Kantrip prepares the connection for one execution; it does not perform the
 Kafka or Registry operation itself. It does not install or replace clients,
@@ -57,16 +59,16 @@ from the executable user contract in `COMPATIBILITY.md`.
 | --- | --- | --- |
 | Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and connection-state ping |
 | PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | Supported by `add`, `edit`, `exec`, and `ping` |
-| Kafka OAuth | Unimplemented | Unsupported |
-| Registry | One explicit provider, HTTP without authentication | Provider-aware clients and provider-metadata ping |
+| Kafka OAuth | TLS-only client credentials with independent token trust | Native Java 4.0+ and librdkafka OIDC rendering, sessions, and ping |
+| Registry | Independent TLS, Basic, token, mTLS, and OAuth | Provider-aware private client configuration and authenticated probes |
 | External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
 
 Each stored Registry declares `provider: confluent` with
 `schema.registry.url`, or `provider: apicurio` with `apicurio.registry.url`.
 The CLI selects and persists Confluent when a Registry URL is supplied without
 an explicit provider. Native Apicurio uses `/apis/registry/v3`; its
-`/apis/ccompat/v7` API requires a Confluent profile. Registry TLS and
-authentication are currently schema-invalid. No arbitrary Java or librdkafka
+`/apis/ccompat/v7` API requires a Confluent profile. Registry TLS,
+authentication, and token-endpoint trust are independent from Kafka. No arbitrary Java or librdkafka
 property maps are accepted; only typed connection fields reach renderers.
 Registry property namespaces follow the official
 [Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
@@ -121,7 +123,7 @@ TLS. Authentication always requires verified TLS. Passwords, private keys, and
 optional private-key passwords resolve from exact profile-owned references;
 public client certificate chains remain in the profile. Java and librdkafka
 render independently from the same resolved model, including internally escaped
-JAAS for Java password mechanisms. OAuth 2.0 client credentials remain planned.
+JAAS for Java password mechanisms and native OAuth client-credentials settings.
 A Registry remains an independent connection; Kafka and Registry credentials
 are never inherited across those boundaries.
 
@@ -185,8 +187,9 @@ than relying on schema normalization or read-time inference.
 
 Profiles reject arbitrary property maps. Current renderers produce Java and
 librdkafka connection configuration and provider-specific HTTP Registry URL
-settings. Import normalization, Registry security, and OAuth rendering remain
-in the roadmap.
+settings. Registry TLS/authentication and Kafka/Registry OAuth render into
+client-specific private configuration; property-file import normalization
+remains in the roadmap.
 
 ## Profile lifecycle and input sources
 
@@ -258,14 +261,56 @@ verify Apache Kafka 2.7+ or Confluent Platform 6.1+, the releases that introduce
 PEM trust-store support. Older or unidentifiable Java clients fail before the
 Kafka operation instead of attempting an incompatible or weaker configuration.
 
-OAuth acquisition and refresh are not implemented in the current profile or
-session path. Their native-client integration is scoped in the roadmap.
+Kafka OAuth acquisition and refresh are delegated to the verified Apache Java
+callback or librdkafka OIDC support. Registry OAuth remains native to three
+distinct implementations: the Confluent Java client used by all Registry
+console wrappers, the Confluent Python `SchemaRegistryClient` used by Kaskade,
+and Kaskade's native `ApicurioClient`. Acceptance repeats expiry and revocation
+once per implementation and trust path, not once per equivalent shell or data
+format. A bounded Registry ping obtains one in-memory client-credentials token
+and discards it after the provider probe; it is initial acquisition evidence,
+not native refresh evidence.
+
+Kaskade's native Apicurio mapping uses the official shared
+`apicurio.registry.tls.certificates` bundle for Registry and token endpoint, but
+keeps separate HTTP/TLS contexts so Registry client identity never reaches the
+IdP. Native Apicurio OAuth scopes require Kaskade 5.0.1 or newer, the first
+stable release that implements the official scope property. Profiles without
+scopes retain compatibility with earlier Kaskade releases.
+Confluent Java likewise uses one official `ssl.*` trust configuration for both
+destinations. Distinct CA profiles are rejected for those shared contracts.
+
+Confluent Python 2.15.1 applies `ssl.ca.location` only to Registry while its
+Authlib token client uses HTTPX environment trust. For Kaskade Registry OAuth,
+Kantrip supplies `SSL_CERT_FILE` only to that direct child or shim process. The
+mode-0600 session bundle contains platform default roots plus the profile IdP CA;
+inherited `SSL_CERT_FILE` and `SSL_CERT_DIR` cannot override it. This variable is
+process-scoped, not hostname-scoped, so every environment-aware HTTP client in
+that Kaskade process sees the same bundle. The parent shell, unrelated clients,
+system stores, and later sessions remain unchanged.
 
 ## Client adapters
 
 An adapter recognizes the executable, rejects connection overrides, and injects
 native configuration. One capability table drives direct commands and shell
-shims. Java custom-CA and mTLS execution also checks the installed client version.
+shims. Both paths invoke the same argument guard before launching the native
+client; shell quoting and process supervision remain separate. Java custom-CA
+and mTLS execution also checks the installed client version.
+
+| Client family | Profile-owned native inputs | Runtime inputs retained |
+| --- | --- | --- |
+| Apache/Confluent Java consoles and admin tools | Bootstrap and config files, alternate connection files, and client-property overrides | Consumer `group.id`; topic, group, ACL, and broker resource operations such as `kafka-configs --add-config` |
+| Confluent Registry consoles | Kafka and Registry files/URLs, alternate command/formatter/reader files, and profile-owned format properties | Consumer `group.id` and presentation properties that cannot replace a connection |
+| `kcat`/`kafkacat` | `-b`, `-F`, `-r`, and arbitrary `-X` configuration | `-X group.id` and `-X broker.address.family` only |
+| Kaskade | Bootstrap/Registry/config-file options and arbitrary `--kafka` properties | `--kafka group.id` and `--kafka broker.address.family` only |
+
+These are native-client grammars, not a generic passthrough policy. A future
+client option is admitted only after checking the released tool's semantics,
+adding direct and Bash/Zsh/Fish regressions, and showing that it cannot select
+another profile connection or disclose private configuration. Do not pre-create
+adapters for clients Kantrip does not currently support. A user-selected
+arbitrary executable remains trusted with its child environment and is not
+confined by these adapter guards.
 
 Current adapters cover Apache and Confluent Kafka commands, Confluent Schema
 Registry consoles, `kcat`/`kafkacat`, and Kaskade. The exact version and feature
@@ -391,20 +436,23 @@ that path to `kafka-configs.sh --add-config-file`, and removes the file on exit;
 the password does not enter the container argument vector. There is no
 unauthenticated provisioning listener.
 
-The Strimzi User Operator is the single owner of ACLs for authenticated clients,
-the OAuth service account, and the five Registry Kafka identities. PLAIN,
-SCRAM-SHA-256, and OAuth principals also have unused SCRAM-SHA-512
-`KafkaUser` credentials so the operator can reconcile their real ACL
-principals; their tested listeners still use their named mechanisms. Registry
+The Strimzi User Operator owns ACLs for its authenticated clients, the OAuth
+service account, and the five Registry Kafka identities. PLAIN and OAuth
+principals also have unused SCRAM-SHA-512 `KafkaUser` credentials so the
+operator can reconcile their real ACL principals; their tested listeners still
+use their named mechanisms. The two SCRAM-SHA-256 identities are excluded from
+User Operator reconciliation, because the Job owns their 256-only credentials
+and the allowed identity's `kantrip-auth-` ACLs. Registry
 identities receive only their exact topic and consumer-group permissions.
 Allowed client fixtures receive the `kantrip-auth-` prefix, while matching
 authenticated no-ACL identities prove that ping does not imply resource
 authorization.
 
-The provisioning Job is the sole owner of the unauthenticated smoke ACL:
+The provisioning Job is also the sole owner of the unauthenticated smoke ACL:
 `ANONYMOUS` receives only topic and group prefixes `kantrip-smoke-` plus cluster
-Describe. It is never a superuser. The User Operator explicitly ignores that
-principal so periodic reconciliation does not erase the Job-owned rule. The
+Describe. It is never a superuser. The User Operator explicitly ignores these
+Job-owned principals so periodic reconciliation does not erase their credentials
+or rules. The
 OAuth service account is limited to `kantrip-oauth-`. This is a loopback-only,
 disposable test fixture, not a claim of Kubernetes network isolation or a
 production authorization design.
@@ -415,6 +463,18 @@ destroyed. `sandbox up` rejects the retired `Kafka/auth-kantrip` topology and
 requires an explicit `down` followed by `up`; it never silently deletes the old
 cluster. Acceptance forces a User Operator reconciliation, restarts the broker
 without rerunning provisioning, and performs a second idempotent `sandbox up`.
+
+Infrastructure acceptance is deliberately separate from sandbox lifecycle.
+`python -m scripts.tests --suite e2e` validates an already-running laboratory
+and never creates or destroys it. The same suite runs locally and in CI against
+an installed candidate wheel plus separately installed, pinned released clients.
+Setup failures (missing executable, wrong version, workload/certificate/topic
+readiness, host endpoint, private state, or native credential store) are distinct
+from product assertion failures. A private non-blocking lock serializes mutation
+of shared OAuth clients. Long-lived Registry consumers force distinct schema
+cache misses before and after token expiry, confirm new IdP issuance, then revoke
+the client and require token-acquisition failure without decoding the final
+record. TUI clients are observed through parsed terminal state.
 
 ## Diagnostics and output
 
@@ -430,11 +490,14 @@ configured or learned, addressable broker reaches `UP` after the required
 TLS/SASL exchange. It does not call resource or cluster-description APIs.
 Plaintext proves reachability, server-only TLS proves server identity, SASL
 proves its configured exchange, and mTLS proves the configured client exchange;
-none proves application authorization. Current Registry profiles are
-unauthenticated HTTP only. Their provider-specific probe validates fixed
-non-resource metadata: Confluent-compatible `/schemas/types` or native Apicurio
-`/system/info`. This proves endpoint reachability and provider response shape,
-not server identity, user authentication, or schema/subject authorization.
+none proves application authorization. Registry profiles independently support
+HTTP or verified HTTPS plus Basic, fixed bearer, mTLS, or OAuth credentials.
+Their provider-specific read probe uses Confluent-compatible
+`/subjects?limit=1` or native Apicurio v3 `/search/versions?limit=1`, validates
+the provider response shape, and accepts an empty collection. Authenticated
+profiles repeat that exact URL without credentials to prove the gate rejects
+anonymous access. The result proves only that listing/search is permitted, not
+access to a particular schema or write authorization.
 
 Kantrip writes results to stdout and diagnostics to stderr. Sensitive values
 are classified and redacted before presentation, and color never carries

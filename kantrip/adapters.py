@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,13 +77,37 @@ _KASKADE_COMMANDS = frozenset({"admin", "consumer"})
 _KASKADE_CONNECTION_OPTIONS = (
     "--bootstrap-servers",
     "--config-file",
-    "--kafka",
     "--registry",
     "-b",
 )
+_SAFE_RUNTIME_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
+_KCAT_FLAG_OPTIONS = frozenset("CPLQqvEVhlTZeJOuU")
+_KCAT_VALUE_OPTIONS = frozenset("GtpbDKcmFXdzkHofsr")
+_KAFKA_CLIENT_PROPERTY_OPTIONS = frozenset(
+    {"--command-property", "--consumer-property", "--producer-property"}
+)
+_KAFKA_FORMAT_PROPERTY_OPTIONS = frozenset(
+    {"--property", "--formatter-property", "--reader-property"}
+)
+_PROFILE_PROPERTY_PREFIXES = (
+    "sasl.",
+    "ssl.",
+    "https.",
+    "schema.registry.",
+    "basic.auth.",
+    "bearer.auth.",
+    "apicurio.registry.",
+)
+_PROFILE_PROPERTY_NAMES = frozenset(
+    {"bootstrap.servers", "security.protocol", "broker.list", "metadata.broker.list"}
+)
 _KAFKA_ALTERNATE_CONNECTION_OPTIONS = {
     **{
-        executable: ("--broker-list",)
+        executable: ("--command-config",)
+        for executable in KAFKA_CONSOLE_CONSUMER_EXECUTABLES | SCHEMA_REGISTRY_CONSUMER_EXECUTABLES
+    },
+    **{
+        executable: ("--command-config", "--broker-list")
         for executable in KAFKA_CONSOLE_PRODUCER_EXECUTABLES | SCHEMA_REGISTRY_PRODUCER_EXECUTABLES
     },
     **{
@@ -113,9 +138,12 @@ class AdapterCapability:
     kafka_authentication: frozenset[str]
     registry_providers: frozenset[str]
     pem_version_gate: bool = False
+    oauth_version_gate: bool = False
 
 
-_KAFKA_AUTHENTICATION = frozenset({"none", "plain", "scram-sha-256", "scram-sha-512", "mtls"})
+_KAFKA_AUTHENTICATION = frozenset(
+    {"none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth"}
+)
 ADAPTER_CAPABILITIES = (
     AdapterCapability(
         "Apache/Confluent Java CLI",
@@ -123,6 +151,7 @@ ADAPTER_CAPABILITIES = (
         _KAFKA_AUTHENTICATION,
         frozenset({CONFLUENT_PROVIDER}),
         pem_version_gate=True,
+        oauth_version_gate=True,
     ),
     AdapterCapability(
         "kcat",
@@ -140,7 +169,12 @@ ADAPTER_CAPABILITIES = (
 
 
 _CLIENT_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.\d+)?")
+_KASKADE_VERSION_PATTERN = re.compile(
+    r"\bkaskade,\s+version\s+(\d+)\.(\d+)\.(\d+)([^\s]*)",
+    re.IGNORECASE,
+)
 _JAVA_PEM_VERSION_TIMEOUT_SECONDS = 5
+_KASKADE_APICURIO_SECURITY_MIN_VERSION = (5, 0, 1)
 
 
 def require_java_pem_support(
@@ -149,30 +183,27 @@ def require_java_pem_support(
     environment: Mapping[str, str],
 ) -> None:
     """Reject Java clients whose version cannot safely consume a PEM trust store."""
-    resolved = shutil.which(executable, path=environment.get("PATH"))
-    if resolved is None:
-        raise AdapterError(f"command '{Path(executable).name}' was not found")
-    try:
-        result = subprocess.run(
-            [resolved, "--version"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
-            check=False,
-            env=dict(environment),
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise AdapterError(_java_pem_unknown_version_message(Path(executable).name)) from error
-
-    version = _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
-    if result.returncode != 0 or version is None:
-        raise AdapterError(_java_pem_unknown_version_message(Path(executable).name))
+    version = _java_client_version(executable, environment, capability="PEM trust-store")
     if not _java_client_supports_pem(version):
         rendered_version = ".".join(str(part) for part in version)
         raise AdapterError(
             f"{Path(executable).name} {rendered_version} does not support PEM trust stores; "
             "custom CA profiles require Apache Kafka 2.7+ or Confluent Platform 6.1+"
+        )
+
+
+def require_java_oauth_support(
+    executable: str,
+    *,
+    environment: Mapping[str, str],
+) -> None:
+    """Require the verified Apache Kafka 4.x native client-credentials callback."""
+    version = _java_client_version(executable, environment, capability="OAuth")
+    if version[0] < 4:
+        rendered_version = ".".join(str(part) for part in version)
+        raise AdapterError(
+            f"{Path(executable).name} {rendered_version} does not support Kantrip's native "
+            "OAuth mapping; install Apache Kafka 4.0+"
         )
 
 
@@ -182,6 +213,7 @@ def require_adapter_capability(
     auth_type: str,
     custom_pem: bool,
     environment: Mapping[str, str],
+    registry: RegistryConnection | None = None,
 ) -> None:
     """Apply the same mechanism and installed-version decision to direct clients."""
     name = Path(executable).name
@@ -197,6 +229,68 @@ def require_adapter_capability(
         )
     if custom_pem and capability.pem_version_gate:
         require_java_pem_support(executable, environment=environment)
+    if auth_type == "oauth" and capability.oauth_version_gate:
+        require_java_oauth_support(executable, environment=environment)
+    if name == "kaskade" and registry is not None:
+        require_kaskade_apicurio_security_support(
+            executable,
+            registry,
+            environment=environment,
+        )
+
+
+def require_kaskade_apicurio_security_support(
+    executable: str,
+    registry: RegistryConnection,
+    *,
+    environment: Mapping[str, str],
+) -> None:
+    """Gate native Apicurio OAuth scopes on their first stable Kaskade release."""
+    if not _requires_new_kaskade_apicurio_security(registry):
+        return
+    version, suffix, rendered = _kaskade_client_version(executable, environment)
+    if not suffix and version >= _KASKADE_APICURIO_SECURITY_MIN_VERSION:
+        return
+    raise AdapterError(
+        f"kaskade {rendered} cannot map native Apicurio OAuth scopes; "
+        "install Kaskade 5.0.1 or newer"
+    )
+
+
+def _requires_new_kaskade_apicurio_security(connection: RegistryConnection) -> bool:
+    if connection.provider != "apicurio":
+        return False
+    if connection.auth_type != "oauth" or connection.oauth is None:
+        return False
+    return bool(connection.oauth.scopes)
+
+
+def _kaskade_client_version(
+    executable: str,
+    environment: Mapping[str, str],
+) -> tuple[tuple[int, int, int], str, str]:
+    resolved = shutil.which(executable, path=environment.get("PATH"))
+    if resolved is None:
+        raise AdapterError(f"command '{Path(executable).name}' was not found")
+    try:
+        result = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
+            check=False,
+            env=dict(environment),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError("could not verify Kaskade Apicurio security support") from error
+    match = _KASKADE_VERSION_PATTERN.search(f"{result.stdout}\n{result.stderr}")
+    if result.returncode != 0 or match is None:
+        raise AdapterError("could not verify Kaskade Apicurio security support")
+    version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    suffix = match.group(4)
+    rendered = ".".join(str(part) for part in version) + suffix
+    return version, suffix, rendered
 
 
 def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
@@ -206,6 +300,35 @@ def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
         if version[0] in {2, 3, 4, 5, 6, 7, 8}:
             recognized = version
     return recognized
+
+
+def _java_client_version(
+    executable: str,
+    environment: Mapping[str, str],
+    *,
+    capability: str,
+) -> tuple[int, int]:
+    resolved = shutil.which(executable, path=environment.get("PATH"))
+    if resolved is None:
+        raise AdapterError(f"command '{Path(executable).name}' was not found")
+    try:
+        result = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
+            check=False,
+            env=dict(environment),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise AdapterError(
+            f"could not verify {capability} support for {Path(executable).name}"
+        ) from error
+    version = _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
+    if result.returncode != 0 or version is None:
+        raise AdapterError(f"could not verify {capability} support for {Path(executable).name}")
+    return version
 
 
 def _java_client_supports_pem(version: tuple[int, int]) -> bool:
@@ -234,6 +357,7 @@ def prepare_command(
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     registry: RegistryConnection | None = None,
+    schema_registry_java_config_path: Path | None = None,
 ) -> list[str]:
     """Inject profile connection options for a supported explicit command."""
     prepared = list(arguments)
@@ -245,17 +369,35 @@ def prepare_command(
     if kafka_options is not None:
         bootstrap_option, config_option = kafka_options
         _reject_kafka_overrides(executable, prepared[1:], kafka_options)
-        registry_arguments: list[str] = []
+        selected_config_path = java_config_path
+        registry_url: str | None = None
         if executable in SCHEMA_REGISTRY_EXECUTABLES:
             connection = _require_confluent_registry(executable, registry)
-            registry_arguments = ["--property", f"schema.registry.url={connection.url}"]
+            _require_registry_authentication(executable, connection)
+            if schema_registry_java_config_path is None:
+                raise AdapterError(
+                    f"{executable} requires a private Schema Registry client configuration"
+                )
+            selected_config_path = schema_registry_java_config_path
+            registry_url = connection.url
+        auxiliary_config = _schema_registry_auxiliary_config_option(executable)
+        auxiliary_property = _schema_registry_auxiliary_property_option(executable)
         return [
             prepared[0],
             bootstrap_option,
             bootstrap_servers,
             config_option,
-            str(java_config_path),
-            *registry_arguments,
+            str(selected_config_path),
+            *(
+                (auxiliary_config, str(selected_config_path))
+                if auxiliary_config is not None
+                else ()
+            ),
+            *(
+                (auxiliary_property, f"schema.registry.url={registry_url}")
+                if auxiliary_property is not None and registry_url is not None
+                else ()
+            ),
             *prepared[1:],
         ]
     if executable in KCAT_EXECUTABLES:
@@ -272,9 +414,10 @@ def prepare_command(
 
 def _prepare_kcat(prepared: list[str], registry: RegistryConnection | None) -> list[str]:
     executable = Path(prepared[0]).name
-    _reject_kcat_overrides(executable, prepared[1:])
-    if _kcat_uses_schema_registry(prepared[1:]):
+    options = _reject_kcat_overrides(executable, prepared[1:])
+    if _kcat_uses_schema_registry(options):
         connection = _require_confluent_registry(executable, registry)
+        _require_registry_authentication(executable, connection)
         return [prepared[0], "-r", connection.url, *prepared[1:]]
     return prepared
 
@@ -291,7 +434,8 @@ def _prepare_kaskade(
     _reject_kaskade_overrides(prepared[2:])
     selected_config_path = config_path
     if command == "consumer" and _kaskade_uses_schema_registry(prepared[2:]):
-        _require_registry("kaskade", registry)
+        connection = _require_registry("kaskade", registry)
+        _require_registry_authentication("kaskade", connection)
         selected_config_path = registry_config_path
     return [
         prepared[0],
@@ -302,7 +446,7 @@ def _prepare_kaskade(
     ]
 
 
-def create_subshell_shims(
+def create_subshell_shims(  # noqa: C901
     directory: Path,
     *,
     bootstrap_servers: str,
@@ -313,6 +457,9 @@ def create_subshell_shims(
     environment: Mapping[str, str],
     registry: RegistryConnection | None = None,
     require_java_pem: bool = False,
+    kafka_auth_type: str = "none",
+    schema_registry_java_config_path: Path | None = None,
+    registry_oauth_ssl_cert_file: Path | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     search_path = environment.get("PATH", os.defpath)
@@ -338,20 +485,51 @@ def create_subshell_shims(
                 java_pem_errors[executable_directory] = str(error)
             else:
                 java_pem_errors[executable_directory] = None
+        if kafka_auth_type == "oauth" and executable_directory not in java_pem_errors:
+            try:
+                require_java_oauth_support(executable, environment=environment)
+            except AdapterError as error:
+                java_pem_errors[executable_directory] = str(error)
+            else:
+                java_pem_errors[executable_directory] = None
         bootstrap_option, config_option = KAFKA_EXECUTABLE_OPTIONS[name]
+        selected_java_config = java_config_path
+        if name in SCHEMA_REGISTRY_EXECUTABLES and schema_registry_java_config_path is not None:
+            selected_java_config = schema_registry_java_config_path
         contents = _render_kafka_shim(
             name,
             executable,
             bootstrap_servers=bootstrap_servers,
-            java_config_path=java_config_path,
+            java_config_path=selected_java_config,
             bootstrap_option=bootstrap_option,
             config_option=config_option,
             registry=registry if name in SCHEMA_REGISTRY_EXECUTABLES else None,
             schema_registry_required=name in SCHEMA_REGISTRY_EXECUTABLES,
             capability_error=java_pem_errors.get(executable_directory),
+            preserve_kafka_opts=(
+                kafka_auth_type == "oauth"
+                or registry is not None
+                and registry.provider == CONFLUENT_PROVIDER
+                and registry.auth_type == "oauth"
+            ),
+            preserve_schema_registry_opts=(
+                name in SCHEMA_REGISTRY_EXECUTABLES
+                and registry is not None
+                and registry.auth_type == "oauth"
+            ),
         )
         _write_executable(directory / name, contents)
     if kaskade_executable is not None:
+        kaskade_capability_error: str | None = None
+        if registry is not None:
+            try:
+                require_kaskade_apicurio_security_support(
+                    kaskade_executable,
+                    registry,
+                    environment=environment,
+                )
+            except AdapterError as error:
+                kaskade_capability_error = str(error)
         _write_executable(
             directory / "kaskade",
             _render_kaskade_shim(
@@ -359,6 +537,8 @@ def create_subshell_shims(
                 kaskade_config_path,
                 kaskade_registry_config_path,
                 registry,
+                capability_error=kaskade_capability_error,
+                oauth_ssl_cert_file=registry_oauth_ssl_cert_file,
             ),
         )
     for name, executable in kcat_executables.items():
@@ -370,7 +550,18 @@ def create_subshell_shims(
 
 
 def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
-    for argument in arguments:
+    for index, argument in enumerate(arguments):
+        if argument == "--kafka" or argument.startswith("--kafka="):
+            property_value = (
+                arguments[index + 1]
+                if argument == "--kafka" and index + 1 < len(arguments)
+                else argument.removeprefix("--kafka=")
+            )
+            if not _safe_runtime_kafka_property(property_value):
+                raise AdapterError(
+                    "kaskade option '--kafka' cannot override the selected Kantrip profile"
+                )
+            continue
         for option in _KASKADE_CONNECTION_OPTIONS:
             if (
                 argument == option
@@ -383,28 +574,65 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
                 )
 
 
-def _reject_kcat_overrides(executable: str, arguments: Sequence[str]) -> None:
-    for index, argument in enumerate(arguments):
-        if argument in {"-F", "-r"} or argument.startswith(("-F", "-r")):
-            option = argument[:2]
+def _safe_runtime_kafka_property(value: str) -> bool:
+    name, separator, setting = value.partition("=")
+    if not separator or not setting or name not in _SAFE_RUNTIME_KAFKA_PROPERTIES:
+        return False
+    return name != "broker.address.family" or setting in {"v4", "v6", "any"}
+
+
+def _reject_kcat_overrides(
+    executable: str, arguments: Sequence[str]
+) -> tuple[tuple[str, str | None], ...]:
+    options = _kcat_options(executable, arguments)
+    for option, value in options:
+        if option in {"-F", "-r", "-b"}:
             raise AdapterError(
                 f"{executable} option '{option}' cannot override the selected Kantrip profile"
             )
-        property_value: str | None = None
-        if argument == "-X" and index + 1 < len(arguments):
-            property_value = arguments[index + 1]
-        elif argument.startswith("-X"):
-            property_value = argument[2:]
-        if property_value is not None and property_value.startswith("schema.registry.url="):
+        if option == "-X" and (value is None or not _safe_runtime_kafka_property(value)):
             raise AdapterError(
-                f"{executable} Schema Registry URL cannot override the selected Kantrip profile"
+                f"{executable} option '-X' cannot override the selected Kantrip profile"
             )
+    return options
 
 
-def _kcat_uses_schema_registry(arguments: Sequence[str]) -> bool:
+def _kcat_options(executable: str, arguments: Sequence[str]) -> tuple[tuple[str, str | None], ...]:
+    """Parse short getopt clusters and consume option values before scanning again."""
+    options: list[tuple[str, str | None]] = []
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            break
+        if not argument.startswith("-") or argument == "-":
+            index += 1
+            continue
+        if argument.startswith("--"):
+            raise AdapterError(f"{executable} option '{argument}' is not supported by Kantrip")
+        for position, letter in enumerate(argument[1:], start=2):
+            option = f"-{letter}"
+            if letter in _KCAT_FLAG_OPTIONS:
+                options.append((option, None))
+                continue
+            if letter not in _KCAT_VALUE_OPTIONS:
+                raise AdapterError(f"{executable} option '{option}' is not supported by Kantrip")
+            value = argument[position:]
+            if not value:
+                index += 1
+                if index >= len(arguments):
+                    raise AdapterError(f"{executable} option '{option}' requires a value")
+                value = arguments[index]
+            options.append((option, value))
+            break
+        index += 1
+    return tuple(options)
+
+
+def _kcat_uses_schema_registry(options: Sequence[tuple[str, str | None]]) -> bool:
     return any(
-        value.lower() in {"avro", "key=avro", "value=avro"}
-        for value in _option_values(arguments, "-s")
+        option == "-s" and value is not None and value.lower() in {"avro", "key=avro", "value=avro"}
+        for option, value in options
     )
 
 
@@ -446,6 +674,46 @@ def _require_confluent_registry(
     return connection
 
 
+def _require_registry_authentication(name: str, connection: RegistryConnection) -> None:
+    if name in KCAT_EXECUTABLES and connection.auth_type != "none":
+        raise AdapterError(
+            f"{name} Registry decoding does not expose Kantrip's safe "
+            f"'{connection.auth_type}' credential mapping"
+        )
+    if name == "kaskade" and connection.auth_type == "token":
+        raise AdapterError("kaskade Registry decoding does not support fixed bearer tokens")
+    if connection.auth_type == "oauth" and connection.oauth is not None:
+        _require_registry_oauth_mapping(name, connection)
+
+
+def _require_registry_oauth_mapping(name: str, connection: RegistryConnection) -> None:
+    assert connection.oauth is not None
+    if (
+        name in SCHEMA_REGISTRY_EXECUTABLES
+        or name == "kaskade"
+        and connection.provider == CONFLUENT_PROVIDER
+    ) and connection.oauth_logical_cluster is None:
+        raise AdapterError(f"{name} Confluent Registry OAuth requires a logical cluster identifier")
+    if name in SCHEMA_REGISTRY_EXECUTABLES and (
+        connection.oauth.ca_certificates is not None
+        and connection.oauth.ca_certificates != connection.ca_certificates
+    ):
+        raise AdapterError(
+            f"{name} Confluent Registry OAuth uses one ssl.* trust configuration for "
+            "Registry and token endpoint; independent CA bundles are not supported"
+        )
+    if (
+        name == "kaskade"
+        and connection.provider == "apicurio"
+        and connection.oauth.ca_certificates is not None
+        and connection.oauth.ca_certificates != connection.ca_certificates
+    ):
+        raise AdapterError(
+            "kaskade Apicurio OAuth uses apicurio.registry.tls.certificates for Registry "
+            "and token endpoint; independent CA bundles are not supported"
+        )
+
+
 def _reject_kafka_overrides(
     executable: str,
     arguments: Sequence[str],
@@ -453,40 +721,74 @@ def _reject_kafka_overrides(
 ) -> None:
     connection_options = (
         *injected_options,
+        *(
+            (auxiliary_config,)
+            if (auxiliary_config := _schema_registry_auxiliary_config_option(executable))
+            is not None
+            else ()
+        ),
         *_KAFKA_ALTERNATE_CONNECTION_OPTIONS.get(executable, ()),
     )
-    for argument in arguments:
+    for index, argument in enumerate(arguments):
         for option in connection_options:
             if argument == option or argument.startswith(f"{option}="):
                 raise AdapterError(
                     f"{executable} option '{option}' cannot override the selected Kantrip profile"
                 )
-    if executable in SCHEMA_REGISTRY_EXECUTABLES:
-        _reject_schema_registry_property_overrides(executable, arguments)
+        matching = next(
+            (
+                option
+                for option in _KAFKA_CLIENT_PROPERTY_OPTIONS | _KAFKA_FORMAT_PROPERTY_OPTIONS
+                if argument == option or argument.startswith(f"{option}=")
+            ),
+            None,
+        )
+        if matching is None:
+            continue
+        value = (
+            arguments[index + 1]
+            if argument == matching and index + 1 < len(arguments)
+            else argument[len(matching) + 1 :] if argument.startswith(f"{matching}=") else ""
+        )
+        name, separator, setting = value.partition("=")
+        name = name.strip()
+        if not separator or not name or not setting:
+            raise AdapterError(f"{executable} option '{matching}' requires name=value")
+        if matching in _KAFKA_CLIENT_PROPERTY_OPTIONS:
+            safe_group = (
+                executable
+                in KAFKA_CONSOLE_CONSUMER_EXECUTABLES | SCHEMA_REGISTRY_CONSUMER_EXECUTABLES
+                and matching in {"--command-property", "--consumer-property"}
+                and name == "group.id"
+            )
+            if not safe_group:
+                raise AdapterError(
+                    f"{executable} option '{matching}' cannot override the selected Kantrip profile"
+                )
+        elif _profile_owned_property(name):
+            raise AdapterError(
+                f"{executable} property '{name}' cannot override the selected Kantrip profile"
+            )
 
 
-def _reject_schema_registry_property_overrides(executable: str, arguments: Sequence[str]) -> None:
-    for index, argument in enumerate(arguments):
-        if argument in {"--producer-property", "--consumer-property"} or argument.startswith(
-            ("--producer-property=", "--consumer-property=")
-        ):
-            raise AdapterError(
-                f"{executable} Kafka client properties cannot override the selected "
-                "Kantrip profile"
-            )
-        property_value: str | None = None
-        if argument.startswith("--property="):
-            property_value = argument[len("--property=") :]
-        elif argument == "--property" and index + 1 < len(arguments):
-            property_value = arguments[index + 1]
-        if property_value is not None and property_value.split("=", 1)[0] in {
-            "bootstrap.servers",
-            "schema.registry.url",
-        }:
-            raise AdapterError(
-                f"{executable} property '{property_value.split('=', 1)[0]}' cannot override "
-                "the selected Kantrip profile"
-            )
+def _profile_owned_property(name: str) -> bool:
+    return name in _PROFILE_PROPERTY_NAMES or name.startswith(_PROFILE_PROPERTY_PREFIXES)
+
+
+def _schema_registry_auxiliary_config_option(executable: str) -> str | None:
+    if executable in SCHEMA_REGISTRY_CONSUMER_EXECUTABLES:
+        return "--formatter-config"
+    if executable in SCHEMA_REGISTRY_PRODUCER_EXECUTABLES:
+        return "--reader-config"
+    return None
+
+
+def _schema_registry_auxiliary_property_option(executable: str) -> str | None:
+    if executable in SCHEMA_REGISTRY_CONSUMER_EXECUTABLES:
+        return "--formatter-property"
+    if executable in SCHEMA_REGISTRY_PRODUCER_EXECUTABLES:
+        return "--reader-property"
+    return None
 
 
 def _render_kafka_shim(
@@ -500,66 +802,60 @@ def _render_kafka_shim(
     registry: RegistryConnection | None,
     schema_registry_required: bool,
     capability_error: str | None,
+    preserve_kafka_opts: bool,
+    preserve_schema_registry_opts: bool,
 ) -> str:
-    rejected_options = (
-        bootstrap_option,
-        config_option,
-        *_KAFKA_ALTERNATE_CONNECTION_OPTIONS.get(name, ()),
-    )
-    rejected_patterns = "|".join(
-        pattern for option in rejected_options for pattern in (option, f"{option}=*")
-    )
+    auxiliary_config = _schema_registry_auxiliary_config_option(name)
     registry_guard = ""
-    property_guard = ""
     registry_arguments = ""
     if schema_registry_required:
         registry_guard = _render_registry_shim_guard(name, registry, confluent_only=True)
-        property_guard = f"""previous_argument=
-for argument in "$@"; do
-  if [ "$previous_argument" = '--property' ]; then
-    case "$argument" in
-      bootstrap.servers=*|schema.registry.url=*)
-        printf '%s\\n' '{name} properties cannot override the selected Kantrip profile' >&2
-        exit 2
-        ;;
-    esac
-  fi
-  case "$argument" in
-    --producer-property|--producer-property=*|--consumer-property|--consumer-property=*|--property=bootstrap.servers=*|--property=schema.registry.url=*)
-      printf '%s\\n' '{name} properties cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  previous_argument="$argument"
-done
-"""
         if registry is not None and registry.provider == CONFLUENT_PROVIDER:
-            registry_arguments = " --property " + shlex.quote(f"schema.registry.url={registry.url}")
+            auxiliary_property = _schema_registry_auxiliary_property_option(name)
+            assert auxiliary_property is not None
+            registry_arguments = (
+                f" {auxiliary_property} " f"{shlex.quote(f'schema.registry.url={registry.url}')}"
+            )
     capability_guard = ""
     if capability_error is not None:
         capability_guard = f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
+    java_environment = "unset JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS"
+    if not preserve_kafka_opts:
+        java_environment = f"unset KAFKA_OPTS\n{java_environment}"
+    if not preserve_schema_registry_opts:
+        java_environment = f"unset SCHEMA_REGISTRY_OPTS\n{java_environment}"
+    auxiliary_arguments = (
+        f" {auxiliary_config} {shlex.quote(str(java_config_path))}"
+        if auxiliary_config is not None
+        else ""
+    )
     return f"""#!/bin/sh
-unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
-{registry_guard}{capability_guard}{property_guard}for argument in "$@"; do
-  case "$argument" in
-    {rejected_patterns})
-      printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-done
-exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers)} {config_option} {shlex.quote(str(java_config_path))}{registry_arguments} "$@"
+{java_environment}
+{registry_guard}{capability_guard}{_adapter_guard_command(name)}
+exec {shlex.quote(executable)} {bootstrap_option} {shlex.quote(bootstrap_servers)} {config_option} {shlex.quote(str(java_config_path))}{auxiliary_arguments}{registry_arguments} "$@"
 """
+
+
+def _adapter_guard_command(name: str) -> str:
+    return _adapter_guard_invocation(name) + " || exit $?"
+
+
+def _adapter_guard_invocation(name: str) -> str:
+    return (
+        f"{shlex.quote(sys.executable)} -I -m kantrip._adapter_guard " f'{shlex.quote(name)} "$@"'
+    )
 
 
 def _render_registry_shim_guard(
     name: str, registry: RegistryConnection | None, *, confluent_only: bool = False
 ) -> str:
     try:
-        if confluent_only:
+        connection = (
             _require_confluent_registry(name, registry)
-        else:
-            _require_registry(name, registry)
+            if confluent_only
+            else _require_registry(name, registry)
+        )
+        _require_registry_authentication(name, connection)
     except AdapterError as error:
         return f"printf '%s\\n' {shlex.quote(str(error))} >&2\nexit 2\n"
     return ""
@@ -570,23 +866,28 @@ def _render_kaskade_shim(
     config_path: Path,
     registry_config_path: Path,
     registry: RegistryConnection | None,
+    *,
+    capability_error: str | None = None,
+    oauth_ssl_cert_file: Path | None = None,
 ) -> str:
     registry_guard = _render_registry_shim_guard("kaskade", registry)
+    if capability_error is not None:
+        registry_guard += f"printf '%s\\n' {shlex.quote(capability_error)} >&2\n" "exit 2\n"
+    oauth_tls_environment = ""
+    if registry is not None and registry.auth_type == "oauth":
+        oauth_tls_environment = "unset SSL_CERT_FILE SSL_CERT_DIR\n"
+    if oauth_tls_environment and oauth_ssl_cert_file is not None:
+        oauth_tls_environment += f"export SSL_CERT_FILE={shlex.quote(str(oauth_ssl_cert_file))}\n"
     return f"""#!/bin/sh
 unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
 case "${{1-}}" in
   admin|consumer)
     command="$1"
     shift
+    {_adapter_guard_command('kaskade')}
     registry_deserializer=
     previous_argument=
     for argument in "$@"; do
-      case "$argument" in
-        -b|-b*|--bootstrap-servers|--bootstrap-servers=*|--config-file|--config-file=*|--kafka|--kafka=*|--registry|--registry=*)
-          printf '%s\\n' 'kaskade connection options cannot override the selected Kantrip profile' >&2
-          exit 2
-          ;;
-      esac
       case "$previous_argument:$argument" in
         -k:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--key:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|-v:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--value:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy])
           registry_deserializer=1
@@ -601,7 +902,7 @@ case "${{1-}}" in
     done
     selected_config={shlex.quote(str(config_path))}
     if [ "$command" = consumer ] && [ -n "$registry_deserializer" ]; then
-      {registry_guard}      selected_config={shlex.quote(str(registry_config_path))}
+      {registry_guard}      {oauth_tls_environment}      selected_config={shlex.quote(str(registry_config_path))}
     fi
     exec {shlex.quote(executable)} "$command" --config-file "$selected_config" "$@"
     ;;
@@ -622,40 +923,8 @@ def _render_kcat_shim(
     registry_url = shlex.quote(registry.url if registry is not None else "")
     return f"""#!/bin/sh
 export KCAT_CONFIG={shlex.quote(str(config_path))}
-schema_deserializer=
-previous_argument=
-for argument in "$@"; do
-  case "$argument" in
-    -F|-F*|-r|-r*)
-      printf '%s\\n' '{name} connection options cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  case "$previous_argument:$argument" in
-    -X:schema.registry.url=*)
-      printf '%s\\n' '{name} Schema Registry URL cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  case "$argument" in
-    -Xschema.registry.url=*)
-      printf '%s\\n' '{name} Schema Registry URL cannot override the selected Kantrip profile' >&2
-      exit 2
-      ;;
-  esac
-  case "$previous_argument:$argument" in
-    -s:avro|-s:key=avro|-s:value=avro)
-      schema_deserializer=1
-      ;;
-  esac
-  case "$argument" in
-    -savro|-skey=avro|-svalue=avro)
-      schema_deserializer=1
-      ;;
-  esac
-  previous_argument="$argument"
-done
-if [ -n "$schema_deserializer" ]; then
+schema_deserializer="$({_adapter_guard_invocation(name)})" || exit $?
+if [ "$schema_deserializer" = schema-registry ]; then
   {registry_guard}  exec {shlex.quote(executable)} -r {registry_url} "$@"
 fi
 exec {shlex.quote(executable)} "$@"
@@ -688,4 +957,5 @@ __all__ = [
     "create_subshell_shims",
     "prepare_command",
     "require_adapter_capability",
+    "require_java_oauth_support",
 ]

@@ -25,9 +25,9 @@ from kantrip.kafka import (
     validate_client_identity,
 )
 from kantrip.secret_store import SecretNotFoundError, secret_reference
-from tests.pki import synthetic_pki, temporary_pki_files
+from tests.unit.pki import synthetic_pki, temporary_pki_files
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestKafkaConnection(unittest.TestCase):
@@ -118,6 +118,50 @@ class TestKafkaConnection(unittest.TestCase):
                 self.assertEqual(mechanism, librdkafka["sasl.mechanism"])
                 self.assertEqual("synthetic-user", librdkafka["sasl.username"])
                 self.assertEqual('synthetic\\password"', librdkafka["sasl.password"])
+
+    def test_resolves_and_renders_native_oauth_with_independent_trust(self) -> None:
+        profile = _authenticated_profile("oauth")
+        reference = profile["kafka"]["auth"]["clientSecretRef"]
+        connection = resolve_kafka_connection(
+            kafka_connection(profile),
+            _MemorySecretStore({reference: "synthetic-oauth-secret"}),
+        )
+        oauth_ca_path = Path("/private/session/kafka-oauth-ca.pem")
+
+        java = java_properties(connection, oauth_ca_location=oauth_ca_path)
+        librdkafka = librdkafka_properties(connection, oauth_ca_location=oauth_ca_path)
+
+        assert connection.oauth is not None
+        self.assertEqual(("openid", "profile"), connection.oauth.scopes)
+        self.assertEqual("SASL_SSL", java["security.protocol"])
+        self.assertEqual("OAUTHBEARER", java["sasl.mechanism"])
+        self.assertEqual(
+            "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler",
+            java["sasl.login.callback.handler.class"],
+        )
+        self.assertEqual(
+            "synthetic-oauth-secret",
+            java["sasl.oauthbearer.client.credentials.client.secret"],
+        )
+        self.assertIn(str(oauth_ca_path), java["sasl.jaas.config"])
+        self.assertEqual("oidc", librdkafka["sasl.oauthbearer.method"])
+        self.assertEqual("openid profile", librdkafka["sasl.oauthbearer.scope"])
+        self.assertEqual(str(oauth_ca_path), librdkafka["https.ca.location"])
+        self.assertNotIn("ssl.ca.location", librdkafka)
+
+    def test_oauth_rejects_unsafe_endpoint_and_foreign_secret_reference(self) -> None:
+        profile = _authenticated_profile("oauth")
+        profile["kafka"]["auth"]["tokenUrl"] = "https://idp.invalid/token?secret=value"
+        with self.assertRaisesRegex(KafkaProfileError, "query"):
+            kafka_connection(profile)
+
+        profile = _authenticated_profile("oauth")
+        profile["kafka"]["auth"]["clientSecretRef"] = secret_reference(
+            "018f8f13-7c21-7cee-8000-000000000099",
+            "kafka/oauth/client-secret",
+        )
+        with self.assertRaisesRegex(KafkaProfileError, "does not match"):
+            kafka_connection(profile)
 
     def test_password_authentication_rejects_plaintext_and_foreign_references(self) -> None:
         profile = _authenticated_profile("plain")
@@ -220,6 +264,15 @@ def _authenticated_profile(auth_type: str) -> dict:
             "type": "mtls",
             "clientCertificate": synthetic_pki().client_certificate,
             "privateKeyRef": secret_reference(profile_id, "kafka/tls/private-key"),
+        }
+    elif auth_type == "oauth":
+        auth = {
+            "type": "oauth",
+            "tokenUrl": "https://idp.invalid/oauth/token",
+            "clientId": "synthetic-client",
+            "scopes": ["openid", "profile"],
+            "clientSecretRef": secret_reference(profile_id, "kafka/oauth/client-secret"),
+            "caCertificates": synthetic_pki().ca,
         }
     else:
         auth = {

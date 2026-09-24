@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
+import ssl
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import quote_plus, urlencode
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import AdminClient
 
+from kantrip._files import write_exclusive_text
 from kantrip.kafka import (
     KafkaConnection,
     KafkaProfileError,
@@ -26,7 +32,9 @@ from kantrip.registry import (
     RegistryConnection,
     RegistryProfileError,
     RegistryProvider,
-    plain_registry_connection,
+    _UnresolvedRegistry,
+    registry_connection,
+    resolve_registry_connection,
 )
 from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
 
@@ -35,6 +43,7 @@ _QUIET_KAFKA_LOGGER.addHandler(logging.NullHandler())
 _QUIET_KAFKA_LOGGER.propagate = False
 _QUIET_KAFKA_LOGGER.disabled = True
 _STATISTICS_INTERVAL_MS = 100
+_MAX_REGISTRY_RESPONSE_BYTES = 1024 * 1024
 KafkaProof = Literal["reachability", "server-tls", "sasl", "mtls"]
 
 
@@ -76,15 +85,29 @@ def ping_profile(
     *,
     timeout: float = 5.0,
     kafka: KafkaConnection | None = None,
+    resolved_registry: RegistryConnection | None | _UnresolvedRegistry = _UnresolvedRegistry.VALUE,
     secret_store: SecretStore | None = None,
 ) -> PingResult:
     """Verify one real broker connection and the current Registry endpoint."""
     deadline = time.monotonic() + timeout
     try:
-        registry = plain_registry_connection(profile)
+        registry = (
+            registry_connection(profile)
+            if isinstance(resolved_registry, _UnresolvedRegistry)
+            else resolved_registry
+        )
         connection = kafka or kafka_connection(profile)
+        selected_store = secret_store
         if connection.requires_secrets and kafka is None:
-            connection = resolve_kafka_connection(connection, secret_store or load_secret_store())
+            selected_store = selected_store or load_secret_store()
+            connection = resolve_kafka_connection(connection, selected_store)
+        if (
+            isinstance(resolved_registry, _UnresolvedRegistry)
+            and registry is not None
+            and registry.requires_secrets
+        ):
+            selected_store = selected_store or load_secret_store()
+            registry = resolve_registry_connection(registry, selected_store)
     except (KafkaProfileError, RegistryProfileError, SecretStoreError) as error:
         raise PingError(str(error)) from error
 
@@ -161,7 +184,7 @@ def _classify_probe_failure(detail: str | None) -> str:
 
 
 def _kafka_observation(connection: KafkaConnection) -> tuple[str, str, KafkaProof]:
-    if connection.auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
+    if connection.auth_type in {"plain", "scram-sha-256", "scram-sha-512", "oauth"}:
         return ("verified TLS", f"{connection.auth_type} authenticated", "sasl")
     if connection.auth_type == "mtls":
         return ("verified TLS", "mTLS client exchange completed", "mtls")
@@ -177,6 +200,12 @@ def _registry_connectivity(
     registry_name = (
         "Apicurio Registry" if connection.provider == "apicurio" else "Confluent Schema Registry"
     )
+    if connection.auth_type not in {"none", "basic", "token", "mtls", "oauth"}:
+        raise PingError(f"the {registry_name} authentication mode is unsupported")
+    headers = _registry_auth_headers(connection)
+    if connection.auth_type == "oauth":
+        headers = {"Authorization": f"Bearer {_oauth_access_token(connection, deadline)}"}
+    context = _registry_ssl_context(connection)
     try:
         timeout = _remaining(deadline)
     except TimeoutError as error:
@@ -185,57 +214,294 @@ def _registry_connectivity(
             detail=error,
         ) from error
     if connection.provider == "apicurio":
-        _apicurio_system_info(connection.url, timeout)
+        probe_url = f"{connection.url.rstrip('/')}/search/versions?limit=1"
+        accept = "application/json"
+        _apicurio_search_versions(
+            probe_url,
+            timeout,
+            headers=headers,
+            context=context,
+        )
     else:
-        _confluent_schema_types(connection.url, timeout)
+        probe_url = f"{connection.url.rstrip('/')}/subjects?limit=1"
+        accept = "application/vnd.schemaregistry.v1+json"
+        _confluent_subjects(
+            probe_url,
+            timeout,
+            headers=headers,
+            context=context,
+        )
+    if connection.auth_type != "none":
+        _require_anonymous_rejection(
+            probe_url,
+            deadline,
+            context=_registry_ssl_context(connection, include_client=False),
+            accept=accept,
+            accept_mtls_rejection=connection.auth_type == "mtls",
+        )
+    if connection.auth_type == "none":
+        proof = "read query validated"
+    elif connection.auth_type == "mtls":
+        proof = "mTLS read query and anonymous rejection validated"
+    else:
+        proof = f"{connection.auth_type} authenticated read query validated"
     return RegistryPingResult(
         connection.provider,
-        "plaintext reachable",
-        "provider metadata validated",
+        "verified TLS" if connection.url.startswith("https://") else "plaintext reachable",
+        proof,
     )
 
 
-def _confluent_schema_types(url: str, timeout: float) -> tuple[str, ...]:
+def _confluent_subjects(
+    probe_url: str,
+    timeout: float,
+    *,
+    headers: Mapping[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
+) -> tuple[str, ...]:
     body = _registry_json(
-        f"{url.rstrip('/')}/schemas/types",
+        probe_url,
         timeout,
         "Confluent Schema Registry",
         "application/vnd.schemaregistry.v1+json",
+        headers=headers,
+        context=context,
     )
-    if (
-        not isinstance(body, list)
-        or not body
-        or not all(isinstance(schema_type, str) and schema_type for schema_type in body)
+    if not isinstance(body, list) or not all(
+        isinstance(subject, str) and subject for subject in body
     ):
-        raise PingError("the Confluent Schema Registry returned invalid schema-type metadata")
+        raise PingError("the Confluent Schema Registry returned invalid subject-search metadata")
     return tuple(body)
 
 
-def _apicurio_system_info(url: str, timeout: float) -> str:
+def _apicurio_search_versions(
+    probe_url: str,
+    timeout: float,
+    *,
+    headers: Mapping[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
+) -> tuple[Mapping[str, object], ...]:
     body = _registry_json(
-        f"{url.rstrip('/')}/system/info",
+        probe_url,
         timeout,
         "Apicurio Registry",
         "application/json",
+        headers=headers,
+        context=context,
     )
     if not isinstance(body, dict):
-        raise PingError("the Apicurio Registry returned invalid system metadata")
-    version = body.get("version")
-    if not isinstance(version, str) or not version:
-        raise PingError("the Apicurio Registry returned invalid system metadata")
-    return version
+        raise PingError("the Apicurio Registry returned invalid version-search metadata")
+    count = body.get("count")
+    versions = body.get("versions")
+    if (
+        not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        or not isinstance(versions, list)
+        or not all(isinstance(version, dict) for version in versions)
+    ):
+        raise PingError("the Apicurio Registry returned invalid version-search metadata")
+    return tuple(versions)
 
 
-def _registry_json(url: str, timeout: float, name: str, accept: str) -> object:
-    request = Request(url, headers={"Accept": accept})
+def _oauth_access_token(connection: RegistryConnection, deadline: float) -> str:
+    oauth = connection.oauth
+    if oauth is None or oauth.client_secret is None:
+        raise PingError("Registry OAuth credentials are unresolved")
+    encoded_client_id = quote_plus(oauth.client_id, safe="")
+    encoded_client_secret = quote_plus(oauth.client_secret, safe="")
+    credential = base64.b64encode(f"{encoded_client_id}:{encoded_client_secret}".encode()).decode(
+        "ascii"
+    )
+    form = {"grant_type": "client_credentials"}
+    if oauth.scopes:
+        form["scope"] = " ".join(oauth.scopes)
+    request = Request(
+        oauth.token_url,
+        data=urlencode(form).encode("ascii"),
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Basic {credential}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    context = ssl.create_default_context()
+    if oauth.ca_certificates is not None:
+        context.load_verify_locations(cadata=oauth.ca_certificates)
     try:
-        with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read())
-    except (HTTPError, URLError, OSError, TimeoutError, json.JSONDecodeError) as error:
+        with _open_request(request, _remaining(deadline), context=context) as response:
+            _require_json_content_type(response, "Registry OAuth token endpoint")
+            payload = response.read(_MAX_REGISTRY_RESPONSE_BYTES + 1)
+            if len(payload) > _MAX_REGISTRY_RESPONSE_BYTES:
+                raise ValueError("OAuth response exceeded the 1 MiB limit")
+            body = json.loads(payload)
+    except PingError:
+        raise
+    except (HTTPError, URLError, OSError, TimeoutError, ValueError, json.JSONDecodeError) as error:
+        raise PingError(
+            "Registry OAuth token request failed", detail=_exception_message(error)
+        ) from error
+    if not isinstance(body, dict):
+        raise PingError("Registry OAuth token response is invalid")
+    token, token_type, expires_in = (
+        body.get("access_token"),
+        body.get("token_type"),
+        body.get("expires_in"),
+    )
+    if (
+        not isinstance(token, str)
+        or not token
+        or any(character in token for character in ("\x00", "\r", "\n"))
+        or not isinstance(token_type, str)
+        or token_type.lower() != "bearer"
+        or not isinstance(expires_in, (int, float))
+        or isinstance(expires_in, bool)
+        or expires_in <= 0
+    ):
+        raise PingError("Registry OAuth token response is invalid")
+    return token
+
+
+def _registry_json(
+    url: str,
+    timeout: float,
+    name: str,
+    accept: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    context: ssl.SSLContext | None = None,
+) -> object:
+    request = Request(url, headers={"Accept": accept, **dict(headers or {})})
+    try:
+        with _open_request(request, timeout, context=context) as response:
+            _require_json_content_type(response, name)
+            payload = response.read(_MAX_REGISTRY_RESPONSE_BYTES + 1)
+            if len(payload) > _MAX_REGISTRY_RESPONSE_BYTES:
+                raise ValueError("Registry response exceeded the 1 MiB limit")
+            return json.loads(payload)
+    except PingError:
+        raise
+    except HTTPError as error:
+        if error.code == 401:
+            raise PingError(f"the {name} rejected Registry authentication", detail=error) from error
+        if error.code == 403:
+            raise PingError(
+                f"the {name} denied Registry authorization or returned an ambiguous 403",
+                detail=error,
+            ) from error
         raise PingError(
             f"the {name} did not return registry metadata",
             detail=_exception_message(error),
         ) from error
+    except (URLError, OSError, TimeoutError, json.JSONDecodeError) as error:
+        raise PingError(
+            f"the {name} did not return registry metadata",
+            detail=_exception_message(error),
+        ) from error
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+
+def _open_request(
+    request: Request,
+    timeout: float,
+    *,
+    context: ssl.SSLContext | None,
+) -> Any:
+    opener = build_opener(ProxyHandler({}), HTTPSHandler(context=context), _NoRedirect())
+    return opener.open(request, timeout=timeout)
+
+
+def _registry_ssl_context(
+    connection: RegistryConnection, *, include_client: bool = True
+) -> ssl.SSLContext | None:
+    if not connection.url.startswith("https://"):
+        return None
+    context = ssl.create_default_context()
+    if connection.ca_certificates is not None:
+        context.load_verify_locations(cadata=connection.ca_certificates)
+    if include_client and connection.auth_type == "mtls":
+        if connection.client_certificate is None or connection.private_key is None:
+            raise PingError("Registry mTLS credentials are unresolved")
+        try:
+            with tempfile.TemporaryDirectory(prefix="kantrip-registry-ping-") as directory:
+                certificate_path = Path(directory) / "client.crt"
+                key_path = Path(directory) / "client.key"
+                write_exclusive_text(certificate_path, connection.client_certificate, mode=0o600)
+                write_exclusive_text(key_path, connection.private_key, mode=0o600)
+                context.load_cert_chain(
+                    certificate_path,
+                    key_path,
+                    password=connection.private_key_password,
+                )
+        except (OSError, ssl.SSLError) as error:
+            raise PingError(
+                "Registry mTLS client identity could not be loaded", detail=error
+            ) from error
+    return context
+
+
+def _require_json_content_type(response: object, name: str) -> None:
+    headers = getattr(response, "headers", None)
+    get_content_type = getattr(headers, "get_content_type", None)
+    if not callable(get_content_type):
+        return
+    content_type = get_content_type()
+    if isinstance(content_type, str) and not (
+        content_type == "application/json" or content_type.endswith("+json")
+    ):
+        raise PingError(f"the {name} returned a non-JSON response")
+
+
+def _registry_auth_headers(connection: RegistryConnection) -> dict[str, str]:
+    if connection.auth_type == "basic":
+        if connection.username is None or connection.password is None:
+            raise PingError("Registry basic credentials are unresolved")
+        credential = base64.b64encode(
+            f"{connection.username}:{connection.password}".encode()
+        ).decode("ascii")
+        return {"Authorization": f"Basic {credential}"}
+    if connection.auth_type == "token":
+        if connection.token is None:
+            raise PingError("Registry bearer token is unresolved")
+        return {"Authorization": f"Bearer {connection.token}"}
+    return {}
+
+
+def _require_anonymous_rejection(
+    url: str,
+    deadline: float,
+    *,
+    context: ssl.SSLContext | None,
+    accept: str,
+    accept_mtls_rejection: bool = False,
+) -> None:
+    request = Request(url, headers={"Accept": accept})
+    try:
+        with _open_request(request, _remaining(deadline), context=context) as response:
+            response.read(1)
+    except HTTPError as error:
+        if error.code in {401, 403}:
+            return
+        raise PingError(
+            "Registry authentication proof was inconclusive",
+            detail=f"anonymous control returned HTTP {error.code}",
+        ) from error
+    except URLError as error:
+        if accept_mtls_rejection and isinstance(error.reason, ssl.SSLError):
+            return
+        raise PingError("Registry authentication proof was inconclusive", detail=error) from error
+    except ssl.SSLError as error:
+        if accept_mtls_rejection:
+            return
+        raise PingError("Registry authentication proof was inconclusive", detail=error) from error
+    except (OSError, TimeoutError) as error:
+        raise PingError("Registry authentication proof was inconclusive", detail=error) from error
+    raise PingError("Registry endpoint is public; configured authentication was not proven")
 
 
 def _remaining(deadline: float) -> float:
@@ -275,6 +541,7 @@ def _client_configuration(
         connection,
         inline_ca=True,
         inline_client=True,
+        inline_oauth_ca=True,
     )
     properties.update(
         {

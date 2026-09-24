@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import shutil
@@ -31,6 +32,7 @@ from kantrip.adapters import (
 from kantrip.console import create_console, create_status_text, show_progress
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
+from tests.e2e.terminal import TerminalProcess, TerminalProcessError
 
 DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
 DEFAULT_REGISTRY_URL = "http://localhost:8081"
@@ -135,18 +137,7 @@ def smoke(
     shells: Sequence[str] = (),
 ) -> None:
     """Run the adapter smoke checks with an isolated Kantrip configuration."""
-    consumer_group = f"{topic}-consumer"
-    installed = {
-        adapter: _installed_commands(executables, environment)
-        for adapter, executables in KAFKA_COMMANDS.items()
-    }
-    for adapter, executables in installed.items():
-        if adapter == "Schema Registry console" and registry_provider == "apicurio":
-            continue
-        _require_command(f"Kafka {adapter} CLI", bool(executables))
-    kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
-    _require_command("kcat", "kcat" in kcat_executables)
-    _require_command("kaskade", shutil.which("kaskade", path=environment.get("PATH")) is not None)
+    installed, kcat_executables = _discover_clients(registry_provider, environment)
     resolved_shells = _resolve_shells(shells, environment)
 
     with tempfile.TemporaryDirectory(prefix="kantrip-smoke-") as directory:
@@ -188,115 +179,16 @@ def smoke(
                 smoke_environment,
             )
             created = True
-            if registry_provider == "confluent":
-                _show_section(console, "Confluent registry clients")
-                for executable in installed["Schema Registry console"]:
-                    _check(
-                        console,
-                        f"{executable}: load registry settings",
-                        _kantrip(profile, *_schema_registry_probe(executable)),
-                        smoke_environment,
-                    )
-            _show_section(console, "Kafka CLI")
-            for executable in installed["topics"]:
-                output = _check(
-                    console,
-                    f"{executable}: list topics",
-                    _kantrip(profile, executable, "--list"),
-                    smoke_environment,
-                )
-                _require_topic(topic, output, executable)
-            _check(
+            _exercise_clients(
                 console,
-                f"{installed['producer'][0]}: write smoke record",
-                _kantrip(profile, installed["producer"][0], "--topic", topic),
-                smoke_environment,
-                input_text="kantrip smoke record\n",
+                profile=profile,
+                topic=topic,
+                registry_provider=registry_provider,
+                installed=installed,
+                kcat_executables=kcat_executables,
+                shells=resolved_shells,
+                environment=smoke_environment,
             )
-            output = _check(
-                console,
-                f"{installed['consumer'][0]}: read smoke record",
-                _kantrip(
-                    profile,
-                    installed["consumer"][0],
-                    "--topic",
-                    topic,
-                    "--group",
-                    consumer_group,
-                    "--from-beginning",
-                    "--max-messages",
-                    "1",
-                ),
-                smoke_environment,
-            )
-            _require_topic("kantrip smoke record", output, installed["consumer"][0])
-            _check(
-                console,
-                f"{installed['groups'][0]}: list consumer groups",
-                _kantrip(profile, installed["groups"][0], "--list"),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"{installed['configs'][0]}: describe smoke topic",
-                _kantrip(
-                    profile,
-                    installed["configs"][0],
-                    "--describe",
-                    "--entity-type",
-                    "topics",
-                    "--entity-name",
-                    topic,
-                ),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"{installed['acls'][0]}: load profile settings",
-                _kantrip(profile, installed["acls"][0], "--version"),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"{installed['broker API versions'][0]}: inspect broker APIs",
-                _kantrip(profile, installed["broker API versions"][0]),
-                smoke_environment,
-            )
-            _show_section(console, "Additional clients")
-            output = _check(
-                console,
-                "kcat: inspect cluster metadata",
-                _kantrip(profile, "kcat", "-L"),
-                smoke_environment,
-            )
-            _require_topic(topic, output, "kcat")
-            _check(
-                console,
-                "kaskade: load Kafka settings",
-                _kantrip(profile, "kaskade", "admin", "--help"),
-                smoke_environment,
-            )
-            _check(
-                console,
-                f"kaskade: load {_registry_name(registry_provider)} settings",
-                _kantrip(profile, "kaskade", "consumer", "-v", "registry", "--help"),
-                smoke_environment,
-            )
-            if resolved_shells:
-                _show_section(console, "Interactive shells")
-            for shell_name, shell in resolved_shells:
-                _check_shell(
-                    console,
-                    shell_name=shell_name,
-                    shell=shell,
-                    profile=profile,
-                    topic=topic,
-                    consumer_group=consumer_group,
-                    installed=installed,
-                    kcat_executables=kcat_executables,
-                    registry_provider=registry_provider,
-                    environment=smoke_environment,
-                )
         finally:
             if created and not keep_topic:
                 _show_section(console, "Cleanup")
@@ -309,6 +201,243 @@ def smoke(
                 "success",
                 f"Sandbox smoke checks passed (topic {topic_outcome}: {topic})",
             )
+        )
+
+
+def _discover_clients(
+    registry_provider: str,
+    environment: Mapping[str, str],
+) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
+    installed = {
+        adapter: _installed_commands(executables, environment)
+        for adapter, executables in KAFKA_COMMANDS.items()
+    }
+    for adapter, executables in installed.items():
+        if adapter == "Schema Registry console" and registry_provider == "apicurio":
+            continue
+        _require_command(f"Kafka {adapter} CLI", bool(executables))
+    kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
+    _require_command("kcat", "kcat" in kcat_executables)
+    _require_command(
+        "kaskade",
+        shutil.which("kaskade", path=environment.get("PATH")) is not None,
+    )
+    return installed, kcat_executables
+
+
+def _exercise_clients(
+    console: Console,
+    *,
+    profile: str,
+    topic: str,
+    registry_provider: str,
+    installed: Mapping[str, Sequence[str]],
+    kcat_executables: Sequence[str],
+    shells: Sequence[tuple[str, str]],
+    environment: Mapping[str, str],
+) -> None:
+    creator = installed["topics"][0]
+    if registry_provider == "confluent":
+        _show_section(console, "Confluent registry clients")
+        _check_schema_registry_clients(console, profile, topic, creator, environment)
+    _show_section(console, "Kafka CLI")
+    _check_java_operations(console, profile, topic, installed, environment)
+    _show_section(console, "Additional clients")
+    _check_kcat_operations(console, profile, topic, kcat_executables, environment)
+    _check_kaskade_operations(console, profile, topic, environment)
+    _check_shells(
+        console,
+        profile=profile,
+        topic=topic,
+        installed=installed,
+        kcat_executables=kcat_executables,
+        shells=shells,
+        environment=environment,
+    )
+
+
+def _check_java_operations(
+    console: Console,
+    profile: str,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    environment: Mapping[str, str],
+) -> None:
+    for executable in installed["topics"]:
+        output = _check(
+            console,
+            f"{executable}: list topics",
+            _kantrip(profile, executable, "--list"),
+            environment,
+        )
+        _require_topic(topic, output, executable)
+    markers = _produce_java_records(console, profile, topic, installed, environment)
+    _consume_java_records(console, profile, topic, installed, markers, environment)
+    for executable in installed["groups"]:
+        _check(
+            console,
+            f"{executable}: list consumer groups",
+            _kantrip(profile, executable, "--list"),
+            environment,
+        )
+    _check_java_metadata(console, profile, topic, installed, environment)
+
+
+def _produce_java_records(
+    console: Console,
+    profile: str,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    environment: Mapping[str, str],
+) -> tuple[str, ...]:
+    markers: list[str] = []
+    for index, executable in enumerate(installed["producer"]):
+        marker = f"kantrip smoke record {index} from {executable}"
+        markers.append(marker)
+        _check(
+            console,
+            f"{executable}: write smoke record",
+            _kantrip(profile, executable, "--topic", topic),
+            environment,
+            input_text=f"{marker}\n",
+        )
+    return tuple(markers)
+
+
+def _consume_java_records(
+    console: Console,
+    profile: str,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    markers: Sequence[str],
+    environment: Mapping[str, str],
+) -> None:
+    for index, executable in enumerate(installed["consumer"]):
+        output = _check(
+            console,
+            f"{executable}: read smoke records",
+            _kantrip(
+                profile,
+                executable,
+                "--topic",
+                topic,
+                "--group",
+                f"{topic}-consumer-{index}",
+                "--from-beginning",
+                "--max-messages",
+                str(len(markers)),
+            ),
+            environment,
+        )
+        for marker in markers:
+            _require_topic(marker, output, executable)
+
+
+def _check_java_metadata(
+    console: Console,
+    profile: str,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    environment: Mapping[str, str],
+) -> None:
+    for executable in installed["configs"]:
+        _check(
+            console,
+            f"{executable}: describe smoke topic",
+            _kantrip(
+                profile,
+                executable,
+                "--describe",
+                "--entity-type",
+                "topics",
+                "--entity-name",
+                topic,
+            ),
+            environment,
+        )
+    for executable in installed["acls"]:
+        _check(
+            console,
+            f"{executable}: list ACLs",
+            _kantrip(profile, executable, "--list"),
+            environment,
+        )
+    for executable in installed["broker API versions"]:
+        _check(
+            console,
+            f"{executable}: inspect broker APIs",
+            _kantrip(profile, executable),
+            environment,
+        )
+
+
+def _check_kcat_operations(
+    console: Console,
+    profile: str,
+    topic: str,
+    executables: Sequence[str],
+    environment: Mapping[str, str],
+) -> None:
+    for executable in executables:
+        output = _check(
+            console,
+            f"{executable}: inspect cluster metadata",
+            _kantrip(profile, executable, "-X", "broker.address.family=v4", "-L"),
+            environment,
+        )
+        _require_topic(topic, output, executable)
+        marker = f"kantrip smoke record from {executable}"
+        _check(
+            console,
+            f"{executable}: produce record",
+            _kantrip(profile, executable, "-X", "broker.address.family=v4", "-P", "-t", topic),
+            environment,
+            input_text=f"{marker}\n",
+        )
+        output = _check(
+            console,
+            f"{executable}: consume record",
+            _kantrip(
+                profile,
+                executable,
+                "-X",
+                "broker.address.family=v4",
+                "-C",
+                "-t",
+                topic,
+                "-o",
+                "-1",
+                "-c",
+                "1",
+            ),
+            environment,
+        )
+        _require_topic(marker, output, executable)
+
+
+def _check_shells(
+    console: Console,
+    *,
+    profile: str,
+    topic: str,
+    installed: Mapping[str, Sequence[str]],
+    kcat_executables: Sequence[str],
+    shells: Sequence[tuple[str, str]],
+    environment: Mapping[str, str],
+) -> None:
+    if shells:
+        _show_section(console, "Interactive shells")
+    for shell_name, shell in shells:
+        _check_shell(
+            console,
+            shell_name=shell_name,
+            shell=shell,
+            profile=profile,
+            topic=topic,
+            consumer_group=f"{topic}-consumer",
+            installed=installed,
+            kcat_executables=kcat_executables,
+            environment=environment,
         )
 
 
@@ -361,7 +490,6 @@ def _check_shell(
     consumer_group: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
-    registry_provider: str,
     environment: Mapping[str, str],
 ) -> None:
     label = f"{shell_name}: verify session adapter shims"
@@ -373,7 +501,6 @@ def _check_shell(
         consumer_group=consumer_group,
         installed=installed,
         kcat_executables=kcat_executables,
-        registry_provider=registry_provider,
     )
     markers = tuple(f"__KANTRIP_SMOKE_{index}__" for index in range(len(commands)))
     checked = [
@@ -385,7 +512,7 @@ def _check_shell(
         try:
             with show_progress(console, label):
                 status, output = run_terminal(
-                    (sys.executable, "-m", "kantrip.cli", "exec", profile),
+                    (*_kantrip_cli("exec", profile),),
                     (driver,),
                     environment=shell_environment,
                     timeout=120,
@@ -411,8 +538,7 @@ def _write_shell_driver(shell_name: str, commands: Sequence[str], directory: Pat
     quoted_path = quote_shell_argument(shell_name, str(script_path))
     if shell_name == "fish":
         return (
-            f"source {quoted_path} < /dev/null; "
-            "set -l kantrip_status $status; exit $kantrip_status"
+            f"source {quoted_path} < /dev/null; set -l kantrip_status $status; exit $kantrip_status"
         )
     return f". {quoted_path} < /dev/null; exit $?"
 
@@ -424,12 +550,11 @@ def _shell_commands(
     consumer_group: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
-    registry_provider: str,
 ) -> list[str]:
     quoted_topic = quote_shell_argument(shell_name, topic)
     quoted_group = quote_shell_argument(shell_name, consumer_group)
-    quoted_python = quote_shell_argument(shell_name, sys.executable)
-    commands = [f"{quoted_python} -m kantrip.cli current"]
+    quoted_kantrip = quote_shell_argument(shell_name, _kantrip_executable())
+    commands = [f"{quoted_kantrip} current"]
     commands.extend(f"{executable} --list" for executable in installed["topics"])
     commands.extend(
         f"printf 'kantrip smoke record\\n' | {executable} --topic {quoted_topic}"
@@ -445,22 +570,63 @@ def _shell_commands(
         f"{executable} --describe --entity-type topics --entity-name {quoted_topic}"
         for executable in installed["configs"]
     )
-    commands.extend(f"{executable} --version" for executable in installed["acls"])
+    commands.extend(f"{executable} --list" for executable in installed["acls"])
     commands.extend(executable for executable in installed["broker API versions"])
-    if registry_provider == "confluent":
-        commands.extend(
-            " ".join(_schema_registry_probe(executable))
-            for executable in installed["Schema Registry console"]
-        )
-    commands.extend(f"{executable} -L" for executable in kcat_executables)
     commands.extend(
-        (
-            "kaskade admin --help",
-            "kaskade consumer --help",
-            "kaskade consumer -v registry --help",
-        )
+        f"{executable} -X broker.address.family=v4 -L" for executable in kcat_executables
     )
     return commands
+
+
+def _check_kaskade_operations(
+    console: Console,
+    profile: str,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    cases = (
+        (
+            "kaskade admin: render broker metadata",
+            _kantrip(
+                profile,
+                "kaskade",
+                "admin",
+                "--refresh-interval",
+                "0",
+                "--kafka",
+                "broker.address.family=v4",
+            ),
+            (topic,),
+        ),
+        (
+            "kaskade consumer: render a consumed record",
+            _kantrip(
+                profile,
+                "kaskade",
+                "consumer",
+                "--topic",
+                topic,
+                "--earliest",
+                "--value",
+                "string",
+                "--kafka",
+                f"group.id={topic}-kaskade",
+                "--kafka",
+                "broker.address.family=v4",
+            ),
+            ("kantrip smoke record",),
+        ),
+    )
+    for label, command, expected in cases:
+        terminal = TerminalProcess(command, environment)
+        try:
+            with show_progress(console, label):
+                terminal.wait_for(expected, timeout=60)
+        except TerminalProcessError as error:
+            raise SmokeFailure(f"{label} failed: {error}") from error
+        finally:
+            terminal.close()
+        console.print(create_status_text(console, "success", label))
 
 
 def _add_profile(
@@ -483,7 +649,15 @@ def _add_profile(
 
 def _kantrip_cli(*arguments: str) -> list[str]:
     """Build a plain-output Kantrip command for capture by the sandbox runner."""
-    return [sys.executable, "-m", "kantrip.cli", "--no-color", *arguments]
+    return [_kantrip_executable(), "--no-color", *arguments]
+
+
+def _kantrip_executable() -> str:
+    configured = os.environ.get("KANTRIP_E2E_KANTRIP")
+    resolved = configured or shutil.which("kantrip")
+    if resolved is None:
+        raise SmokeFailure("required command 'kantrip' was not found on PATH")
+    return resolved
 
 
 def _kantrip(profile: str, executable: str, *arguments: str) -> list[str]:
@@ -496,9 +670,88 @@ def _kantrip(profile: str, executable: str, *arguments: str) -> list[str]:
     )
 
 
-def _schema_registry_probe(executable: str) -> tuple[str, str]:
-    """Return a side-effect-free Schema Registry adapter command that exits successfully."""
-    return executable, "--version"
+def _check_schema_registry_clients(
+    console: Console,
+    profile: str,
+    topic_prefix: str,
+    topic_executable: str,
+    environment: Mapping[str, str],
+) -> None:
+    cases = (
+        (
+            "avro",
+            '{"type":"record","name":"KantripE2EAvro","fields":[{"name":"value","type":"string"}]}',
+            "kantrip avro record",
+        ),
+        (
+            "json-schema",
+            ('{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}'),
+            "kantrip json schema record",
+        ),
+        (
+            "protobuf",
+            'syntax = "proto3"; message KantripE2EProtobuf { string value = 1; }',
+            "kantrip protobuf record",
+        ),
+    )
+    for format_name, schema, marker in cases:
+        topic = f"{topic_prefix}-{format_name}"
+        producer = f"kafka-{format_name}-console-producer"
+        consumer = f"kafka-{format_name}-console-consumer"
+        _check(
+            console,
+            f"{topic_executable}: create {format_name} topic",
+            _kantrip(
+                profile,
+                topic_executable,
+                "--create",
+                "--topic",
+                topic,
+                "--partitions",
+                "1",
+                "--replication-factor",
+                "1",
+            ),
+            environment,
+        )
+        try:
+            _check(
+                console,
+                f"{producer}: produce {format_name}",
+                _kantrip(
+                    profile,
+                    producer,
+                    "--topic",
+                    topic,
+                    "--reader-property",
+                    f"value.schema={schema}",
+                ),
+                environment,
+                input_text=json.dumps({"value": marker}) + "\n",
+            )
+            output = _check(
+                console,
+                f"{consumer}: consume {format_name}",
+                _kantrip(
+                    profile,
+                    consumer,
+                    "--topic",
+                    topic,
+                    "--group",
+                    f"{topic}-schema",
+                    "--from-beginning",
+                    "--max-messages",
+                    "1",
+                ),
+                environment,
+            )
+            if marker not in output:
+                raise SmokeFailure(
+                    f"{consumer} did not decode its {format_name} record: "
+                    f"{output.strip()[-500:]}"
+                )
+        finally:
+            _delete_topic(console, profile, topic_executable, topic, environment)
 
 
 def _check(

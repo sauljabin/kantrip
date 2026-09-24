@@ -46,8 +46,8 @@ outside the supported lifecycle.
 | `kafka-json-schema-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kcat` / `kafkacat` | kcat | kcat 1.7+ | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
-| `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. Explicit Kafka, config-file, and registry connection options are rejected. |
+| `kcat` / `kafkacat` | kcat | kcat 1.7+; librdkafka 2.6.1+ for SCRAM against Kafka 4, 2.11.0+ for OAuth with custom HTTPS CA | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
+| `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed; other Kafka, config-file, and registry connection overrides are rejected. |
 
 “Profile-aware” means Kantrip maps the selected profile into the command. The
 Confluent console clients and kcat require `--registry-provider confluent`. This includes
@@ -66,12 +66,16 @@ require [Apache Kafka 2.7+](https://kafka.apache.org/27/security/encryption-and-
 or Confluent Platform 6.1+, where native PEM trust stores became available;
 Kantrip checks the installed client version and fails before the Kafka operation
 when support cannot be verified. Kafka 2.6 and Confluent Platform 6.0 remain
-supported with default client trust. OAuth remains unsupported. Unsupported
+supported with default client trust. Native OAuth requires Apache Kafka 4.0+
+for Java commands and an OIDC-capable librdkafka client. Unsupported
 authentication is rejected before the requested operation.
 
-Every registry connection uses an `http://` URL. Kantrip rejects missing,
-encrypted, authenticated, provider-incompatible, and caller-supplied Registry
-settings before starting the affected client mode. Bash, Zsh, and Fish sessions
+Registry connections may use unauthenticated HTTP, or verified HTTPS with
+independent Basic, fixed-token, mTLS, or OAuth credentials. Each adapter admits
+only mappings exposed safely by that concrete client; unsupported combinations
+fail before launch. Kantrip rejects missing, provider-incompatible, and
+caller-supplied Registry settings before starting the affected client mode.
+Bash, Zsh, and Fish sessions
 apply the same checks through temporary adapters. The session removes reserved
 connection namespaces and known sandbox credentials before launch and restores
 its owned values after shell startup; see [environment precedence](USAGE.md#environment-precedence).
@@ -86,22 +90,32 @@ its owned values after shell startup; see [environment precedence](USAGE.md#envi
 | SCRAM-SHA-256 over TLS | Supported | Supported | SASL exchange |
 | SCRAM-SHA-512 over TLS | Supported | Supported | SASL exchange |
 | mTLS | Supported | Supported; Java PEM identity needs Kafka 2.7 / Confluent 6.1 or newer | Configured client exchange |
-| OAuth / OAUTHBEARER | Unsupported | Unsupported | Unsupported |
+| OAuth / OAUTHBEARER | Supported | Java requires Kafka 4.0+; librdkafka uses OIDC | TLS, token acquisition, and SASL exchange |
 | SASL without TLS / disabled TLS verification | Unsupported | Unsupported | Unsupported |
 
 ## Registry protocols and providers
 
 | Provider / mode | Current support |
 | --- | --- |
-| Confluent-compatible HTTP, no auth | Confluent consoles, kcat Avro, Kaskade, and ping |
-| Native Apicurio HTTP, no auth | Kaskade Registry deserializers and ping |
-| HTTPS, basic, fixed bearer, OAuth, or Registry mTLS | Unsupported; no authenticated Registry profile execution |
+| Confluent-compatible HTTP/HTTPS, no auth | Confluent consoles, kcat Avro, Kaskade, and ping |
+| Native Apicurio HTTP/HTTPS, no auth | Kaskade Registry deserializers and ping |
+| Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
+| Native Apicurio Basic or mTLS | Private Kaskade INI and provider-aware ping. Kaskade supports private CA trust and unencrypted PEM mTLS keys; encrypted PEM keys are rejected. |
+| Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. Kaskade 5.0.1+ is required when OAuth scopes are configured; profiles without scopes retain compatibility with earlier releases. Kaskade keeps Registry and token HTTP/TLS contexts separate so Registry client identity does not reach the IdP. |
+| Confluent fixed bearer | Profile and probe support; clients without a safe fixed-token mapping reject it |
 | Kafka credential inheritance / URL credentials | Rejected |
 
-Current Registry ping requests `/subjects` or `/search/artifacts`; these may
-require resource permissions. Kafka ping uses broker connection state and does
-not request topics, groups, schemas, or cluster descriptions. Neither is a
-general resource-authorization test. `doctor PROFILE` scopes profile checks and
+Registry ping uses `GET /subjects?limit=1` for Confluent-compatible APIs and
+`GET /search/versions?limit=1` for native Apicurio v3. Confluent authorization
+classifies subject listing as `GLOBAL_READ`, not `SCHEMA_READ`; standard
+Apicurio RBAC permits version search to `sr-readonly`, `sr-developer`, and
+`sr-admin`. Authenticated profiles also require the same query to reject an
+anonymous request with 401/403 (or reject a missing client certificate for
+mTLS). A valid empty result succeeds and does not prove access to a particular
+schema. Proxies must allow the selected endpoint; no fallback probes
+`/users/me`, `/system/info`, `/schemas/types`, or artifact search. Kafka ping
+uses broker connection state and does not request topics, groups, schemas, or
+cluster descriptions. Neither probe proves write authorization. `doctor PROFILE` scopes profile checks and
 `doctor PROFILE --sessions` attributes sessions by UUID and revision. `kcl` and `kafkactl` have no automatic
 adapter, even though an arbitrary executable can run as a supervised child.
 
@@ -110,8 +124,8 @@ adapter, even though an arbitrary executable can run as a supervised child.
 | Format | Current accepted input | Current generated output / role |
 | --- | --- | --- |
 | JSON / YAML observations | No profile import or round-trip export | `list` / `describe` safe observations |
-| Public PEM CA | `--ca-file`, Kafka TLS only | Validated public profile material; session-owned CA file |
-| Client PEM certificate / private key | `--client-certificate-file` and `--client-key-file` for mTLS | Public certificate in the profile; private key in the credential store and private session files |
+| Public PEM CA | Kafka, Registry, and OAuth CA file options | Validated public profile material; independent session-owned CA files |
+| Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the credential store and private session files |
 | Java Kafka `.properties` | No file import | Private Java client session configuration |
 | librdkafka / kcat properties | No file import yet | Private librdkafka configuration selected through `KCAT_CONFIG` and documented file variables |
 | Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |
@@ -130,7 +144,7 @@ put its `bin` directory on `PATH` before running `kantrip exec`.
 | --- | --- | --- |
 | The seven Apache `*.sh` commands in the compatibility table | Install an Apache Kafka binary archive from [Apache Kafka downloads](https://kafka.apache.org/downloads), then add its `bin` directory to `PATH`. Homebrew's `brew install kafka` is also suitable. | Install an Apache Kafka binary archive from [Apache Kafka downloads](https://kafka.apache.org/downloads), then add its `bin` directory to `PATH`. |
 | The seven equivalent unsuffixed Kafka commands and all six unsuffixed `kafka-{avro,json-schema,protobuf}-console-{producer,consumer}` commands | Download and extract a Confluent Platform or Confluent Community ZIP/TAR package, set `CONFLUENT_HOME`, and add `$CONFLUENT_HOME/bin` to `PATH`. | Use the same ZIP/TAR method, or install Confluent's `confluent-community`/`confluent-platform` packages and add their `bin` directory to `PATH`. See [Confluent Platform installation](https://docs.confluent.io/platform/current/installation/overview.html). |
-| `kcat`, `kafkacat` | `brew install kcat` | Debian/Ubuntu: `apt install kafkacat`; other distributions can use their package manager or follow the [kcat build instructions](https://github.com/edenhill/kcat#install). The installed legacy executable may be named `kafkacat`. |
+| `kcat`, `kafkacat` | `brew install kcat` | Debian/Ubuntu: `apt install kafkacat`; other distributions can use their package manager or follow the [kcat build instructions](https://github.com/edenhill/kcat#install). The installed legacy executable may be named `kafkacat`. Check the linked library with `kcat -V`: Ubuntu 24.04's `librdkafka` 2.3.0 is too old for SCRAM against Kafka 4. Use 2.6.1+ for that case and 2.11.0+ when OAuth token HTTPS uses a custom CA. |
 | `kaskade` | `brew install kaskade` or `pipx install kaskade` | `pipx install kaskade`; see the [Kaskade installation guide](https://github.com/sauljabin/kaskade#installation). |
 
 The Confluent archive contains both its unsuffixed Kafka scripts and the Schema

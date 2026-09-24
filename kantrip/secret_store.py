@@ -20,6 +20,8 @@ SECRET_FIELDS = frozenset(
         "registry/password",
         "registry/token",
         "registry/oauth/client-secret",
+        "registry/tls/private-key",
+        "registry/tls/private-key-password",
     }
 )
 _APPROVED_BACKENDS = {

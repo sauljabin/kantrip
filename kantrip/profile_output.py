@@ -118,7 +118,9 @@ def _registry_observation(profile: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
     provider = registry.get("provider")
     url_key = "apicurio.registry.url" if provider == "apicurio" else "schema.registry.url"
-    return {"provider": provider, "url": registry.get(url_key)}
+    auth = registry.get("auth")
+    auth_type = auth.get("type") if isinstance(auth, Mapping) else "none"
+    return {"provider": provider, "url": registry.get(url_key), "auth": auth_type}
 
 
 def _credential_states(
