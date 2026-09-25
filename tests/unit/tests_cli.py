@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from email.message import Message
 from pathlib import Path
+from typing import Any, ClassVar
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -348,35 +349,21 @@ class TestCli(unittest.TestCase):
         self.assertEqual(2, result.exit_code, result.output)
         self.assertIn("No such command 'show'", result.output)
 
-    def test_edit_requires_an_explicit_change(self) -> None:
+    def test_edit_requires_an_explicit_option(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             _add_test_profile(database_path)
             result = self.runner.invoke(
                 cli,
                 ["edit", "local"],
-                input="\n",
-                env={"KANTRIP_DATABASE": str(database_path)},
-            )
-
-        self.assertEqual(1, result.exit_code, result.output)
-        self.assertIn("no profile changes were requested", result.output)
-
-    def test_no_options_edit_opens_field_editor(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "profiles.db"
-            _add_test_profile(database_path)
-            result = self.runner.invoke(
-                cli,
-                ["edit", "local"],
-                input="description\nreplace\nEdited interactively\ndone\n",
                 env={"KANTRIP_DATABASE": str(database_path)},
             )
             profiles = load_profiles(database_path)
 
-        self.assertEqual(0, result.exit_code, result.output)
-        self.assertEqual("Edited interactively", profiles.profile("local")["description"])
-        self.assertEqual(2, profiles.revision("local"))
+        self.assertEqual(2, result.exit_code, result.output)
+        self.assertIn("Usage:", result.output)
+        self.assertIn("edit requires at least one option", result.output)
+        self.assertEqual(1, profiles.revision("local"))
 
     def test_add_and_rotate_password_auth_without_echoing_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1050,6 +1037,189 @@ class TestCli(unittest.TestCase):
                 self.assertEqual(status, result.exit_code, result.output)
                 self.assertEqual("", result.stdout)
                 self.assertEqual("", result.stderr)
+
+
+class TestEditRegistryAuthentication(unittest.TestCase):
+    """Every Registry authentication transition through the scripted CLI."""
+
+    URLS: ClassVar[dict[str, str]] = {
+        "confluent": "https://registry.invalid",
+        "apicurio": "https://registry.invalid/apis/registry/v3",
+    }
+    TYPES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "confluent": ("none", "basic", "token", "mtls", "oauth"),
+        "apicurio": ("none", "basic", "mtls", "oauth"),
+    }
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+
+    def test_every_registry_auth_transition(self) -> None:
+        pki = synthetic_pki()
+        with temporary_pki_files(certificate=pki.client_certificate, key=pki.client_key) as paths:
+            for provider, types in self.TYPES.items():
+                for source in types:
+                    for target in types:
+                        if source == target:
+                            continue
+                        with self.subTest(provider=provider, source=source, target=target):
+                            self._assert_transition(provider, source, target, paths)
+
+    def test_provider_change_keeps_supported_authentication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store, environment = self._environment(directory)
+            with patch("kantrip.profiles.load_secret_store", return_value=store):
+                self._invoke(["add", "p", *self._registry("confluent", "basic", {})], environment)
+                before = load_profiles(Path(environment["KANTRIP_DATABASE"])).profile("p")
+                result = self._invoke(
+                    [
+                        "edit",
+                        "p",
+                        "--registry-provider",
+                        "apicurio",
+                        "--registry-url",
+                        self.URLS["apicurio"],
+                    ],
+                    environment,
+                )
+                after = load_profiles(Path(environment["KANTRIP_DATABASE"])).profile("p")
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("apicurio", after["registry"]["provider"])
+        self.assertEqual(before["registry"]["auth"], after["registry"]["auth"])
+        self.assertEqual({before["registry"]["auth"]["passwordRef"]}, set(store.values))
+
+    def test_provider_change_rejects_unsupported_authentication_without_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store, environment = self._environment(directory)
+            with patch("kantrip.profiles.load_secret_store", return_value=store):
+                self._invoke(["add", "p", *self._registry("confluent", "token", {})], environment)
+                before_values = dict(store.values)
+                result = self._invoke(
+                    [
+                        "edit",
+                        "p",
+                        "--registry-provider",
+                        "apicurio",
+                        "--registry-url",
+                        self.URLS["apicurio"],
+                    ],
+                    environment,
+                )
+                profiles = load_profiles(Path(environment["KANTRIP_DATABASE"]))
+
+        self.assertEqual(1, result.exit_code, result.output)
+        self.assertIn("does not support the current 'token' authentication", result.output)
+        self.assertIn("--registry-auth", result.output)
+        self.assertEqual("confluent", profiles.profile("p")["registry"]["provider"])
+        self.assertEqual(1, profiles.revision("p"))
+        self.assertEqual(before_values, store.values)
+
+    def test_kafka_oauth_edit_accepts_no_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store, environment = self._environment(directory)
+            with patch("kantrip.profiles.load_secret_store", return_value=store):
+                self._invoke(
+                    [
+                        "add",
+                        "p",
+                        "--transport",
+                        "tls",
+                        "--auth",
+                        "plain",
+                        "--username",
+                        "user",
+                    ],
+                    environment,
+                )
+                result = self._invoke(
+                    [
+                        "edit",
+                        "p",
+                        "--auth",
+                        "oauth",
+                        "--oauth-token-url",
+                        "https://idp.invalid/token",
+                        "--oauth-client-id",
+                        "client",
+                    ],
+                    environment,
+                )
+                auth = load_profiles(Path(environment["KANTRIP_DATABASE"])).profile("p")["kafka"][
+                    "auth"
+                ]
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual("oauth", auth["type"])
+        self.assertEqual({auth["clientSecretRef"]}, set(store.values))
+
+    def _assert_transition(
+        self, provider: str, source: str, target: str, paths: dict[str, Path]
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store, environment = self._environment(directory)
+            database = Path(environment["KANTRIP_DATABASE"])
+            with patch("kantrip.profiles.load_secret_store", return_value=store):
+                added = self._invoke(
+                    ["add", "p", *self._registry(provider, source, paths)], environment
+                )
+                edited = self._invoke(["edit", "p", *self._auth(target, paths)], environment)
+                registry = load_profiles(database).profile("p")["registry"]
+
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual(0, edited.exit_code, edited.output)
+        self.assertEqual(provider, registry["provider"])
+        self.assertEqual(target, registry["auth"]["type"])
+        references = {
+            value
+            for key, value in registry["auth"].items()
+            if key.endswith("Ref") and isinstance(value, str)
+        }
+        self.assertEqual(references, set(store.values))
+        self.assertEqual(target == "mtls", "clientCertificate" in registry.get("tls", {}))
+
+    def _registry(self, provider: str, auth_type: str, paths: dict[str, Path]) -> list[str]:
+        return [
+            "--registry-provider",
+            provider,
+            "--registry-url",
+            self.URLS[provider],
+            *self._auth(auth_type, paths),
+        ]
+
+    @staticmethod
+    def _auth(auth_type: str, paths: dict[str, Path]) -> list[str]:
+        return {
+            "none": ["--registry-auth", "none"],
+            "basic": ["--registry-auth", "basic", "--registry-username", "registry-user"],
+            "token": ["--registry-auth", "token"],
+            "mtls": [
+                "--registry-auth",
+                "mtls",
+                "--registry-client-certificate-file",
+                str(paths.get("certificate", "")),
+                "--registry-client-key-file",
+                str(paths.get("key", "")),
+            ],
+            "oauth": [
+                "--registry-auth",
+                "oauth",
+                "--registry-oauth-token-url",
+                "https://idp.invalid/token",
+                "--registry-oauth-client-id",
+                "registry-client",
+                "--registry-oauth-scope",
+                "registry.read",
+            ],
+        }[auth_type]
+
+    @staticmethod
+    def _environment(directory: str) -> tuple["_MemorySecretStore", dict[str, str]]:
+        return _MemorySecretStore(), {"KANTRIP_DATABASE": str(Path(directory) / "profiles.db")}
+
+    def _invoke(self, arguments: list[str], environment: dict[str, str]) -> Any:
+        with patch("kantrip.cli._secret_prompt", return_value=Secret("synthetic-secret")):
+            return self.runner.invoke(cli, arguments, env=environment)
 
 
 def _http_error(status: int) -> HTTPError:

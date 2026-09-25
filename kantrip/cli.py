@@ -561,383 +561,6 @@ def _mtls_auth_input(
     )
 
 
-def _interactive_profile_edits(profile: dict[str, Any]) -> dict[str, Any]:
-    """Collect explicit public-field and secret actions without exposing values."""
-    edits: dict[str, Any] = {
-        "labels": {},
-        "remove_labels": (),
-    }
-    removed_labels: list[str] = []
-    while True:
-        field = click.prompt(
-            "Field to edit",
-            type=click.Choice(
-                (
-                    "bootstrap-servers",
-                    "description",
-                    "labels",
-                    "transport",
-                    "authentication",
-                    "registry",
-                    "done",
-                )
-            ),
-            default="done",
-        )
-        if field == "done":
-            break
-        if field == "authentication":
-            edits["auth"] = _interactive_auth_input(profile["kafka"]["auth"])
-        elif field == "registry":
-            _collect_interactive_registry(profile, edits)
-        else:
-            _collect_interactive_public_field(profile, edits, removed_labels, field)
-    return edits
-
-
-def _collect_interactive_public_field(
-    profile: dict[str, Any],
-    edits: dict[str, Any],
-    removed_labels: list[str],
-    field: str,
-) -> None:
-    if field == "bootstrap-servers":
-        current = ",".join(profile["kafka"]["bootstrapServers"])
-        value = click.prompt("Kafka bootstrap servers", default=current)
-        edits["bootstrap_servers"] = _split_bootstrap_servers(
-            click.get_current_context(), cast(click.Parameter, None), value
-        )
-    elif field == "description":
-        action = _field_action("Description")
-        if action == "replace":
-            edits["description"] = click.prompt("Description")
-        elif action == "remove":
-            edits["clear_description"] = True
-    elif field == "labels":
-        action = _field_action("Label")
-        if action != "keep":
-            key = click.prompt("Label key")
-            if action == "replace":
-                edits["labels"][key] = click.prompt("Label value")
-            else:
-                removed_labels.append(key)
-                edits["remove_labels"] = tuple(removed_labels)
-    else:
-        edits["transport"] = click.prompt(
-            "Kafka transport",
-            type=click.Choice(("plaintext", "tls")),
-            default=profile["kafka"]["transport"],
-        )
-
-
-def _collect_interactive_registry(profile: dict[str, Any], edits: dict[str, Any]) -> None:
-    registry = profile.get("registry")
-    action = _field_action("Registry")
-    if action == "remove":
-        edits["remove_registry"] = True
-    elif action == "replace":
-        current_provider = (
-            registry.get("provider", "confluent") if isinstance(registry, dict) else "confluent"
-        )
-        provider = click.prompt(
-            "Registry provider",
-            type=click.Choice(("confluent", "apicurio")),
-            default=current_provider,
-        )
-        edits["registry_provider"] = provider
-        url_key = (
-            "apicurio.registry.url"
-            if isinstance(registry, dict) and registry.get("provider") == "apicurio"
-            else "schema.registry.url"
-        )
-        edits["registry_url"] = click.prompt(
-            "Registry URL",
-            default=registry.get(url_key) if isinstance(registry, dict) else None,
-        )
-        same_provider = isinstance(registry, dict) and registry.get("provider") == provider
-        if same_provider and isinstance(registry, dict):
-            current_auth = registry.get("auth", {"type": "none"})
-            current_tls = registry.get("tls", {})
-        else:
-            current_auth = {"type": "none"}
-            current_tls = {}
-        if not isinstance(current_auth, dict) or not isinstance(current_tls, dict):
-            raise click.UsageError("stored Registry authentication is invalid")
-        edits["registry_auth"] = _interactive_registry_auth_input(
-            provider,
-            current_auth,
-            current_tls,
-            edits["registry_url"],
-        )
-
-
-def _interactive_registry_auth_input(
-    provider: str,
-    current_auth: dict[str, Any],
-    current_tls: dict[str, Any],
-    registry_url: str,
-) -> RegistryAuthInput:
-    current_type = str(current_auth.get("type", "none"))
-    selected = click.prompt(
-        "Registry authentication",
-        type=click.Choice(("none", "basic", "token", "mtls", "oauth")),
-        default=current_type,
-    )
-    ca_certificates = _interactive_ca_bundle("Registry TLS", current_tls.get("caCertificates"))
-    if selected == "none":
-        return RegistryAuthInput("none", ca_certificates=ca_certificates)
-    secret_required = selected != current_type
-    if selected == "basic":
-        username = click.prompt(
-            "Registry username",
-            default=current_auth.get("username") if current_type == "basic" else None,
-        )
-        replace = secret_required or click.confirm("Replace the Registry password?", default=False)
-        result = _registry_auth_input(
-            selected,
-            username,
-            registry_url=registry_url,
-            ca_certificates=ca_certificates,
-            replace_fields=("registry/password",) if replace else (),
-            secret_required=secret_required,
-        )
-    elif selected == "token":
-        replace = secret_required or click.confirm("Replace the Registry token?", default=False)
-        result = _registry_auth_input(
-            selected,
-            None,
-            registry_url=registry_url,
-            ca_certificates=ca_certificates,
-            replace_fields=("registry/token",) if replace else (),
-            secret_required=secret_required,
-        )
-    elif selected == "mtls":
-        replace = secret_required or click.confirm(
-            "Replace the Registry client identity?", default=False
-        )
-        certificate = current_tls.get("clientCertificate")
-        key = password = None
-        if replace:
-            certificate_path = cast(
-                Path,
-                click.prompt("Registry client-certificate file", type=click.Path(path_type=Path)),
-            )
-            key_path = cast(
-                Path,
-                click.prompt("Registry private-key file", type=click.Path(path_type=Path)),
-            )
-            certificate, key, password = _read_client_identity(
-                certificate_path, key_path, label="Registry"
-            )
-        result = _registry_auth_input(
-            selected,
-            None,
-            registry_url=registry_url,
-            ca_certificates=ca_certificates,
-            client_certificate=certificate,
-            private_key=key,
-            private_key_password=password,
-            secret_required=secret_required,
-        )
-    else:
-        token_url = click.prompt(
-            "Registry OAuth token URL",
-            default=current_auth.get("tokenUrl") if current_type == "oauth" else None,
-        )
-        client_id = click.prompt(
-            "Registry OAuth client ID",
-            default=current_auth.get("clientId") if current_type == "oauth" else None,
-        )
-        scopes = tuple(
-            filter(
-                None,
-                click.prompt(
-                    "Registry OAuth scopes (space separated)",
-                    default=(
-                        " ".join(current_auth.get("scopes", [])) if current_type == "oauth" else ""
-                    ),
-                ).split(" "),
-            )
-        )
-        oauth_ca = _interactive_ca_bundle(
-            "Registry OAuth token endpoint",
-            current_auth.get("caCertificates") if current_type == "oauth" else None,
-        )
-        replace = secret_required or click.confirm(
-            "Replace the Registry OAuth client secret?", default=False
-        )
-        logical_cluster = identity_pool_id = None
-        if provider == "confluent":
-            logical_cluster = (
-                click.prompt(
-                    "Registry OAuth logical cluster (blank to omit)",
-                    default=current_auth.get("logicalCluster", ""),
-                    show_default=False,
-                )
-                or None
-            )
-            identity_pool_id = (
-                click.prompt(
-                    "Registry OAuth identity pool ID (blank to omit)",
-                    default=current_auth.get("identityPoolId", ""),
-                    show_default=False,
-                )
-                or None
-            )
-        result = _registry_auth_input(
-            selected,
-            None,
-            registry_url=registry_url,
-            ca_certificates=ca_certificates,
-            oauth_token_url=token_url,
-            oauth_client_id=client_id,
-            oauth_scopes=scopes,
-            oauth_ca_certificates=oauth_ca,
-            oauth_logical_cluster=logical_cluster,
-            oauth_identity_pool_id=identity_pool_id,
-            replace_fields=("registry/oauth/client-secret",) if replace else (),
-            secret_required=secret_required,
-        )
-    assert result is not None
-    return result
-
-
-def _interactive_ca_bundle(label: str, current: object) -> str | None:
-    action = click.prompt(
-        f"{label} trust",
-        type=click.Choice(("keep", "replace", "default")),
-        default="keep",
-    )
-    if action == "keep":
-        return current if isinstance(current, str) else None
-    if action == "default":
-        return None
-    path = cast(
-        Path,
-        click.prompt(
-            f"{label} CA file",
-            type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-        ),
-    )
-    try:
-        return read_ca_bundle(path)
-    except KafkaProfileError as error:
-        raise click.ClickException(str(error)) from error
-
-
-def _field_action(label: str) -> str:
-    return click.prompt(
-        f"{label} action",
-        type=click.Choice(("keep", "replace", "remove")),
-        default="keep",
-    )
-
-
-def _interactive_auth_input(current_auth: dict[str, Any]) -> KafkaAuthInput:
-    current_type = str(current_auth["type"])
-    selected = click.prompt(
-        "Kafka authentication",
-        type=click.Choice(("none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth")),
-        default=current_type,
-    )
-    if selected == "none":
-        return KafkaAuthInput("none")
-    if selected in {"plain", "scram-sha-256", "scram-sha-512"}:
-        password_family = current_type in {"plain", "scram-sha-256", "scram-sha-512"}
-        username = click.prompt(
-            "Kafka username",
-            default=current_auth.get("username") if password_family else None,
-        )
-        action = "replace"
-        if password_family:
-            action = click.prompt(
-                "Kafka password action",
-                type=click.Choice(("keep", "replace", "remove")),
-                default="keep",
-            )
-        if action == "remove":
-            raise click.UsageError(
-                "Kafka password is required; choose auth none or mTLS to remove it"
-            )
-        return _auth_input(
-            selected,
-            username,
-            None,
-            None,
-            password_required=action == "replace",
-            replace_fields=("kafka/password",) if action == "replace" else (),
-        )
-    if selected == "oauth":
-        oauth_family = current_type == "oauth"
-        token_url = click.prompt(
-            "Kafka OAuth token URL",
-            default=current_auth.get("tokenUrl") if oauth_family else None,
-        )
-        client_id = click.prompt(
-            "Kafka OAuth client ID",
-            default=current_auth.get("clientId") if oauth_family else None,
-        )
-        scopes = tuple(
-            filter(
-                None,
-                click.prompt(
-                    "Kafka OAuth scopes (space separated)",
-                    default=(" ".join(current_auth.get("scopes", [])) if oauth_family else ""),
-                ).split(" "),
-            )
-        )
-        replace = not oauth_family or click.confirm(
-            "Replace the Kafka OAuth client secret?", default=False
-        )
-        return _auth_input(
-            "oauth",
-            None,
-            None,
-            None,
-            password_required=False,
-            oauth_token_url=token_url,
-            oauth_client_id=client_id,
-            oauth_scopes=scopes,
-            oauth_secret_required=replace,
-        )
-    action = "replace"
-    if current_type == "mtls":
-        action = click.prompt(
-            "Kafka client identity action",
-            type=click.Choice(("keep", "replace", "remove")),
-            default="keep",
-        )
-    if action == "remove":
-        raise click.UsageError(
-            "Kafka client identity is required; choose auth none or password authentication "
-            "to remove it"
-        )
-    if action == "keep":
-        return KafkaAuthInput("mtls")
-    certificate = cast(
-        Path,
-        click.prompt(
-            "Kafka client-certificate file",
-            type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-        ),
-    )
-    key = cast(
-        Path,
-        click.prompt(
-            "Kafka private-key file",
-            type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-        ),
-    )
-    return _auth_input(
-        "mtls",
-        None,
-        certificate,
-        key,
-        password_required=False,
-        replace_fields=("kafka/tls/private-key",),
-    )
-
-
 @cli.command("add")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
@@ -1377,10 +1000,6 @@ def edit_configured_profile(  # noqa: C901
         )
         if unknown_replace_secrets:
             raise click.UsageError(f"unsupported credential field: {min(unknown_replace_secrets)}")
-        current = load_profiles(missing_ok=True)
-        current_profile = current.profile(profile_name)
-        expected_revision = current.revision(profile_name)
-        current_auth = current_profile["kafka"]["auth"]
         scripted_edit = any(
             (
                 bootstrap_servers is not None,
@@ -1423,61 +1042,51 @@ def edit_configured_profile(  # noqa: C901
                 remove_registry,
             )
         )
+        if not scripted_edit:
+            raise click.UsageError("edit requires at least one option; see 'kantrip edit --help'")
+        current = load_profiles(missing_ok=True)
+        current_profile = current.profile(profile_name)
+        expected_revision = current.revision(profile_name)
+        current_auth = current_profile["kafka"]["auth"]
         auth: KafkaAuthInput | None = None
         registry_input: RegistryAuthInput | None = None
-        if not scripted_edit:
-            interactive = _interactive_profile_edits(current_profile)
-            bootstrap_servers = interactive.get("bootstrap_servers")
-            description = interactive.get("description")
-            clear_description = interactive.get("clear_description", False)
-            labels = interactive.get("labels", {})
-            remove_labels = interactive.get("remove_labels", ())
-            transport = interactive.get("transport")
-            auth = interactive.get("auth")
-            registry_provider = interactive.get("registry_provider")
-            registry_url = interactive.get("registry_url")
-            registry_input = interactive.get("registry_auth")
-            remove_registry = interactive.get("remove_registry", False)
-        else:
-            selected_auth = auth_type or str(current_auth["type"])
-            auth_requested = any(
-                (
-                    auth_type is not None,
-                    username is not None,
-                    client_certificate_file is not None,
-                    client_key_file is not None,
-                    oauth_token_url is not None,
-                    oauth_client_id is not None,
-                    bool(oauth_scope),
-                    clear_oauth_scopes,
-                    oauth_ca_file is not None,
-                    oauth_default_trust,
-                    bool(kafka_replace_secrets),
-                )
+        selected_auth = auth_type or str(current_auth["type"])
+        auth_requested = any(
+            (
+                auth_type is not None,
+                username is not None,
+                client_certificate_file is not None,
+                client_key_file is not None,
+                oauth_token_url is not None,
+                oauth_client_id is not None,
+                bool(oauth_scope),
+                clear_oauth_scopes,
+                oauth_ca_file is not None,
+                oauth_default_trust,
+                bool(kafka_replace_secrets),
             )
-            if auth_requested:
-                password_types = {"plain", "scram-sha-256", "scram-sha-512"}
-                auth = _auth_input(
-                    selected_auth,
-                    username,
-                    client_certificate_file,
-                    client_key_file,
-                    password_required=(
-                        selected_auth in password_types
-                        and current_auth.get("type") not in password_types
-                    ),
-                    replace_fields=kafka_replace_secrets,
-                    oauth_token_url=oauth_token_url,
-                    oauth_client_id=oauth_client_id,
-                    oauth_scopes=(
-                        () if clear_oauth_scopes else oauth_scope if oauth_scope else None
-                    ),
-                    oauth_ca_certificates=oauth_ca_file,
-                    oauth_default_trust=oauth_default_trust,
-                    oauth_secret_required=(
-                        selected_auth == "oauth" and current_auth.get("type") != "oauth"
-                    ),
-                )
+        )
+        if auth_requested:
+            password_types = {"plain", "scram-sha-256", "scram-sha-512"}
+            auth = _auth_input(
+                selected_auth,
+                username,
+                client_certificate_file,
+                client_key_file,
+                password_required=(
+                    selected_auth in password_types
+                    and current_auth.get("type") not in password_types
+                ),
+                replace_fields=kafka_replace_secrets,
+                oauth_token_url=oauth_token_url,
+                oauth_client_id=oauth_client_id,
+                oauth_scopes=(() if clear_oauth_scopes else oauth_scope if oauth_scope else None),
+                oauth_ca_certificates=oauth_ca_file,
+                oauth_default_trust=oauth_default_trust,
+                oauth_secret_required=(
+                    selected_auth == "oauth" and current_auth.get("type") != "oauth"
+                ),
+            )
         registry_requested = any(
             (
                 registry_auth is not None,
@@ -1516,6 +1125,9 @@ def edit_configured_profile(  # noqa: C901
                 if isinstance(current_registry.get("tls"), dict):
                     current_registry_tls = current_registry["tls"]
             selected_registry_auth = registry_auth or str(current_registry_auth.get("type", "none"))
+            # Stored fields of the current type carry over only when the type is unchanged.
+            same_registry_auth = selected_registry_auth == current_registry_auth.get("type")
+            stored_registry_auth = current_registry_auth if same_registry_auth else {}
             if selected_registry_auth != "oauth" and any(
                 (
                     registry_oauth_token_url is not None,
@@ -1535,7 +1147,9 @@ def edit_configured_profile(  # noqa: C901
                 raise click.UsageError(
                     "Registry mTLS requires both client certificate and key files"
                 )
-            registry_certificate = current_registry_tls.get("clientCertificate")
+            registry_certificate = (
+                current_registry_tls.get("clientCertificate") if same_registry_auth else None
+            )
             registry_key = registry_key_password = None
             if registry_client_certificate_file is not None:
                 assert registry_client_key_file is not None
@@ -1559,7 +1173,7 @@ def edit_configured_profile(  # noqa: C901
                 else (
                     registry_oauth_ca_file
                     if registry_oauth_ca_file is not None
-                    else current_registry_auth.get("caCertificates")
+                    else stored_registry_auth.get("caCertificates")
                 )
             )
             registry_scopes = (
@@ -1568,32 +1182,32 @@ def edit_configured_profile(  # noqa: C901
                 else (
                     registry_oauth_scope
                     if registry_oauth_scope
-                    else tuple(current_registry_auth.get("scopes", ()))
+                    else tuple(stored_registry_auth.get("scopes", ()))
                 )
             )
             registry_input = _registry_auth_input(
                 selected_registry_auth,
-                registry_username or current_registry_auth.get("username"),
+                registry_username or stored_registry_auth.get("username"),
                 registry_url=registry_url or stored_url,
                 ca_certificates=registry_ca,
                 client_certificate=registry_certificate,
                 private_key=registry_key,
                 private_key_password=registry_key_password,
-                oauth_token_url=registry_oauth_token_url or current_registry_auth.get("tokenUrl"),
-                oauth_client_id=registry_oauth_client_id or current_registry_auth.get("clientId"),
+                oauth_token_url=registry_oauth_token_url or stored_registry_auth.get("tokenUrl"),
+                oauth_client_id=registry_oauth_client_id or stored_registry_auth.get("clientId"),
                 oauth_scopes=registry_scopes,
                 oauth_ca_certificates=registry_oauth_ca,
                 oauth_logical_cluster=(
                     None
                     if clear_registry_oauth_logical_cluster
                     else registry_oauth_logical_cluster
-                    or current_registry_auth.get("logicalCluster")
+                    or stored_registry_auth.get("logicalCluster")
                 ),
                 oauth_identity_pool_id=(
                     None
                     if clear_registry_oauth_identity_pool_id
                     else registry_oauth_identity_pool_id
-                    or current_registry_auth.get("identityPoolId")
+                    or stored_registry_auth.get("identityPoolId")
                 ),
                 replace_fields=registry_replace_secrets,
                 secret_required=(selected_registry_auth != current_registry_auth.get("type")),
