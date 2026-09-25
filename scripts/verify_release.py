@@ -24,7 +24,6 @@ SDIST_REQUIRED = {
     "DEVELOPMENT.md",
     "LICENSE",
     "MANUAL_TESTING.md",
-    "MVP.md",
     "README.md",
     "RELEASE_CHECKLIST.md",
     "SECURITY.md",

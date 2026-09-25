@@ -17,14 +17,14 @@
   independent from Rich.
 - Support Linux and macOS on Python 3.10 through 3.14. Keep paths, permissions,
   signals, terminals, and shell documentation portable.
-- Keep unimplemented product work and exact future CLI contracts in `MVP.md`,
-  not in current feature docs, schemas, examples, commands, or implementation
-  comments.
-- Preserve a resource-oriented CLI. Extend the lifecycle, inspection,
-  diagnostic, and execution verbs defined in `MVP.md` instead of adding
-  one-off command families for input formats or credential operations. Never
-  expose secret retrieval or a round-trip profile export. Update current user
-  documentation only when the corresponding behavior lands.
+- Keep unimplemented product work and future CLI contracts in GitHub issues
+  under the `v0.1`/`v0.2` milestones, not in current feature docs, schemas,
+  examples, commands, or implementation comments.
+- Preserve a resource-oriented CLI. Extend the existing `add`, `edit`,
+  `remove`, `list`, `describe`, `current`, `doctor`, `ping`, and `exec` verbs
+  instead of adding one-off command families for input formats or credential
+  operations. Never expose secret retrieval or a round-trip profile export.
+  Update current user documentation only when the corresponding behavior lands.
 
 ## Documentation Ownership
 
@@ -32,7 +32,7 @@
 | --- | --- | --- |
 | End users | `USAGE.md`, `COMPATIBILITY.md` | Installed `kantrip` commands, supported clients/protocols/formats, actionable limits and environment behavior |
 | Developers | `DEVELOPMENT.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `MANUAL_TESTING.md` | Contributor workflows, technical decisions and rationale, security analysis, reproducible human QA |
-| AI agents | `AGENT.md`, `RELEASE_CHECKLIST.md`, `MVP.md` | Durable engineering instructions, release execution gates, temporary implementation handoff |
+| AI agents | `AGENT.md`, `RELEASE_CHECKLIST.md` | Durable engineering instructions and release execution gates |
 
 - Keep sandbox instructions, `uv run`, repository workflows, internal-only
   capabilities, and future CLI contracts out of end-user guides. Document only
@@ -43,10 +43,18 @@
   `THREAT_MODEL.md` with implemented controls and explicit residual risks.
 - Keep each manual scenario's setup, commands, and expected results in
   `MANUAL_TESTING.md`; keep release orchestration in `RELEASE_CHECKLIST.md`.
-- `MVP.md` is temporary. During its final cleanup PR, transfer all remaining
-  decisions and QA to their durable owners before deleting it. Remove every
-  obsolete reference, including packaging requirements, and leave this file
-  sufficient to guide future agents together with `ARCHITECTURE.md`.
+
+## Planning and Delivery
+
+- Milestone issues are the only roadmap; do not add a roadmap file. Each issue
+  uses the sections Problem, Decision, Scope, Acceptance (at most eight
+  checkable items), and Out of scope. Split an issue that needs more.
+- One issue maps to one PR unless the issue says otherwise. Keep the
+  implementation, its tests, and the affected user documentation in that PR.
+  Keep PRs small enough for a human to review in one sitting.
+- Do not poll or watch CI or release pipelines. Ask the maintainer to report
+  success or failure, then inspect that run once.
+- Put standing rules in this file once; do not repeat them in issue bodies.
 
 ## Profiles and Sessions
 
@@ -60,11 +68,14 @@
   documents omit application versions. The SQLite schema uses a separate
   internal version.
 - Treat the environment documented in `USAGE.md` as the current contract.
-  Before the first release, replace obsolete CLI, environment, profile, and
-  runtime contracts directly without aliases or development-state compatibility.
-  Reject incompatible state with explicit reset guidance; never silently delete
-  user data. Compatibility and migration guarantees begin with published
-  releases. Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
+  No backward compatibility is promised before v0.1.0. Alpha and beta packages
+  published to PyPI are pre-releases, not a compatibility boundary. Until
+  v0.1.0, replace obsolete CLI, environment, profile, storage, and runtime
+  contracts directly without aliases, upgrade paths, or development-state
+  compatibility. Reject incompatible state with explicit reset guidance; never
+  silently delete user data. CLI, structured-output, and database-migration
+  guarantees begin with v0.1.0.
+- Use `KAFKA_*` for application values and reserve `KANTRIP_*` for
   Kantrip-owned profile/session metadata.
 - Store profiles in the private SQLite database resolved through
   `KANTRIP_DATABASE`, `XDG_DATA_HOME`, then the user's default data directory.
@@ -78,7 +89,8 @@
   and order; store its immutable name, checksum,
   applied timestamp, and applying Kantrip version in `schema_migrations`. Never
   derive migration identity from product SemVer or profile document fields.
-- Treat released migrations as immutable and forward-only. Mirror the highest
+- Treat migrations shipped in v0.1.0 or later as immutable and forward-only;
+  before v0.1.0 the chain may be rewritten. Mirror the highest
   applied sequence in `PRAGMA user_version`, update schema and history in one
   transaction under the maintenance lock, create a uniquely timestamped backup
   before pending work, and fail closed on gaps, unknown entries, checksum

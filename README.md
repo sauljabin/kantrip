@@ -63,13 +63,17 @@ ACL-independent Kafka connectivity checks.
 
 ## Roadmap
 
-The [MVP roadmap](MVP.md) tracks the remaining first-release work, including
-external input formats, additional clients, readability, a GitHub Pages site,
-and final documentation cleanup. Current secure Registry and OAuth support is
-described in [Compatibility](COMPATIBILITY.md); first-release manual checks live
-in [Manual Testing](MANUAL_TESTING.md) as each capability lands.
-Development contracts may change destructively before the first release; no
-compatibility with earlier development commits is promised.
+Planned work is tracked in GitHub milestones:
+[v0.1](https://github.com/sauljabin/kantrip/milestone/1) (first release:
+hardening, final CLI contract, dedicated credential vault, kaf and kafkactl)
+and [v0.2](https://github.com/sauljabin/kantrip/milestone/2) (Strimzi and
+properties import, more clients). Current support is described in
+[Compatibility](COMPATIBILITY.md).
+
+Kantrip is pre-release software: no backward compatibility is promised before
+v0.1.0, including between published alpha versions. Commands, output, and
+stored profiles may change, and older profile databases may need to be
+recreated.
 
 ## Quick start
 

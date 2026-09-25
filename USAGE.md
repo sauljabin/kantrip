@@ -14,6 +14,11 @@ kantrip exec local -- kcat -L
 See [Compatibility](COMPATIBILITY.md) for supported clients, authentication
 methods, and file formats.
 
+No backward compatibility is promised before v0.1.0, including between
+published alpha versions. Commands, output, and stored profiles may change; a
+profile database from an earlier pre-release may be rejected with instructions
+to recreate it. Kantrip never deletes it silently.
+
 Kantrip is not a persistent process manager, a global context selector, or a
 replacement for Kafka clients. Its responsibility ends at storing profiles,
 resolving the connection material supported by the installed release,
