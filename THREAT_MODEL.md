@@ -404,7 +404,7 @@ can prevent operation.
 - Fail-closed capability checks favor confidentiality and integrity over broad
   client compatibility.
 - Native Kafka clients avoid a custom Kafka protocol stack; shared SASL/TLS
-  renderers and a common capability table keep adapter decisions explicit.
+  renderers and per-client adapter descriptors keep adapter decisions explicit.
 - Recoverable cross-store updates and lock-based crash cleanup address failure
   modes commonly omitted from local credential wrappers.
 - Ordered migration history and fail-closed checksum validation make schema

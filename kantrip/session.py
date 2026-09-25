@@ -6,17 +6,17 @@ import os
 import shutil
 import ssl
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from kantrip._files import write_exclusive_text
 from kantrip.adapters import (
-    KAFKA_EXECUTABLES,
-    KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
-    SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
+    ClientConfiguration,
+    client_adapter,
     create_subshell_shims,
     prepare_command,
     require_adapter_capability,
@@ -148,7 +148,36 @@ def run_profile_session(
             raise SessionError(str(error)) from error
 
 
-def _run_in_runtime(  # noqa: C901
+@dataclass(frozen=True)
+class _KafkaMaterial:
+    """Private Kafka trust and identity files materialized for one session."""
+
+    ca: Path | None = None
+    certificate: Path | None = None
+    private_key: Path | None = None
+    oauth_ca: Path | None = None
+
+
+@dataclass(frozen=True)
+class _RegistryMaterial:
+    """Private Registry trust and identity files materialized for one session."""
+
+    ca: Path | None = None
+    oauth_ca: Path | None = None
+    certificate: Path | None = None
+    private_key: Path | None = None
+
+
+@dataclass(frozen=True)
+class _ClientFiles:
+    """Rendered client configuration shared by adapters and the child environment."""
+
+    configuration: ClientConfiguration
+    kcat_properties: Mapping[str, str]
+    registry_config: Path
+
+
+def _run_in_runtime(
     runtime: SessionRuntime,
     profile_name: str,
     executable: str,
@@ -158,163 +187,35 @@ def _run_in_runtime(  # noqa: C901
     kafka: KafkaConnection,
     registry: RegistryConnection | None,
 ) -> int:
-    session_directory = runtime.path
-    ca_path: Path | None = None
-    if kafka.ca_certificates is not None:
-        ca_path = session_directory / CA_BUNDLE_FILENAME
-        write_exclusive_text(ca_path, kafka.ca_certificates, mode=0o600)
-    certificate_path: Path | None = None
-    private_key_path: Path | None = None
-    if kafka.auth_type == "mtls":
-        if kafka.client_certificate is None or kafka.private_key is None:
-            raise SessionError("Kafka mTLS credentials are not resolved")
-        certificate_path = session_directory / CLIENT_CERTIFICATE_FILENAME
-        private_key_path = session_directory / CLIENT_KEY_FILENAME
-        write_exclusive_text(certificate_path, kafka.client_certificate, mode=0o600)
-        write_exclusive_text(private_key_path, kafka.private_key.reveal(), mode=0o600)
-    oauth_ca_path: Path | None = None
-    if kafka.oauth is not None and kafka.oauth.ca_certificates is not None:
-        oauth_ca_path = session_directory / OAUTH_CA_BUNDLE_FILENAME
-        write_exclusive_text(oauth_ca_path, kafka.oauth.ca_certificates, mode=0o600)
-    registry_ca_path: Path | None = None
-    registry_oauth_ca_path: Path | None = None
-    registry_certificate_path: Path | None = None
-    registry_key_path: Path | None = None
-    if registry is not None and registry.ca_certificates is not None:
-        registry_ca_path = session_directory / REGISTRY_CA_BUNDLE_FILENAME
-        write_exclusive_text(registry_ca_path, registry.ca_certificates, mode=0o600)
-    if (
-        registry is not None
-        and registry.provider == CONFLUENT_PROVIDER
-        and registry.oauth is not None
-        and registry.oauth.ca_certificates is not None
-    ):
-        registry_oauth_ca_path = session_directory / REGISTRY_OAUTH_CA_BUNDLE_FILENAME
-        write_exclusive_text(
-            registry_oauth_ca_path,
-            _oauth_trust_bundle(registry.oauth.ca_certificates),
-            mode=0o600,
-        )
-    if registry is not None and registry.auth_type == "mtls":
-        if registry.client_certificate is None or registry.private_key is None:
-            raise SessionError("Registry mTLS credentials are not resolved")
-        registry_certificate_path = session_directory / REGISTRY_CLIENT_CERTIFICATE_FILENAME
-        registry_key_path = session_directory / REGISTRY_CLIENT_KEY_FILENAME
-        write_exclusive_text(registry_certificate_path, registry.client_certificate, mode=0o600)
-        write_exclusive_text(registry_key_path, registry.private_key.reveal(), mode=0o600)
-    try:
-        kcat_properties = librdkafka_properties(
-            kafka,
-            ca_location=ca_path,
-            client_certificate_location=certificate_path,
-            private_key_location=private_key_path,
-            oauth_ca_location=oauth_ca_path,
-        )
-        java_config = java_properties(
-            kafka,
-            ca_location=ca_path,
-            oauth_ca_location=oauth_ca_path,
-        )
-    except KafkaProfileError as error:
-        raise SessionError(str(error)) from error
-    kcat_config_path = session_directory / "kcat.conf"
-    java_config_path = session_directory / "kafka.properties"
-    kaskade_config_path = session_directory / "kaskade.ini"
-    kaskade_registry_config_path = session_directory / "kaskade-registry.ini"
-    registry_config_path = session_directory / "registry.properties"
-    schema_registry_java_config_path = session_directory / "schema-registry-kafka.properties"
-    write_exclusive_text(kcat_config_path, _render_properties(kcat_properties), mode=0o600)
-    write_exclusive_text(java_config_path, _render_java_properties(java_config), mode=0o600)
-    write_exclusive_text(
-        kaskade_config_path,
-        f"[kafka]\n{_render_properties(kcat_properties)}",
-        mode=0o600,
-    )
-    if registry is not None:
-        try:
-            kaskade_registry = kaskade_registry_properties(
-                registry,
-                ca_location=registry_ca_path,
-                client_certificate_location=registry_certificate_path,
-                private_key_location=registry_key_path,
-            )
-        except RegistryProfileError:
-            kaskade_registry = {}
-        try:
-            console_registry = (
-                confluent_console_properties(
-                    registry,
-                    ca_location=registry_ca_path,
-                    client_certificate_location=registry_certificate_path,
-                    private_key_location=registry_key_path,
-                )
-                if registry.provider != APICURIO_PROVIDER
-                else {}
-            )
-        except RegistryProfileError:
-            console_registry = {}
-        write_exclusive_text(
-            kaskade_registry_config_path,
-            f"[kafka]\n{_render_properties(kcat_properties)}"
-            f"\n[registry]\n{_render_properties(kaskade_registry)}",
-            mode=0o600,
-        )
-        write_exclusive_text(
-            registry_config_path,
-            _render_properties(kaskade_registry),
-            mode=0o600,
-        )
-        write_exclusive_text(
-            schema_registry_java_config_path,
-            _render_java_properties(java_config | console_registry),
-            mode=0o600,
-        )
-
+    kafka_material = _write_kafka_material(runtime.path, kafka)
+    registry_material = _write_registry_material(runtime.path, registry)
+    clients = _write_client_files(runtime.path, kafka, kafka_material, registry, registry_material)
     child_environment = _child_environment(
         runtime,
         profile_name,
         environment,
-        kcat_properties,
-        java_config_path,
-        schema_registry_java_config_path,
-        kcat_config_path,
-        registry_config_path,
+        clients,
         kafka,
         registry,
     )
     try:
         if has_command:
-            arguments = prepare_command(
+            arguments = _prepare_command(
                 arguments,
-                bootstrap_servers=kcat_properties["bootstrap.servers"],
-                java_config_path=java_config_path,
-                schema_registry_java_config_path=schema_registry_java_config_path,
-                kaskade_config_path=kaskade_config_path,
-                kaskade_registry_config_path=kaskade_registry_config_path,
-                registry=registry,
-            )
-            require_adapter_capability(
-                arguments[0],
-                auth_type=kafka.auth_type,
-                custom_pem=kafka.ca_certificates is not None or kafka.auth_type == "mtls",
-                environment=environment,
-                registry=registry,
+                clients.configuration,
+                environment,
+                kafka,
+                registry,
             )
         else:
             arguments = _prepare_subshell(
                 executable,
-                session_directory,
+                runtime.path,
                 environment,
                 child_environment,
-                kcat_properties,
-                java_config_path,
-                schema_registry_java_config_path,
-                kaskade_config_path,
-                kaskade_registry_config_path,
+                clients.configuration,
+                kafka,
                 registry,
-                registry_oauth_ca_path,
-                kafka.ca_certificates is not None or kafka.auth_type == "mtls",
-                kafka.auth_type,
             )
     except (AdapterError, ShellError) as error:
         raise SessionError(str(error)) from error
@@ -323,7 +224,7 @@ def _run_in_runtime(  # noqa: C901
         arguments,
         child_environment,
         registry,
-        registry_oauth_ca_path,
+        registry_material.oauth_ca,
     )
     result = _run_child(
         arguments,
@@ -332,6 +233,162 @@ def _run_in_runtime(  # noqa: C901
         interactive=not has_command,
     )
     return result.returncode
+
+
+def _write_kafka_material(directory: Path, kafka: KafkaConnection) -> _KafkaMaterial:
+    ca_path: Path | None = None
+    if kafka.ca_certificates is not None:
+        ca_path = _write_private(directory / CA_BUNDLE_FILENAME, kafka.ca_certificates)
+    certificate_path: Path | None = None
+    private_key_path: Path | None = None
+    if kafka.auth_type == "mtls":
+        if kafka.client_certificate is None or kafka.private_key is None:
+            raise SessionError("Kafka mTLS credentials are not resolved")
+        certificate_path = _write_private(
+            directory / CLIENT_CERTIFICATE_FILENAME, kafka.client_certificate
+        )
+        private_key_path = _write_private(
+            directory / CLIENT_KEY_FILENAME, kafka.private_key.reveal()
+        )
+    oauth_ca_path: Path | None = None
+    if kafka.oauth is not None and kafka.oauth.ca_certificates is not None:
+        oauth_ca_path = _write_private(
+            directory / OAUTH_CA_BUNDLE_FILENAME, kafka.oauth.ca_certificates
+        )
+    return _KafkaMaterial(ca_path, certificate_path, private_key_path, oauth_ca_path)
+
+
+def _write_registry_material(
+    directory: Path, registry: RegistryConnection | None
+) -> _RegistryMaterial:
+    if registry is None:
+        return _RegistryMaterial()
+    ca_path: Path | None = None
+    if registry.ca_certificates is not None:
+        ca_path = _write_private(directory / REGISTRY_CA_BUNDLE_FILENAME, registry.ca_certificates)
+    oauth_ca_path: Path | None = None
+    if (
+        registry.provider == CONFLUENT_PROVIDER
+        and registry.oauth is not None
+        and registry.oauth.ca_certificates is not None
+    ):
+        oauth_ca_path = _write_private(
+            directory / REGISTRY_OAUTH_CA_BUNDLE_FILENAME,
+            _oauth_trust_bundle(registry.oauth.ca_certificates),
+        )
+    certificate_path: Path | None = None
+    private_key_path: Path | None = None
+    if registry.auth_type == "mtls":
+        if registry.client_certificate is None or registry.private_key is None:
+            raise SessionError("Registry mTLS credentials are not resolved")
+        certificate_path = _write_private(
+            directory / REGISTRY_CLIENT_CERTIFICATE_FILENAME, registry.client_certificate
+        )
+        private_key_path = _write_private(
+            directory / REGISTRY_CLIENT_KEY_FILENAME, registry.private_key.reveal()
+        )
+    return _RegistryMaterial(ca_path, oauth_ca_path, certificate_path, private_key_path)
+
+
+def _write_client_files(
+    directory: Path,
+    kafka: KafkaConnection,
+    kafka_material: _KafkaMaterial,
+    registry: RegistryConnection | None,
+    registry_material: _RegistryMaterial,
+) -> _ClientFiles:
+    try:
+        kcat_properties = librdkafka_properties(
+            kafka,
+            ca_location=kafka_material.ca,
+            client_certificate_location=kafka_material.certificate,
+            private_key_location=kafka_material.private_key,
+            oauth_ca_location=kafka_material.oauth_ca,
+        )
+        java_config = java_properties(
+            kafka,
+            ca_location=kafka_material.ca,
+            oauth_ca_location=kafka_material.oauth_ca,
+        )
+    except KafkaProfileError as error:
+        raise SessionError(str(error)) from error
+    schema_registry_java_config_path = directory / "schema-registry-kafka.properties"
+    configuration = ClientConfiguration(
+        bootstrap_servers=kcat_properties["bootstrap.servers"],
+        java_config=directory / "kafka.properties",
+        kcat_config=directory / "kcat.conf",
+        kaskade_config=directory / "kaskade.ini",
+        kaskade_registry_config=directory / "kaskade-registry.ini",
+        schema_registry_java_config=schema_registry_java_config_path,
+        registry_oauth_ssl_cert_file=registry_material.oauth_ca,
+    )
+    registry_config_path = directory / "registry.properties"
+    rendered_kafka = _render_properties(kcat_properties)
+    _write_private(configuration.kcat_config, rendered_kafka)
+    _write_private(configuration.java_config, _render_java_properties(java_config))
+    _write_private(configuration.kaskade_config, f"[kafka]\n{rendered_kafka}")
+    if registry is not None:
+        kaskade_registry = _registry_properties(
+            kaskade_registry_properties, registry, registry_material
+        )
+        console_registry = (
+            _registry_properties(confluent_console_properties, registry, registry_material)
+            if registry.provider != APICURIO_PROVIDER
+            else {}
+        )
+        _write_private(
+            configuration.kaskade_registry_config,
+            f"[kafka]\n{rendered_kafka}\n[registry]\n{_render_properties(kaskade_registry)}",
+        )
+        _write_private(registry_config_path, _render_properties(kaskade_registry))
+        _write_private(
+            schema_registry_java_config_path,
+            _render_java_properties(java_config | console_registry),
+        )
+    return _ClientFiles(configuration, kcat_properties, registry_config_path)
+
+
+def _registry_properties(
+    render: Callable[..., dict[str, str]],
+    registry: RegistryConnection,
+    material: _RegistryMaterial,
+) -> dict[str, str]:
+    try:
+        return render(
+            registry,
+            ca_location=material.ca,
+            client_certificate_location=material.certificate,
+            private_key_location=material.private_key,
+        )
+    except RegistryProfileError:
+        return {}
+
+
+def _write_private(path: Path, contents: str) -> Path:
+    write_exclusive_text(path, contents, mode=0o600)
+    return path
+
+
+def _uses_custom_pem(kafka: KafkaConnection) -> bool:
+    return kafka.ca_certificates is not None or kafka.auth_type == "mtls"
+
+
+def _prepare_command(
+    arguments: Sequence[str],
+    configuration: ClientConfiguration,
+    environment: Mapping[str, str],
+    kafka: KafkaConnection,
+    registry: RegistryConnection | None,
+) -> list[str]:
+    prepared = prepare_command(arguments, configuration, registry=registry)
+    require_adapter_capability(
+        prepared[0],
+        auth_type=kafka.auth_type,
+        custom_pem=_uses_custom_pem(kafka),
+        environment=environment,
+        registry=registry,
+    )
+    return prepared
 
 
 def _profile_registry(
@@ -369,14 +426,11 @@ def _child_environment(
     runtime: SessionRuntime,
     profile_name: str,
     environment: Mapping[str, str],
-    kcat_properties: Mapping[str, str],
-    java_config_path: Path,
-    schema_registry_java_config_path: Path,
-    kcat_config_path: Path,
-    registry_config_path: Path,
+    clients: _ClientFiles,
     kafka: KafkaConnection,
     registry: RegistryConnection | None,
 ) -> dict[str, str]:
+    configuration = clients.configuration
     child_environment = {
         name: value
         for name, value in environment.items()
@@ -384,22 +438,22 @@ def _child_environment(
     }
     child_environment.update(
         {
-            "KAFKA_BOOTSTRAP_SERVERS": kcat_properties["bootstrap.servers"],
-            "KAFKA_JAVA_CONFIG_FILE": str(java_config_path),
-            "SCHEMA_REGISTRY_KAFKA_CONFIG_FILE": str(schema_registry_java_config_path),
-            "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(kcat_config_path),
-            "KAFKA_SECURITY_PROTOCOL": kcat_properties["security.protocol"],
+            "KAFKA_BOOTSTRAP_SERVERS": clients.kcat_properties["bootstrap.servers"],
+            "KAFKA_JAVA_CONFIG_FILE": str(configuration.java_config),
+            "SCHEMA_REGISTRY_KAFKA_CONFIG_FILE": str(configuration.schema_registry_java_config),
+            "KAFKA_LIBRDKAFKA_CONFIG_FILE": str(configuration.kcat_config),
+            "KAFKA_SECURITY_PROTOCOL": clients.kcat_properties["security.protocol"],
             "KANTRIP_PROFILE": profile_name,
             "KANTRIP_SESSION_DIR": str(runtime.path),
             "KANTRIP_SESSION_ID": runtime.session_id,
-            "KCAT_CONFIG": str(kcat_config_path),
+            "KCAT_CONFIG": str(configuration.kcat_config),
         }
     )
     if registry is not None:
         prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
         child_environment.update(
             {
-                f"{prefix}_REGISTRY_CONFIG_FILE": str(registry_config_path),
+                f"{prefix}_REGISTRY_CONFIG_FILE": str(clients.registry_config),
                 f"{prefix}_REGISTRY_URL": registry.url,
             }
         )
@@ -428,29 +482,23 @@ def _prepare_subshell(
     session_directory: Path,
     environment: Mapping[str, str],
     child_environment: dict[str, str],
-    kcat_properties: Mapping[str, str],
-    java_config_path: Path,
-    schema_registry_java_config_path: Path,
-    kaskade_config_path: Path,
-    kaskade_registry_config_path: Path,
+    configuration: ClientConfiguration,
+    kafka: KafkaConnection,
     registry: RegistryConnection | None,
-    registry_oauth_ca_path: Path | None,
-    require_java_pem: bool,
-    kafka_auth_type: str,
 ) -> list[str]:
     shim_directory = create_subshell_shims(
         session_directory / "bin",
-        bootstrap_servers=kcat_properties["bootstrap.servers"],
-        java_config_path=java_config_path,
-        schema_registry_java_config_path=schema_registry_java_config_path,
-        kcat_config_path=Path(child_environment["KCAT_CONFIG"]),
-        kaskade_config_path=kaskade_config_path,
-        kaskade_registry_config_path=kaskade_registry_config_path,
+        bootstrap_servers=configuration.bootstrap_servers,
+        java_config_path=configuration.java_config,
+        schema_registry_java_config_path=configuration.schema_registry_java_config,
+        kcat_config_path=configuration.kcat_config,
+        kaskade_config_path=configuration.kaskade_config,
+        kaskade_registry_config_path=configuration.kaskade_registry_config,
         environment=environment,
         registry=registry,
-        registry_oauth_ssl_cert_file=registry_oauth_ca_path,
-        require_java_pem=require_java_pem,
-        kafka_auth_type=kafka_auth_type,
+        registry_oauth_ssl_cert_file=configuration.registry_oauth_ssl_cert_file,
+        require_java_pem=_uses_custom_pem(kafka),
+        kafka_auth_type=kafka.auth_type,
     )
     child_environment["PATH"] = f"{shim_directory}{os.pathsep}{environment.get('PATH', os.defpath)}"
     plan = prepare_interactive_shell(
@@ -532,28 +580,13 @@ def _is_kaskade_registry_oauth(
 
 def _validate_executable(executable: str, environment: Mapping[str, str]) -> None:
     path = environment.get("PATH")
-    if shutil.which(executable, path=path) is None:
-        executable_name = Path(executable).name
-        if executable_name in KCAT_EXECUTABLES:
-            raise SessionError(
-                "command 'kcat' was not found; install it with 'brew install kcat' "
-                "on macOS or your Linux package manager"
-            )
-        if executable_name in KAFKA_EXECUTABLES:
-            if executable_name in SCHEMA_REGISTRY_EXECUTABLES:
-                raise SessionError(
-                    f"command '{executable_name}' was not found; install the Confluent Schema "
-                    "Registry package and ensure its bin directory is on PATH"
-                )
-            raise SessionError(
-                f"command '{executable_name}' was not found; install the Apache Kafka CLI "
-                "and ensure its bin directory is on PATH"
-            )
-        if executable_name in KASKADE_EXECUTABLES:
-            raise SessionError(
-                "command 'kaskade' was not found; install it and ensure its executable is on PATH"
-            )
+    if shutil.which(executable, path=path) is not None:
+        return
+    executable_name = Path(executable).name
+    adapter = client_adapter(executable_name)
+    if adapter is None:
         raise SessionError(f"command '{executable}' was not found")
+    raise SessionError(adapter.missing_command(executable_name))
 
 
 def _validate_kcat_arguments(arguments: Sequence[str]) -> None:

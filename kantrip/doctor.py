@@ -17,13 +17,13 @@ from cryptography import x509
 from kantrip import APP_VERSION
 from kantrip.adapters import (
     ADAPTER_EXECUTABLES,
+    CLIENT_ADAPTERS,
     KAFKA_ACLS_EXECUTABLES,
     KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
     KAFKA_CONFIGS_EXECUTABLES,
     KAFKA_CONSOLE_CONSUMER_EXECUTABLES,
     KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
-    KAFKA_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
@@ -677,10 +677,8 @@ def _check_profile_clients(
     if profiles is None:
         return []
     search_path = environment.get("PATH")
-    installed = (
-        ("kcat", _find_first(KCAT_EXECUTABLES, search_path)),
-        ("Kaskade", _find_first(KASKADE_EXECUTABLES, search_path)),
-        ("Apache/Confluent Java CLI", _find_first(KAFKA_EXECUTABLES, search_path)),
+    installed = tuple(
+        (adapter.name, _find_first(adapter.executables, search_path)) for adapter in CLIENT_ADAPTERS
     )
     checks: list[DoctorCheck] = []
     for name, profile in profiles.profiles.items():

@@ -8,10 +8,9 @@
   schema, fixture, example, template, and command. Replace obsolete or duplicate
   guidance.
 - Do not add empty modules or speculative adapters. Keep cyclomatic complexity
-  at or below 10 for new and materially changed functions; repository-wide Ruff
-  `C901` runs in `scripts.analyze`. Two existing functions (`session.py` and
-  `adapters.py`) carry narrow suppressions; remove those through focused
-  refactors rather than adding new suppressions.
+  at or below 10 in every function; repository-wide Ruff `C901` runs in
+  `scripts.analyze`. Do not add `# noqa: C901`; extract a real responsibility
+  instead.
 - Importing `kantrip` must have no filesystem, logging, console, or network side
   effects. Classify and redact values before presentation; keep behavior
   independent from Rich.
@@ -207,6 +206,11 @@
   Keep one argument policy shared by direct execution and shell shims. Apply
   explicit per-client rules to native connection, configuration-file, and
   runtime-property options while preserving resource and presentation options.
+- Describe each client family with one `ClientAdapter` in `kantrip/adapters.py`
+  and dispatch through it; do not add client-name branches to callers. Keep
+  native argument grammars in `adapter_policy.py` and shell quoting in
+  `adapter_shims.py` as explicit per-client functions, as mapped in
+  `ARCHITECTURE.md`.
 - `kantrip ping` polls Confluent Kafka's `AdminClient` statistics and error
   callbacks for a configured/learned addressable broker reaching `UP`; never use
   topic/group/schema/cluster resource APIs for Kafka success. Registry ping uses

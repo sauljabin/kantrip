@@ -163,8 +163,8 @@ JAAS for Java password mechanisms and native OAuth client-credentials settings.
 A Registry remains an independent connection; Kafka and Registry credentials
 are never inherited across those boundaries.
 
-The adapter capability table covers Apache/Confluent Java commands, kcat, and
-Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Java PEM profiles
+The adapter descriptors' capability matrix covers Apache/Confluent Java commands,
+kcat, and Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Java PEM profiles
 retain their installed-version gate; unsupported combinations fail before the
 requested client operation.
 
@@ -302,8 +302,11 @@ The shared resolver builds one authenticated in-memory model from a single
 profile generation. The session path renders that model without independent
 keyring queries from adapters.
 
-Generated properties, custom CA bundles, adapter files, and shims live only in
-the private session directory. A selected Kafka CA bundle is validated and copied into the profile as public material, then
+`session.py` runs a session in order: write the private Kafka and Registry key
+and CA files (mode 0600), render every client configuration file, build the
+scrubbed child environment, then prepare the direct command or the shell shims
+through the adapters. Generated properties, custom CA bundles, adapter files,
+and shims live only in the private session directory. A selected Kafka CA bundle is validated and copied into the profile as public material, then
 materialized privately for Java and librdkafka clients. Secrets do not appear
 in child arguments, diagnostics, snapshots, or normal output.
 
@@ -343,10 +346,30 @@ system stores, and later sessions remain unchanged.
 ## Client adapters
 
 An adapter recognizes the executable, rejects connection overrides, and injects
-native configuration. One capability table drives direct commands and shell
-shims. Both paths invoke the same argument guard before launching the native
+native configuration. Each client family is one `ClientAdapter` descriptor: its
+executables, its argument check, direct-command preparation, shim renderer, and
+missing-command hint, and its capability matrix (Kafka authentication, Registry
+providers, installed-version gates). Direct commands, shell shims, the shim-side
+argument guard, and `doctor` dispatch through the descriptor instead of
+branching on client names, so a new client adds a descriptor and its own
+functions. Both paths invoke the same argument guard before launching the native
 client; shell quoting and process supervision remain separate. Java custom-CA
 and mTLS execution also checks the installed client version.
+
+| Module | Responsibility | I/O |
+| --- | --- | --- |
+| `adapters.py` | `ClientAdapter` descriptors and lookup; direct-command, shim, and capability dispatch; installed-version probes | Runs `--version` probes; creates the shim directory |
+| `adapter_policy.py` | Executable names, the per-command Java option table, native argument grammars (kcat getopt clusters, Java and Kaskade long options), direct-command injection, per-client Registry compatibility | None |
+| `adapter_shims.py` | POSIX shim rendering and quoting | Writes mode-0700 shims |
+| `_adapter_guard.py` | Shim-side entry point that runs the descriptor's argument check | None |
+
+Configuration reaches each client natively: Java tools receive
+`--bootstrap-server` and their config-file option (Registry consoles also a
+formatter/reader config file and `schema.registry.url` property); kcat reads
+`KCAT_CONFIG` and receives `-r` only for Avro decoding; Kaskade `admin` and
+`consumer` receive `--config-file`. Two session steps remain client-specific in
+`session.py`: kcat's `-F` rejection before secrets are resolved, and the
+Kaskade Registry-OAuth `SSL_CERT_FILE` described above.
 
 | Client family | Profile-owned native inputs | Runtime inputs retained |
 | --- | --- | --- |
