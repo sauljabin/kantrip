@@ -218,6 +218,13 @@
 - Never expose sensitive values in arguments, fixtures, logs, output,
   diagnostics, tracebacks, or snapshots. Examples use conspicuously synthetic
   values and infrastructure.
+- Hold every secret in memory as `kantrip.secret_value.Secret`: prompt and
+  key-file input, auth inputs, `SecretReplacement`, and resolved Kafka, OAuth,
+  and Registry connections. `repr()` masks it; `str()`, `format()`, and
+  pickling raise. Call `reveal()` only where the value leaves the process
+  (client renderers, validators, ping requests, session key files, the
+  credential-store write); `tests/unit/tests_secret_value.py` enforces the
+  module allowlist.
 - Send results to stdout and diagnostics to stderr. Animate progress only on
   colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color`, and non-TTY output use
   stable text labels. Accept `--no-color` before or after a subcommand through
@@ -226,8 +233,10 @@
   `TERM=dumb`, and non-TTY streams must contain no ANSI escapes and remain valid
   structured documents.
 - Include a bounded, sanitized underlying cause in normal `ping` failures,
-  never a traceback. `ping --quiet` emits nothing and communicates only through
-  status `0` or `1`.
+  never a traceback. Report every attempted service: a Registry failure after
+  Kafka success keeps the Kafka result, and a Kafka failure reports the
+  Registry as skipped, never as passed or failed. `ping --quiet` emits nothing
+  and communicates only through status `0` or `1`.
 
 ## Tests, Scripts, and Sandbox
 

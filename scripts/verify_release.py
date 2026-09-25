@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+import sys
 import tarfile
+import tempfile
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
@@ -18,6 +21,11 @@ WHEEL_REQUIRED = {
 }
 
 SDIST_REQUIRED = {
+    ".github/actions/python-uv/action.yml",
+    ".github/actions/released-e2e-tools/action.yml",
+    ".github/workflows/e2e.yml",
+    ".github/workflows/main.yml",
+    ".github/workflows/release.yml",
     "AGENT.md",
     "ARCHITECTURE.md",
     "COMPATIBILITY.md",
@@ -58,6 +66,8 @@ SDIST_REQUIRED = {
     "tests/unit/tests_pki.py",
 }
 _FORBIDDEN_TEST_CREDENTIAL_SUFFIXES = (".crt", ".key", ".p12", ".pem", ".pfx")
+# Bundled tests that read repository metadata; they must pass from the extracted sdist.
+SDIST_SELF_CONTAINED_TESTS = ("tests.unit.tests_e2e_selection",)
 
 
 def one_artifact(dist: Path, pattern: str) -> Path:
@@ -115,6 +125,37 @@ def verify_sdist(sdist: Path, version: str) -> None:
             "source distribution contains committed test credential material: "
             + ", ".join(forbidden)
         )
+    verify_sdist_self_contained(sdist, expected_root.rstrip("/"))
+
+
+def verify_sdist_self_contained(sdist: Path, root_name: str) -> None:
+    """Run bundled checks that read repository metadata from the extracted sdist."""
+    with tempfile.TemporaryDirectory(prefix="kantrip-sdist-") as directory:
+        with tarfile.open(sdist, "r:gz") as archive:
+            _extract_safely(archive, Path(directory))
+        result = subprocess.run(
+            [sys.executable, "-m", "unittest", *SDIST_SELF_CONTAINED_TESTS],
+            cwd=Path(directory) / root_name,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=300,
+        )
+    if result.returncode != 0:
+        tail = "\n".join(result.stderr.strip().splitlines()[-15:])
+        raise ValueError(f"bundled checks fail from the extracted source distribution:\n{tail}")
+
+
+def _extract_safely(archive: tarfile.TarFile, destination: Path) -> None:
+    if hasattr(tarfile, "data_filter"):
+        archive.extractall(destination, filter="data")
+        return
+    root = destination.resolve()
+    for member in archive.getmembers():
+        target = (destination / member.name).resolve()
+        if not (member.isfile() or member.isdir()) or not target.is_relative_to(root):
+            raise ValueError(f"unsafe source distribution member: {member.name}")
+    archive.extractall(destination)
 
 
 def main() -> None:

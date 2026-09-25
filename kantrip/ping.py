@@ -37,6 +37,7 @@ from kantrip.registry import (
     resolve_registry_connection,
 )
 from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
+from kantrip.secret_value import reveal_optional
 
 _QUIET_KAFKA_LOGGER = logging.getLogger("kantrip.ping.librdkafka")
 _QUIET_KAFKA_LOGGER.addHandler(logging.NullHandler())
@@ -66,12 +67,23 @@ class RegistryPingResult:
 
 @dataclass(frozen=True)
 class PingResult:
-    """Transport and authentication evidence from a successful probe."""
+    """Kafka evidence plus the outcome of the configured Registry check.
+
+    Kafka always succeeded when a result exists. ``registry`` holds a verified
+    Registry observation and ``registry_error`` a Registry failure; both are
+    ``None`` when no Registry is configured.
+    """
 
     kafka_transport: str
     kafka_authentication: str
     proof: KafkaProof
     registry: RegistryPingResult | None = None
+    registry_error: PingError | None = None
+
+    @property
+    def healthy(self) -> bool:
+        """Return whether every attempted service check succeeded."""
+        return self.registry_error is None
 
 
 @dataclass
@@ -88,7 +100,12 @@ def ping_profile(
     resolved_registry: RegistryConnection | None | _UnresolvedRegistry = _UnresolvedRegistry.VALUE,
     secret_store: SecretStore | None = None,
 ) -> PingResult:
-    """Verify one real broker connection and the current Registry endpoint."""
+    """Verify one real broker connection, then the configured Registry endpoint.
+
+    Kafka failures raise ``PingError`` and the Registry is not attempted. A
+    Registry failure after Kafka success is returned in ``registry_error`` so the
+    verified Kafka observation is never discarded.
+    """
     deadline = time.monotonic() + timeout
     try:
         registry = (
@@ -112,8 +129,13 @@ def ping_profile(
         raise PingError(str(error)) from error
 
     _probe_kafka(connection, deadline)
-    registry_result = _registry_connectivity(registry, deadline) if registry is not None else None
     transport, authentication, proof = _kafka_observation(connection)
+    if registry is None:
+        return PingResult(transport, authentication, proof)
+    try:
+        registry_result = _registry_connectivity(registry, deadline)
+    except PingError as error:
+        return PingResult(transport, authentication, proof, registry_error=error)
     return PingResult(transport, authentication, proof, registry_result)
 
 
@@ -309,7 +331,7 @@ def _oauth_access_token(connection: RegistryConnection, deadline: float) -> str:
     if oauth is None or oauth.client_secret is None:
         raise PingError("Registry OAuth credentials are unresolved")
     encoded_client_id = quote_plus(oauth.client_id, safe="")
-    encoded_client_secret = quote_plus(oauth.client_secret, safe="")
+    encoded_client_secret = quote_plus(oauth.client_secret.reveal(), safe="")
     credential = base64.b64encode(f"{encoded_client_id}:{encoded_client_secret}".encode()).decode(
         "ascii"
     )
@@ -432,11 +454,11 @@ def _registry_ssl_context(
                 certificate_path = Path(directory) / "client.crt"
                 key_path = Path(directory) / "client.key"
                 write_exclusive_text(certificate_path, connection.client_certificate, mode=0o600)
-                write_exclusive_text(key_path, connection.private_key, mode=0o600)
+                write_exclusive_text(key_path, connection.private_key.reveal(), mode=0o600)
                 context.load_cert_chain(
                     certificate_path,
                     key_path,
-                    password=connection.private_key_password,
+                    password=reveal_optional(connection.private_key_password),
                 )
         except (OSError, ssl.SSLError) as error:
             raise PingError(
@@ -462,13 +484,13 @@ def _registry_auth_headers(connection: RegistryConnection) -> dict[str, str]:
         if connection.username is None or connection.password is None:
             raise PingError("Registry basic credentials are unresolved")
         credential = base64.b64encode(
-            f"{connection.username}:{connection.password}".encode()
+            f"{connection.username}:{connection.password.reveal()}".encode()
         ).decode("ascii")
         return {"Authorization": f"Basic {credential}"}
     if connection.auth_type == "token":
         if connection.token is None:
             raise PingError("Registry bearer token is unresolved")
-        return {"Authorization": f"Bearer {connection.token}"}
+        return {"Authorization": f"Bearer {connection.token.reveal()}"}
     return {}
 
 

@@ -14,6 +14,7 @@ from kantrip.credential_mutations import (
 from kantrip.migrations import apply_migrations
 from kantrip.reconciliation import pending_secret_cleanup, queue_secret_cleanup
 from kantrip.secret_store import SecretNotFoundError, SecretStoreError, secret_reference
+from kantrip.secret_value import Secret
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 OLD_CREDENTIAL_ID = "018f8f13-7c21-7cee-8000-000000000011"
@@ -37,7 +38,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("kafka/password", "synthetic-secret"),),
+            (SecretReplacement("kafka/password", Secret("synthetic-secret")),),
         )
 
         self.assertEqual(1, len(staged))
@@ -60,7 +61,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("kafka/password", "new-secret", old_reference),),
+            (SecretReplacement("kafka/password", Secret("new-secret"), old_reference),),
         )
 
         def switch(references: dict[str, str]) -> None:
@@ -95,7 +96,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("registry/token", "synthetic-token"),),
+            (SecretReplacement("registry/token", Secret("synthetic-token")),),
         )
 
         def fail_switch(references: dict[str, str]) -> None:
@@ -121,7 +122,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("kafka/password", "synthetic-secret"),),
+            (SecretReplacement("kafka/password", Secret("synthetic-secret")),),
         )
 
         with self.assertRaisesRegex(CredentialMutationError, "active credential"):
@@ -146,7 +147,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("kafka/password", "synthetic-secret"),),
+            (SecretReplacement("kafka/password", Secret("synthetic-secret")),),
         )
         self.connection.execute("UPDATE profiles SET revision = 2 WHERE id = ?", (PROFILE_ID,))
 
@@ -187,7 +188,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("registry/token", "new-token", old_reference),),
+            (SecretReplacement("registry/token", Secret("new-token"), old_reference),),
         )
         store.fail_delete.add(old_reference)
 
@@ -218,8 +219,8 @@ class TestCredentialMutations(unittest.TestCase):
                 store,
                 PROFILE_ID,
                 (
-                    SecretReplacement("kafka/password", "first-secret"),
-                    SecretReplacement("registry/password", "second-secret"),
+                    SecretReplacement("kafka/password", Secret("first-secret")),
+                    SecretReplacement("registry/password", Secret("second-secret")),
                 ),
             )
 
@@ -237,8 +238,8 @@ class TestCredentialMutations(unittest.TestCase):
                 store,
                 PROFILE_ID,
                 (
-                    SecretReplacement("kafka/password", "first-secret"),
-                    SecretReplacement("registry/password", "second-secret"),
+                    SecretReplacement("kafka/password", Secret("first-secret")),
+                    SecretReplacement("registry/password", Secret("second-secret")),
                 ),
             )
 
@@ -266,7 +267,7 @@ class TestCredentialMutations(unittest.TestCase):
             self.connection,
             store,
             PROFILE_ID,
-            (SecretReplacement("kafka/password", "active-secret"),),
+            (SecretReplacement("kafka/password", Secret("active-secret")),),
         )
 
         result = commit_secret_replacements(
@@ -320,10 +321,10 @@ class TestCredentialMutations(unittest.TestCase):
         )
         cases = (
             (
-                SecretReplacement("kafka/password", "one"),
-                SecretReplacement("kafka/password", "two"),
+                SecretReplacement("kafka/password", Secret("one")),
+                SecretReplacement("kafka/password", Secret("two")),
             ),
-            (SecretReplacement("kafka/password", "one", wrong_owner),),
+            (SecretReplacement("kafka/password", Secret("one"), wrong_owner),),
         )
         for replacements in cases:
             with (

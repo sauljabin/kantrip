@@ -21,6 +21,7 @@ from kantrip.oauth import (
     validate_oauth_identity,
 )
 from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
+from kantrip.secret_value import Secret, reveal_optional
 
 KafkaTransport = Literal["plaintext", "tls"]
 KafkaAuthType = Literal["none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth"]
@@ -57,9 +58,9 @@ class KafkaConnection:
     private_key_reference: str | None = None
     private_key_password_reference: str | None = None
     oauth: OAuthConnection | None = None
-    password: str | None = None
-    private_key: str | None = None
-    private_key_password: str | None = None
+    password: Secret | None = None
+    private_key: Secret | None = None
+    private_key_password: Secret | None = None
 
     @property
     def requires_secrets(self) -> bool:
@@ -99,9 +100,9 @@ def read_client_certificate(path: Path) -> str:
     )
 
 
-def read_private_key(path: Path, *, password: str | None = None) -> str:
+def read_private_key(path: Path, *, password: Secret | None = None) -> Secret:
     """Read and validate a bounded PEM private key without exposing its value."""
-    contents = _read_bounded_pem(path, MAX_CLIENT_PEM_BYTES, "Kafka client private key")
+    contents = Secret(_read_bounded_pem(path, MAX_CLIENT_PEM_BYTES, "Kafka client private key"))
     validate_private_key(contents, password=password)
     return contents
 
@@ -137,22 +138,24 @@ def validate_client_certificate(contents: str) -> str:
     return normalized
 
 
-def validate_private_key(contents: str, *, password: str | None = None) -> None:
+def validate_private_key(contents: Secret, *, password: Secret | None = None) -> None:
     """Reject malformed, mismatched-password, or unsupported PEM private keys."""
-    _load_private_key(contents, password=password)
+    _load_private_key(contents.reveal(), password=reveal_optional(password))
 
 
 def validate_client_identity(
     certificate: str,
-    private_key: str,
+    private_key: Secret,
     *,
-    password: str | None = None,
-) -> tuple[str, str]:
+    password: Secret | None = None,
+) -> tuple[str, Secret]:
     """Validate a client certificate chain and matching private key."""
     normalized_certificate = validate_client_certificate(certificate)
     try:
         certificates = x509.load_pem_x509_certificates(normalized_certificate.encode("utf-8"))
-        normalized_key, key = _load_private_key(private_key, password=password)
+        normalized_key, key = _load_private_key(
+            private_key.reveal(), password=reveal_optional(password)
+        )
         certificate_key = (
             certificates[0]
             .public_key()
@@ -169,7 +172,7 @@ def validate_client_identity(
         raise KafkaProfileError("Kafka client identity is invalid") from error
     if certificate_key != private_key_public:
         raise KafkaProfileError("Kafka client certificate does not match its private key")
-    return normalized_certificate, normalized_key
+    return normalized_certificate, Secret(normalized_key)
 
 
 def _load_private_key(contents: str, *, password: str | None) -> tuple[str, Any]:
@@ -231,14 +234,14 @@ def resolve_kafka_connection(
     try:
         if connection.auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
             assert connection.password_reference is not None
-            password = store.get(connection.password_reference)
+            password = Secret(store.get(connection.password_reference))
             validate_sasl_credential(password)
             return replace(connection, password=password)
         if connection.auth_type == "mtls":
             assert connection.private_key_reference is not None
-            key = store.get(connection.private_key_reference)
+            key = Secret(store.get(connection.private_key_reference))
             key_password = (
-                store.get(connection.private_key_password_reference)
+                Secret(store.get(connection.private_key_password_reference))
                 if connection.private_key_password_reference is not None
                 else None
             )
@@ -250,7 +253,7 @@ def resolve_kafka_connection(
             return replace(connection, private_key=key, private_key_password=key_password)
         if connection.auth_type == "oauth":
             assert connection.oauth is not None
-            client_secret = store.get(connection.oauth.client_secret_reference)
+            client_secret = Secret(store.get(connection.oauth.client_secret_reference))
             validate_sasl_credential(client_secret)
             return replace(
                 connection,
@@ -478,7 +481,7 @@ def _add_java_authentication(
                 "sasl.mechanism": mechanism,
                 "sasl.jaas.config": (
                     f"{login_module} required username={_jaas_value(connection.username)} "
-                    f"password={_jaas_value(connection.password)};"
+                    f"password={_jaas_value(connection.password.reveal())};"
                 ),
             }
         )
@@ -489,11 +492,11 @@ def _add_java_authentication(
             {
                 "ssl.keystore.type": "PEM",
                 "ssl.keystore.certificate.chain": connection.client_certificate,
-                "ssl.keystore.key": connection.private_key,
+                "ssl.keystore.key": connection.private_key.reveal(),
             }
         )
         if connection.private_key_password is not None:
-            properties["ssl.key.password"] = connection.private_key_password
+            properties["ssl.key.password"] = connection.private_key_password.reveal()
     elif connection.auth_type == "oauth":
         _add_java_oauth(properties, connection, oauth_ca_location)
 
@@ -527,7 +530,7 @@ def _add_java_oauth(
             ),
             "sasl.oauthbearer.token.endpoint.url": oauth.token_url,
             "sasl.oauthbearer.client.credentials.client.id": oauth.client_id,
-            "sasl.oauthbearer.client.credentials.client.secret": oauth.client_secret,
+            "sasl.oauthbearer.client.credentials.client.secret": oauth.client_secret.reveal(),
         }
     )
     if oauth.scopes:
@@ -552,7 +555,7 @@ def _add_librdkafka_authentication(
                 "security.protocol": "SASL_SSL",
                 "sasl.mechanism": connection.auth_type.upper().replace("PLAIN", "PLAIN"),
                 "sasl.username": connection.username,
-                "sasl.password": connection.password,
+                "sasl.password": connection.password.reveal(),
             }
         )
         return
@@ -567,14 +570,14 @@ def _add_librdkafka_authentication(
         raise KafkaProfileError("Kafka mTLS credentials are not resolved")
     if inline_client:
         properties["ssl.certificate.pem"] = connection.client_certificate
-        properties["ssl.key.pem"] = connection.private_key
+        properties["ssl.key.pem"] = connection.private_key.reveal()
     elif client_certificate_location is not None and private_key_location is not None:
         properties["ssl.certificate.location"] = str(client_certificate_location)
         properties["ssl.key.location"] = str(private_key_location)
     else:
         raise KafkaProfileError("Kafka mTLS credentials require private session files")
     if connection.private_key_password is not None:
-        properties["ssl.key.password"] = connection.private_key_password
+        properties["ssl.key.password"] = connection.private_key_password.reveal()
 
 
 def _add_librdkafka_oauth(
@@ -594,7 +597,7 @@ def _add_librdkafka_oauth(
             "sasl.oauthbearer.method": "oidc",
             "sasl.oauthbearer.token.endpoint.url": oauth.token_url,
             "sasl.oauthbearer.client.id": oauth.client_id,
-            "sasl.oauthbearer.client.secret": oauth.client_secret,
+            "sasl.oauthbearer.client.secret": oauth.client_secret.reveal(),
         }
     )
     if oauth.scopes:
@@ -609,12 +612,16 @@ def _add_librdkafka_oauth(
 
 
 def _jaas_value(value: str) -> str:
-    validate_sasl_credential(value)
+    _validate_credential_text(value)
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def validate_sasl_credential(value: str) -> None:
-    """Reject password values that cannot be represented safely for every renderer."""
+def validate_sasl_credential(value: Secret) -> None:
+    """Reject secret values that cannot be represented safely for every renderer."""
+    _validate_credential_text(value.reveal())
+
+
+def _validate_credential_text(value: str) -> None:
     if not value or any(character in value for character in ("\x00", "\r", "\n")):
         raise KafkaProfileError("Kafka credentials are empty or contain unsupported controls")
 

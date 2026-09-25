@@ -18,6 +18,7 @@ from kantrip.secret_store import (
     parse_secret_reference,
     secret_reference,
 )
+from kantrip.secret_value import Secret
 
 
 class CredentialMutationError(RuntimeError):
@@ -33,7 +34,7 @@ class SecretReplacement:
     """One new secret and the exact prior reference it supersedes, if any."""
 
     field: str
-    value: str
+    value: Secret
     previous_reference: str | None = None
 
 
@@ -125,8 +126,8 @@ def stage_secret_replacements(
 
     try:
         for item, replacement in zip(journaled, validated, strict=True):
-            store.set(item.reference, replacement.value)
-            if store.get(item.reference) != replacement.value:
+            store.set(item.reference, replacement.value.reveal())
+            if store.get(item.reference) != replacement.value.reveal():
                 raise CredentialMutationError("staged credential verification failed")
     except SecretStoreError as error:
         raise CredentialMutationError("profile credentials could not be staged") from error
@@ -273,7 +274,7 @@ def _validate_replacements(
     for replacement in replacements:
         if replacement.field in fields:
             raise CredentialMutationError("a credential field was supplied more than once")
-        if not isinstance(replacement.value, str) or not replacement.value:
+        if not isinstance(replacement.value, Secret) or not replacement.value:
             raise CredentialMutationError("credential values must be non-empty text")
         secret_reference(profile_id, replacement.field)
         if replacement.previous_reference is not None:

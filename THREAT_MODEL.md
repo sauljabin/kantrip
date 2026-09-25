@@ -246,6 +246,10 @@ Controls:
 - Create session roots and directories with mode `0700` and files through
   exclusive, restrictive creation.
 - Redact before presentation, independently of output styling.
+- Hold in-memory secrets in an opaque `Secret` type whose `repr()` is masked
+  and whose text conversion and pickling fail, so tracebacks, debuggers,
+  dataclass representations, and test failure messages cannot print them.
+  This does not protect process memory or a deliberate `reveal()` call.
 - Keep Registry credentials out of Kafka configuration unless a verified client
   requires one combined file.
 

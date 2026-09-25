@@ -171,7 +171,7 @@ def _run_in_runtime(  # noqa: C901
         certificate_path = session_directory / CLIENT_CERTIFICATE_FILENAME
         private_key_path = session_directory / CLIENT_KEY_FILENAME
         write_exclusive_text(certificate_path, kafka.client_certificate, mode=0o600)
-        write_exclusive_text(private_key_path, kafka.private_key, mode=0o600)
+        write_exclusive_text(private_key_path, kafka.private_key.reveal(), mode=0o600)
     oauth_ca_path: Path | None = None
     if kafka.oauth is not None and kafka.oauth.ca_certificates is not None:
         oauth_ca_path = session_directory / OAUTH_CA_BUNDLE_FILENAME
@@ -201,7 +201,7 @@ def _run_in_runtime(  # noqa: C901
         registry_certificate_path = session_directory / REGISTRY_CLIENT_CERTIFICATE_FILENAME
         registry_key_path = session_directory / REGISTRY_CLIENT_KEY_FILENAME
         write_exclusive_text(registry_certificate_path, registry.client_certificate, mode=0o600)
-        write_exclusive_text(registry_key_path, registry.private_key, mode=0o600)
+        write_exclusive_text(registry_key_path, registry.private_key.reveal(), mode=0o600)
     try:
         kcat_properties = librdkafka_properties(
             kafka,
