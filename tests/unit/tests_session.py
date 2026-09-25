@@ -11,6 +11,7 @@ from kantrip.adapters import (
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
     create_subshell_shims,
+    require_adapter_capability,
     require_kaskade_apicurio_security_support,
 )
 from kantrip.kafka import KafkaConnection
@@ -23,6 +24,109 @@ from kantrip.session import SessionError, _oauth_trust_bundle, run_profile_sessi
 from tests.unit.pki import synthetic_pki
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+
+
+_PEM_ERROR = "does not support PEM trust stores"
+_OAUTH_ERROR = "does not support Kantrip's native OAuth mapping"
+
+
+class TestJavaCapabilityParity(unittest.TestCase):
+    """Direct commands and shell shims apply the same Java version gates."""
+
+    # (custom CA, Kafka auth, client version, expected error or None)
+    CASES = (
+        (False, "none", "unknown", None),
+        (True, "none", "2.6.3", _PEM_ERROR),
+        (True, "none", "3.9.0", None),
+        (False, "oauth", "3.9.0", _OAUTH_ERROR),
+        (False, "oauth", "4.0.0", None),
+        (True, "oauth", "2.6.3", _PEM_ERROR),
+        (True, "oauth", "3.9.0", _OAUTH_ERROR),
+        (True, "oauth", "4.0.0", None),
+    )
+
+    def test_direct_and_shim_decisions_match(self) -> None:
+        for custom_pem, auth_type, version, expected in self.CASES:
+            with (
+                self.subTest(custom_pem=custom_pem, auth_type=auth_type, version=version),
+                tempfile.TemporaryDirectory() as root,
+            ):
+                root_path = Path(root)
+                probes = root_path / "probes"
+                for name in ("kafka-topics", "kafka-configs"):
+                    _write_java_client(root_path / name, version, probes)
+                environment = {"PATH": root}
+                gated = custom_pem or auth_type == "oauth"
+
+                direct_errors: dict[str, str | None] = {}
+                for name in ("kafka-topics", "kafka-configs"):
+                    probes.unlink(missing_ok=True)
+                    try:
+                        require_adapter_capability(
+                            name,
+                            auth_type=auth_type,
+                            custom_pem=custom_pem,
+                            environment=environment,
+                        )
+                    except AdapterError as error:
+                        direct_errors[name] = str(error)
+                    else:
+                        direct_errors[name] = None
+                    # PEM and OAuth gates share one `--version` run.
+                    self.assertEqual(int(gated), _probe_count(probes))
+                probes.unlink(missing_ok=True)
+
+                shim_directory = create_subshell_shims(
+                    root_path / "bin",
+                    bootstrap_servers="localhost:9093",
+                    java_config_path=root_path / "kafka.properties",
+                    kcat_config_path=root_path / "kcat.conf",
+                    kaskade_config_path=root_path / "kaskade.ini",
+                    kaskade_registry_config_path=root_path / "kaskade-registry.ini",
+                    environment=environment,
+                    require_java_pem=custom_pem,
+                    kafka_auth_type=auth_type,
+                )
+
+                # Two executables in one install directory share one probe.
+                self.assertEqual(int(gated), _probe_count(probes))
+                for name, direct_error in direct_errors.items():
+                    result = subprocess.run(
+                        [shim_directory / name, "--list"],
+                        env={},
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if expected is None:
+                        self.assertIsNone(direct_error)
+                        self.assertEqual(0, result.returncode, result.stderr)
+                        self.assertIn("CLIENT_LAUNCHED", result.stdout)
+                    else:
+                        assert direct_error is not None
+                        self.assertIn(expected, direct_error)
+                        self.assertTrue(direct_error.startswith(f"{name} "), direct_error)
+                        self.assertEqual(2, result.returncode)
+                        self.assertIn(direct_error, result.stderr)
+                        self.assertNotIn("CLIENT_LAUNCHED", result.stdout)
+
+
+def _write_java_client(path: Path, version: str, probes: Path) -> None:
+    path.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1-}" = --version ]; then\n'
+        f"  printf 'probe\\n' >> '{probes}'\n"
+        f"  printf '{version}\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf 'CLIENT_LAUNCHED\\n'\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o700)
+
+
+def _probe_count(probes: Path) -> int:
+    return len(probes.read_text(encoding="utf-8").splitlines()) if probes.exists() else 0
 
 
 class TestProfileSession(unittest.TestCase):

@@ -356,8 +356,10 @@ providers, installed-version gates). Direct commands, shell shims, the shim-side
 argument guard, and `doctor` dispatch through the descriptor instead of
 branching on client names, so a new client adds a descriptor and its own
 functions. Both paths invoke the same argument guard before launching the native
-client; shell quoting and process supervision remain separate. Java custom-CA
-and mTLS execution also checks the installed client version.
+client; shell quoting and process supervision remain separate. Direct commands,
+shims, and `doctor` also share one capability decision, which applies every
+installed-version gate the profile needs (Java PEM trust, Java OAuth, Kaskade
+Apicurio scopes) and runs a Java install directory's `--version` once.
 
 | Module | Responsibility | I/O |
 | --- | --- | --- |

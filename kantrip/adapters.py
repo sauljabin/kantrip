@@ -214,40 +214,26 @@ def _installed_executables(search_path: str) -> list[tuple[ClientAdapter, str, s
 
 @dataclass
 class _ShimCapabilityGates:
-    """Decide each installed shim's version gate, probing a Java install directory once."""
+    """Decide each installed shim's capability, probing a Java install directory once."""
 
     environment: Mapping[str, str]
     registry: RegistryConnection | None
     require_java_pem: bool
     kafka_auth_type: str
-    _java_errors: dict[tuple[str, Path], str | None] = field(default_factory=dict)
+    _java_probe: _JavaVersionProbe = field(default_factory=lambda: _JavaVersionProbe())
 
     def capability_error(self, adapter: ClientAdapter, executable: str) -> str | None:
-        registry = self.registry
-        if adapter.registry_version_gate and registry is not None:
-            return _gate_error(
-                lambda: require_kaskade_apicurio_security_support(
-                    executable, registry, environment=self.environment
-                )
+        return _gate_error(
+            lambda: _require_capability(
+                adapter,
+                executable,
+                auth_type=self.kafka_auth_type,
+                custom_pem=self.require_java_pem,
+                environment=self.environment,
+                registry=self.registry,
+                java_probe=self._java_probe,
             )
-        gate = self._java_gate(adapter)
-        if gate is None:
-            return None
-        key = (adapter.name, Path(executable).parent)
-        if key not in self._java_errors:
-            self._java_errors[key] = _gate_error(
-                lambda: gate(executable, environment=self.environment)
-            )
-        return self._java_errors[key]
-
-    def _java_gate(self, adapter: ClientAdapter) -> Callable[..., None] | None:
-        # A shim applies one Java gate per install directory: PEM support when
-        # the profile needs it, otherwise the OAuth mapping when Kafka uses OAuth.
-        if self.require_java_pem and adapter.pem_version_gate:
-            return require_java_pem_support
-        if self.kafka_auth_type == "oauth" and adapter.oauth_version_gate:
-            return require_java_oauth_support
-        return None
+        )
 
 
 def _gate_error(check: Callable[[], None]) -> str | None:
@@ -270,12 +256,35 @@ def require_adapter_capability(
     adapter = client_adapter(Path(executable).name)
     if adapter is None:
         return
+    _require_capability(
+        adapter,
+        executable,
+        auth_type=auth_type,
+        custom_pem=custom_pem,
+        environment=environment,
+        registry=registry,
+        java_probe=_JavaVersionProbe(),
+    )
+
+
+def _require_capability(
+    adapter: ClientAdapter,
+    executable: str,
+    *,
+    auth_type: str,
+    custom_pem: bool,
+    environment: Mapping[str, str],
+    registry: RegistryConnection | None,
+    java_probe: _JavaVersionProbe,
+) -> None:
+    # The one capability decision for direct commands and shell shims; every
+    # gate the profile needs applies, in this order.
     if auth_type not in adapter.kafka_authentication:
         raise AdapterError(f"{adapter.name} does not support Kafka authentication '{auth_type}'")
     if custom_pem and adapter.pem_version_gate:
-        require_java_pem_support(executable, environment=environment)
+        require_java_pem_support(executable, environment=environment, probe=java_probe)
     if auth_type == "oauth" and adapter.oauth_version_gate:
-        require_java_oauth_support(executable, environment=environment)
+        require_java_oauth_support(executable, environment=environment, probe=java_probe)
     if adapter.registry_version_gate and registry is not None:
         require_kaskade_apicurio_security_support(
             executable,
@@ -297,9 +306,12 @@ def require_java_pem_support(
     executable: str,
     *,
     environment: Mapping[str, str],
+    probe: _JavaVersionProbe | None = None,
 ) -> None:
     """Reject Java clients whose version cannot safely consume a PEM trust store."""
-    version = _java_client_version(executable, environment, capability="PEM trust-store")
+    version = _java_client_version(
+        executable, environment, capability="PEM trust-store", probe=probe or _JavaVersionProbe()
+    )
     if not _java_client_supports_pem(version):
         rendered_version = ".".join(str(part) for part in version)
         raise AdapterError(
@@ -312,9 +324,12 @@ def require_java_oauth_support(
     executable: str,
     *,
     environment: Mapping[str, str],
+    probe: _JavaVersionProbe | None = None,
 ) -> None:
     """Require the verified Apache Kafka 4.x native client-credentials callback."""
-    version = _java_client_version(executable, environment, capability="OAuth")
+    version = _java_client_version(
+        executable, environment, capability="OAuth", probe=probe or _JavaVersionProbe()
+    )
     if version[0] < 4:
         rendered_version = ".".join(str(part) for part in version)
         raise AdapterError(
@@ -391,10 +406,34 @@ def _java_client_version(
     environment: Mapping[str, str],
     *,
     capability: str,
+    probe: _JavaVersionProbe,
 ) -> tuple[int, int]:
     resolved = shutil.which(executable, path=environment.get("PATH"))
     if resolved is None:
         raise AdapterError(f"command '{Path(executable).name}' was not found")
+    version = probe(resolved, environment)
+    if version is None:
+        raise AdapterError(f"could not verify {capability} support for {Path(executable).name}")
+    return version
+
+
+class _JavaVersionProbe:
+    """Run a Java client's `--version` once per install directory."""
+
+    def __init__(self) -> None:
+        self._versions: dict[Path, tuple[int, int] | None] = {}
+
+    def __call__(self, resolved: str, environment: Mapping[str, str]) -> tuple[int, int] | None:
+        directory = Path(resolved).parent
+        if directory not in self._versions:
+            self._versions[directory] = _probe_java_client_version(resolved, environment)
+        return self._versions[directory]
+
+
+def _probe_java_client_version(
+    resolved: str,
+    environment: Mapping[str, str],
+) -> tuple[int, int] | None:
     try:
         result = subprocess.run(
             [resolved, "--version"],
@@ -405,14 +444,11 @@ def _java_client_version(
             check=False,
             env=dict(environment),
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise AdapterError(
-            f"could not verify {capability} support for {Path(executable).name}"
-        ) from error
-    version = _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
-    if result.returncode != 0 or version is None:
-        raise AdapterError(f"could not verify {capability} support for {Path(executable).name}")
-    return version
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
 
 
 def _java_client_supports_pem(version: tuple[int, int]) -> bool:
