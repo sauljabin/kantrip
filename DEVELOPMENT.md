@@ -312,6 +312,20 @@ separate environment, then set `KANTRIP_E2E_KANTRIP` to that environment's
 host endpoints, private file modes, and the native credential store before any
 product assertion.
 
+The preconditions require both `kcat` and its historical name `kafkacat`,
+because Kantrip supports both executables. Homebrew on macOS installs only
+`kcat`, and CI links the alias on Ubuntu as well. On macOS or Linux, if
+`kafkacat` is missing, link it into a user-owned directory on `PATH` such as
+`~/.local/bin`:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s "$(command -v kcat)" ~/.local/bin/kafkacat
+```
+
+`kafkacat -V` should then print the same version as `kcat -V`. If the command is
+not found, add `~/.local/bin` to `PATH` in your shell profile.
+
 Run the complete adapter, shell, authentication, authorization, and Registry
 renewal matrix against the already-running services:
 
