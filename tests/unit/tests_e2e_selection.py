@@ -15,6 +15,7 @@ from scripts.tests import (
     event_requires_e2e,
     push_requires_e2e,
     requires_e2e,
+    sandbox_state_dir,
     valid_e2e_result,
 )
 
@@ -26,6 +27,7 @@ class TestE2ESelection(unittest.TestCase):
             "DEVELOPMENT.md",
             "images/banner.svg",
             "site/index.html",
+            "site/demo.json",
             ".github/ISSUE_TEMPLATE/bug_report.yml",
             ".github/PULL_REQUEST_TEMPLATE/pull_request.md",
             "LICENSE",
@@ -53,6 +55,17 @@ class TestE2ESelection(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(requires_e2e((path,)))
+
+    def test_sandbox_state_falls_back_to_the_main_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main" / "sandbox" / ".state").mkdir(parents=True)
+            worktree = root / "worktree"
+            worktree.mkdir()
+            common = f"{root / 'main' / '.git'}\n"
+            with patch("scripts.tests.subprocess.check_output", return_value=common):
+                self.assertEqual(sandbox_state_dir(worktree), root / "main" / "sandbox" / ".state")
+            self.assertEqual(sandbox_state_dir(root / "main"), root / "main" / "sandbox" / ".state")
 
     def test_mixed_changes_and_rename_sides(self) -> None:
         diff = b"R100\0README.md\0kantrip/readme.py\0D\0tests/unit/old.py\0"

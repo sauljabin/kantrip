@@ -90,6 +90,7 @@ include = [
     "/sandbox",
     "/schemas",
     "/scripts",
+    "/site",
     "/tests",
 ]
 exclude = ["/sandbox/.state"]

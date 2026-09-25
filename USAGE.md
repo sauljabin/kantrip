@@ -411,6 +411,10 @@ Configure only the integration that renders your prompt:
 - Use **Powerlevel10k** if Powerlevel10k controls your prompt, even when it is
   installed through Oh My Zsh.
 - Use **Oh My Zsh** for a theme that uses the standard `PROMPT` variable.
+- Use **Bash** or **Fish** for their own prompt without a prompt framework.
+
+Kantrip keeps your normal startup files, so these settings also load inside the
+session.
 
 ### Choose a display style
 
@@ -534,6 +538,30 @@ p10k segment -f 5 -t "󱀏 ${KANTRIP_PROFILE}"
 
 Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
 `POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file.
+
+### Bash
+
+Add this to the end of `~/.bashrc`:
+
+```bash
+PS1='${KANTRIP_PROFILE:+kantrip:$KANTRIP_PROFILE }'"$PS1"
+```
+
+For a compact prefix, replace `kantrip:` with `🪄 `, `󱡄 `, or `󱀏 `.
+
+### Fish
+
+Add this to `~/.config/fish/config.fish`:
+
+```fish
+functions --copy fish_prompt kantrip_original_prompt
+function fish_prompt
+    set -q KANTRIP_PROFILE; and printf 'kantrip:%s ' $KANTRIP_PROFILE
+    kantrip_original_prompt
+end
+```
+
+For a compact prefix, replace `kantrip:` with `🪄 `, `󱡄 `, or `󱀏 `.
 
 ### Verify the prompt
 

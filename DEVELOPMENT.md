@@ -404,6 +404,103 @@ Exact `vMAJOR.MINOR.PATCH` tags, optionally suffixed with PEP 440 `aN`, `bN`, or
 `rcN`, define releases. Untagged builds use hatch-vcs development metadata; its
 fallback only bootstraps empty or exported checkouts.
 
+## Website
+
+The project site at `https://sauljabin.github.io/kantrip/` is plain HTML, CSS,
+and vanilla JavaScript in `site/`, with no framework, build step, web fonts,
+analytics, cookies, or third-party requests. Deployment uploads the directory
+as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
+the same transcript as static text between the `demo-transcript` markers, so the
+page works without JavaScript, for screen readers, and with reduced motion.
+`site/site.js` replays that static transcript; it has no separate copy of the
+data. Links and assets are relative so the site works under the `/kantrip/`
+path.
+
+Validate the site, then regenerate the static transcript after editing
+`site/demo.json`:
+
+```bash
+uv run --locked python -m scripts.website check
+uv run --locked python -m scripts.website render
+```
+
+`check` verifies that the transcript matches the data file, that local links,
+assets, and anchors exist, that repository links point to existing files, that
+nothing is requested from another origin, that JavaScript and CSS stay under
+30 KB, and that the demo contains no sandbox-specific values. It also runs
+`kantrip COMMAND --help` for every `kantrip` command in the demo and fails when
+a command or option no longer exists, so a CLI rename must update the demo in
+the same pull request.
+
+Preview the site under the same `/kantrip/` prefix that GitHub Pages uses, on
+macOS or Linux:
+
+```bash
+pages="$(mktemp -d)"
+ln -s "$PWD/site" "$pages/kantrip"
+python3 -m http.server 8000 --bind 127.0.0.1 --directory "$pages"
+```
+
+Open `http://127.0.0.1:8000/kantrip/`. Before merging visual changes, check
+phone width (320 px), keyboard-only navigation of the copy and demo controls,
+JavaScript disabled, light and dark color schemes, and `prefers-reduced-motion`,
+in a Chromium- or Firefox-based browser on macOS or Linux.
+
+The `Pages` workflow validates the site on every pull request with read-only
+permissions and never deploys from one. It runs even when `site/` is unchanged,
+because a CLI change can break the demo commands. On pushes to `main` it
+uploads `site/` and deploys it; only the deploy job has `pages: write` and
+`id-token: write`. It requires this one-time repository setup:
+
+- Settings > Pages > Build and deployment > Source: **GitHub Actions**.
+- Settings > Environments > `github-pages` (created with the first setting) >
+  Deployment branches and tags: **Selected branches and tags**, allowing only
+  `main`.
+
+### Recapture the terminal demo
+
+The demo output comes from a real run against the sandbox, made generic.
+`site/demo.json` keeps the generic commands (`prod`, `kafka.example.com:9093`,
+`./ca.pem`, `app`); edit a command there, then recapture whenever a change can
+affect the demo's options or Kantrip's output style. With the sandbox running
+and `kcat` and `kafka-topics` on `PATH`:
+
+```bash
+uv run --locked python -m scripts.website capture
+```
+
+`capture` substitutes the sandbox's SCRAM-SHA-512 listener, CA, and user for the
+generic values, adds a temporary profile to a private temporary database, and
+creates two `kantrip-auth-site-demo-*` topics for the metadata and topic listing.
+It runs every step in a real terminal, so Kantrip prints its colored output,
+and types the sandbox password into the no-echo prompt. The password is read
+from `sandbox/.state` inside the process and is never printed; a capture that
+contains it anywhere fails without writing. The interactive session runs its
+commands in Bash between markers, so your shell prompt is not recorded.
+Terminal colors map back to the Arcana style names and the output is translated
+to the generic values; private session paths become a generic Linux runtime
+path. librdkafka's failed connection attempts to localhost's IPv6 address are
+dropped, because the sandbox listens on IPv4 loopback only and a real broker
+host does not produce them. The capture then rewrites `site/demo.json` and the
+static transcript, and runs `check`; it writes nothing if sandbox values remain. The topics and the profile, including its credential-store
+entry, are removed even when a step fails. From a Git worktree without its own
+sandbox state, `capture` uses the main checkout's `sandbox/.state`; pass
+`--state-dir` to choose another directory.
+
+The interactive session runs Zsh without global startup files and with a
+private `.zshrc` whose prompt shows `$KANTRIP_PROFILE`, as in
+[Usage](USAGE.md#displaying-the-active-profile-in-your-prompt), so the demo shows the
+active profile the way users configure it. Output is deterministic (kcat topics
+are sorted by name), so an unchanged CLI recaptures an identical file.
+
+The `site-demo` pre-commit hook runs `capture` when staged changes touch
+`kantrip/`, `site/demo.json`, `scripts/website.py`, `scripts/__init__.py`, or the
+dependency files. Like the `banner` hook, it rewrites files and fails the commit
+when the demo changed; review and stage `site/demo.json` and `site/index.html`,
+then commit again. It needs the running sandbox, the same as E2E-impacting
+changes. Skip it for one commit only when the demo cannot change, with
+`SKIP=site-demo git commit ...`.
+
 ## Architecture and security
 
 - Stable design decisions: [Architecture](ARCHITECTURE.md)
