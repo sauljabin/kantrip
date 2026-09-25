@@ -231,6 +231,10 @@ class FakeLab:
             )
         if "kcat" in arguments:
             return 0, (
+                "% Reading configuration from file /var/folders/x/T/kantrip-501/sessions/"
+                "session-0a1b/kcat.conf\r\n"
+                "%3|1790364171.651|FAIL|rdkafka#producer-1| [thrd:sasl_ssl://localhost:9094/0]: "
+                "Connect to ipv6#[::1]:9094 failed: Connection refused\r\n"
                 "Metadata for all topics (from broker 0: sasl_ssl://localhost:9094/0):\r\n"
                 " 1 brokers:\r\n  broker 0 at localhost:9094 (controller)\r\n"
             )
@@ -301,6 +305,18 @@ class TestDemoCapture(unittest.TestCase):
                     "text": "✅ Kafka transport: verified TLS; authentication: SCRAM-SHA-512",
                     "style": "success",
                 }
+            ],
+        )
+        self.assertEqual(
+            outputs[2][:2],
+            [
+                {
+                    "text": "% Reading configuration from file /run/user/1000/kantrip/"
+                    "sessions/session-5f0c2a9d4b7e41c8a3d6e9f1b2c4a7d0/kcat.conf"
+                },
+                {
+                    "text": "Metadata for all topics (from broker 0: sasl_ssl://kafka.example.com:9093/0):"
+                },
             ],
         )
         self.assertIn({"text": "  broker 0 at kafka.example.com:9093 (controller)"}, outputs[2])

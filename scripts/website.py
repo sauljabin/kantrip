@@ -336,13 +336,19 @@ SANDBOX_USERNAME = "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"
 SANDBOX_PASSWORD = "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"
 SECRET_PROMPT = "Kafka password"
 SECRET_PROMPT_WAIT_MS = 1400
-TERMINAL_COLUMNS = 120
+TERMINAL_COLUMNS = 400
 STYLE_BY_COLOR = {
     **{value.lstrip("#").lower(): name for name, value in ARCANA_COLORS.items()},
     "brightblack": "muted",
 }
 DEFAULT_STYLES = frozenset({"default", "foreground"})
 SESSION_MARKER = "__KANTRIP_SITE_DEMO_{}__"
+# Private session paths differ per run and platform; show a generic Linux one.
+SESSION_PATH = re.compile(r"/\S*?/kantrip(?:-\d+)?/sessions/session-[0-9a-f]+/")
+GENERIC_SESSION_PATH = "/run/user/1000/kantrip/sessions/session-5f0c2a9d4b7e41c8a3d6e9f1b2c4a7d0/"
+# The sandbox binds IPv4 loopback only, so librdkafka's first try of localhost's
+# IPv6 address fails; a real broker host does not produce these lines.
+SANDBOX_NOISE = re.compile(r"^%\d\|[\d.]+\|FAIL\|.*Connect to ipv6#\[::1\]:")
 
 TerminalRunner = Callable[..., tuple[int, str]]
 CommandRunner = Callable[[Sequence[str], Mapping[str, str]], tuple[int, str]]
@@ -385,6 +391,7 @@ class CaptureTarget:
             **CAPTURE_TOPICS,
             CAPTURE_PROFILE: GENERIC_PROFILE,
         }
+        text = SESSION_PATH.sub(GENERIC_SESSION_PATH, text)
         for sandbox_value in sorted(replacements, key=len, reverse=True):
             text = text.replace(sandbox_value, replacements[sandbox_value])
         return text
@@ -403,7 +410,11 @@ def screen_lines(
     """Map screen rows to generic demo lines, trimming surrounding blank rows."""
     screen = render_screen(output) if isinstance(output, str) else output
     selected = range(screen.lines) if rows is None else rows
-    lines = [_screen_line(screen, row, target) for row in selected]
+    lines = [
+        _screen_line(screen, row, target)
+        for row in selected
+        if not SANDBOX_NOISE.match(_row_text(screen, row))
+    ]
     while lines and not lines[-1]["text"]:
         lines.pop()
     while lines and not lines[0]["text"]:
@@ -538,7 +549,7 @@ class DemoCapture:
     def _session(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
         """Run the commands between 'kantrip exec PROFILE' and 'exit' in its subshell."""
         commands = [step["command"] for step in steps[1:-1]]
-        with tempfile.TemporaryDirectory(prefix="kantrip-site-demo-") as directory:
+        with tempfile.TemporaryDirectory(prefix="kantrip-demo-session-") as directory:
             driver = Path(directory) / "commands"
             lines = []
             for index, command in enumerate(commands):
@@ -608,7 +619,7 @@ def sandbox_target(state_dir: Path) -> Iterator[CaptureTarget]:
     if not ca_file.is_file():
         raise CaptureError(f"{ca_file} is missing; run 'python -m sandbox up' first")
     credentials = load_credentials(state_dir / "credentials.env")
-    with tempfile.TemporaryDirectory(prefix="kantrip-site-demo-db-") as directory:
+    with tempfile.TemporaryDirectory(prefix="kantrip-demo-db-") as directory:
         yield CaptureTarget(
             kantrip=kantrip,
             ca_file=ca_file,
@@ -629,7 +640,11 @@ def capture_demo(demo: Mapping[str, Any], capture: DemoCapture) -> dict[str, Any
         "'python -m scripts.website capture' against the local sandbox's SCRAM-SHA-512 "
         "TLS listener; hosts, names, paths, and topics are made generic."
     )
-    return {"capture": note, "steps": steps}
+    captured = {"capture": note, "steps": steps}
+    errors = check_demo_content(captured)
+    if errors:
+        raise CaptureError("\n".join(("the capture was not written:", *errors)))
+    return captured
 
 
 def write_demo(demo: Mapping[str, Any]) -> None:

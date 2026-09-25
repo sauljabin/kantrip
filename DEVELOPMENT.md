@@ -477,9 +477,12 @@ and types the sandbox password into the no-echo prompt. The password is read
 from `sandbox/.state` inside the process and is never printed; a capture that
 contains it anywhere fails without writing. The interactive session runs its
 commands in Bash between markers, so your shell prompt is not recorded.
-Terminal colors map back to the Arcana style names, the output is translated to
-the generic values, `site/demo.json` and the static transcript are rewritten,
-and `check` runs. The topics and the profile, including its credential-store
+Terminal colors map back to the Arcana style names and the output is translated
+to the generic values; private session paths become a generic Linux runtime
+path. librdkafka's failed connection attempts to localhost's IPv6 address are
+dropped, because the sandbox listens on IPv4 loopback only and a real broker
+host does not produce them. The capture then rewrites `site/demo.json` and the
+static transcript, and runs `check`; it writes nothing if sandbox values remain. The topics and the profile, including its credential-store
 entry, are removed even when a step fails. From a Git worktree without its own
 sandbox state, pass `--state-dir` with the main checkout's `sandbox/.state`.
 
