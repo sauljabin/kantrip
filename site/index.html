@@ -111,18 +111,21 @@
         <p>Passwords, private keys, and client secrets are collected without echo and stored in
           macOS Keychain or Linux Secret Service. They never appear in profile documents,
           command arguments, or <code>describe</code> output.</p>
+        <p class="card-command" aria-hidden="true">kantrip add prod</p>
       </li>
       <li class="card">
         <h3>One profile for every client</h3>
         <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's schema console clients, and
           Kaskade each receive private configuration generated from the same profile, with
           connection overrides blocked.</p>
+        <p class="card-command" aria-hidden="true">kantrip exec prod -- kcat -L</p>
       </li>
       <li class="card">
         <h3>Supervised, self-cleaning sessions</h3>
         <p>Commands and Bash, Zsh, or Fish subshells run supervised, with signals forwarded and
           exit codes preserved. Private session files are cleaned up, and stale sessions are
           recovered automatically or with <code>kantrip doctor --repair</code>.</p>
+        <p class="card-command" aria-hidden="true">kantrip doctor --repair</p>
       </li>
     </ul>
   </section>
@@ -194,6 +197,7 @@
 
 <footer class="site-footer">
   <div class="container">
+    <p class="footer-brand"><strong><svg class="wand" aria-hidden="true" focusable="false"><use href="#wand"/></svg>kantrip</strong><span>switch kafka profiles like magic</span></p>
     <nav aria-label="Project">
       <ul class="nav-list">
         <li><a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md">Usage</a></li>

@@ -2,9 +2,12 @@
 :root {
   --bg: #071426;
   --surface: #0c1d35;
-  --terminal: #071426;
   --fg: #eff6ff;
+  --text: #c5d3e8;
   --muted: #9db0c8;
+  --link: #60a5fa;
+  --glow: rgb(59 130 246 / 0.22);
+  --shadow: none;
   --border: rgb(239 246 255 / 0.35);
   --primary: #3b82f6;
   --secondary: #22d3ee;
@@ -23,11 +26,14 @@
 /* Same hues, darkened for WCAG AA contrast on light surfaces. */
 @media (prefers-color-scheme: light) {
   :root {
-    --bg: #f4f7fc;
+    --bg: #eef3fb;
     --surface: #ffffff;
-    --terminal: #ffffff;
     --fg: #0b1b33;
+    --text: #33445c;
     --muted: #4a5b72;
+    --link: #1d4ed8;
+    --glow: rgb(59 130 246 / 0.12);
+    --shadow: 0 1px 2px rgb(11 27 51 / 0.06), 0 8px 24px rgb(11 27 51 / 0.07);
     --border: rgb(11 27 51 / 0.3);
     --primary: #1d4ed8;
     --secondary: #0e7490;
@@ -54,9 +60,19 @@ html {
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
+  background:
+    radial-gradient(80rem 36rem at 50% -8rem, var(--glow), transparent 70%) no-repeat,
+    var(--bg);
+  color: var(--text);
   font: 1rem/1.6 var(--sans);
+}
+
+h1,
+h2,
+h3,
+strong,
+dt {
+  color: var(--fg);
 }
 
 h1,
@@ -92,7 +108,7 @@ p {
 }
 
 a {
-  color: var(--accent);
+  color: var(--link);
   text-underline-offset: 0.2em;
 }
 
@@ -209,13 +225,46 @@ code {
   margin-bottom: 1rem;
 }
 
-/* Terminal window, as in images/banner.svg */
+.footer-brand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  font-family: var(--mono);
+}
+
+.footer-brand strong {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.footer-brand span {
+  color: var(--secondary);
+}
+
+/* Terminal window, as in images/banner.svg. Terminals keep the Arcana navy in
+   both color schemes, like the CLI's own dark theme. */
 .window {
+  --fg: #eff6ff;
+  --muted: #9db0c8;
+  --border: rgb(239 246 255 / 0.35);
+  --primary: #3b82f6;
+  --secondary: #22d3ee;
+  --accent: #60a5fa;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --error: #fb7185;
+  --wand: #a16207;
+  --focus: #fbbf24;
   margin: 0;
   overflow: hidden;
-  background: var(--terminal);
+  color: var(--fg);
+  background: #071426;
   border: 1px solid var(--border);
   border-radius: 8px;
+  box-shadow: var(--shadow);
 }
 
 .window-bar {
@@ -466,14 +515,41 @@ pre {
 }
 
 .card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   padding: 1.25rem;
   background: var(--surface);
   border: 1px solid var(--border);
+  border-top: 3px solid var(--card-accent, var(--primary));
   border-radius: 8px;
+  box-shadow: var(--shadow);
 }
 
+.card:nth-child(2) {
+  --card-accent: var(--secondary);
+}
+
+.card:nth-child(3) {
+  --card-accent: var(--success);
+}
+
+.card h3,
 .card p {
   margin: 0;
+}
+
+.card-command {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  color: var(--muted);
+  font: 0.85rem var(--mono);
+  border-top: 1px dashed var(--border);
+}
+
+.card-command::before {
+  content: "❯ ";
+  color: var(--card-accent, var(--primary));
 }
 
 .clients {
@@ -481,6 +557,11 @@ pre {
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   gap: 1rem 2rem;
   margin: 0 0 1.5rem;
+}
+
+.clients > div {
+  padding-left: 0.9rem;
+  border-left: 2px solid var(--accent);
 }
 
 .clients dt {

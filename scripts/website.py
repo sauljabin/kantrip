@@ -237,7 +237,9 @@ def run_kantrip_help(command: tuple[str, ...]) -> str | None:
 
 
 def check_demo_commands(
-    demo: Mapping[str, Any], help_runner: HelpRunner = run_kantrip_help
+    demo: Mapping[str, Any],
+    help_runner: HelpRunner = run_kantrip_help,
+    source: str = "site/demo.json",
 ) -> list[str]:
     """Fail when the demo uses a kantrip command or option the CLI does not define."""
     errors: list[str] = []
@@ -245,11 +247,11 @@ def check_demo_commands(
         label = " ".join(("kantrip", *command))
         help_text = help_runner(command)
         if help_text is None:
-            errors.append(f"site/demo.json: '{label}' is not a kantrip command")
+            errors.append(f"{source}: '{label}' is not a kantrip command")
             continue
         known = help_options(help_text)
         errors.extend(
-            f"site/demo.json: '{label}' has no option {option}"
+            f"{source}: '{label}' has no option {option}"
             for option in options
             if option not in known
         )
@@ -329,10 +331,18 @@ def check_asset_budget(site_root: Path) -> list[str]:
     return []
 
 
+def page_commands(index_text: str) -> dict[str, Any]:
+    """Commands shown outside the demo, such as the cards' command lines."""
+    commands = re.findall(r'<p class="card-command"[^>]*>([^<]+)</p>', index_text)
+    return {"steps": [{"command": html.unescape(command)} for command in commands]}
+
+
 def check_site(help_runner: HelpRunner = run_kantrip_help) -> list[str]:
     demo = load_demo()
+    index_text = INDEX_PATH.read_text(encoding="utf-8")
     return [
-        *check_transcript(demo, INDEX_PATH.read_text(encoding="utf-8")),
+        *check_transcript(demo, index_text),
+        *check_demo_commands(page_commands(index_text), help_runner, "site/index.html"),
         *check_demo_content(demo),
         *check_pages(SITE_ROOT),
         *check_asset_budget(SITE_ROOT),

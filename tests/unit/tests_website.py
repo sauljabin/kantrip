@@ -28,6 +28,7 @@ from scripts.website import (
     help_options,
     kantrip_invocations,
     load_demo,
+    page_commands,
     render_index,
     render_transcript,
     screen_lines,
@@ -89,6 +90,16 @@ class TestDemoCommands(unittest.TestCase):
         self.assertEqual(
             check_demo_commands(demo, cli_help),
             ["site/demo.json: 'kantrip import' is not a kantrip command"],
+        )
+
+    def test_card_commands_are_checked_too(self) -> None:
+        page = (
+            '<p class="card-command" aria-hidden="true">kantrip doctor prod --sessions</p>'
+            '<p class="card-command">kantrip doctor prod --session</p>'
+        )
+        self.assertEqual(
+            check_demo_commands(page_commands(page), cli_help, "site/index.html"),
+            ["site/index.html: 'kantrip doctor' has no option --session"],
         )
 
     def test_help_options_read_only_option_rows(self) -> None:
