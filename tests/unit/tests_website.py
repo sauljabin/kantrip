@@ -25,6 +25,7 @@ from scripts.website import (
     check_demo_content,
     check_pages,
     check_site,
+    check_social_preview,
     check_transcript,
     help_options,
     kantrip_invocations,
@@ -202,6 +203,25 @@ class TestPages(unittest.TestCase):
         self.assertIn("third-party request", errors[0])
         self.assertIn("/kantrip/", errors[1])
         self.assertIn("GONE.md", errors[6])
+
+    def test_social_preview_must_exist_with_its_declared_size(self) -> None:
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + (1280).to_bytes(4, "big")
+        png += (640).to_bytes(4, "big")
+        head = (
+            '<meta property="og:url" content="https://sauljabin.github.io/kantrip/">'
+            '<meta property="og:image" content="https://sauljabin.github.io/kantrip/card.png">'
+            '<meta property="og:image:width" content="1280">'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory)
+            (site / "index.html").write_text(head, encoding="utf-8")
+            self.assertEqual(len(check_social_preview(site)), 1)
+            (site / "card.png").write_bytes(png)
+            self.assertIn("declares", check_social_preview(site)[0])
+            (site / "index.html").write_text(
+                head + '<meta property="og:image:height" content="640">', encoding="utf-8"
+            )
+            self.assertEqual(check_social_preview(site), [])
 
     def test_repository_site_passes(self) -> None:
         self.assertEqual(check_site(cli_help), [])

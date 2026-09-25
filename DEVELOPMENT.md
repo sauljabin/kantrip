@@ -446,6 +446,22 @@ phone width (320 px), keyboard-only navigation of the copy and demo controls,
 JavaScript disabled, light and dark color schemes, and `prefers-reduced-motion`,
 in a Chromium- or Firefox-based browser on macOS or Linux.
 
+The social preview (`og:image`, 1280×640) is `site/social-preview.png`, rendered
+from `images/social-preview.svg` with headless Chrome or Chromium. The same
+image is the repository's social preview, uploaded under Settings > General >
+Social preview; GitHub has no API for it. After editing the SVG, render it on
+macOS or Linux:
+
+```bash
+chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"  # Linux: chromium
+"$chrome" --headless=new --hide-scrollbars --force-device-scale-factor=1 \
+  --window-size=1280,640 --screenshot="$PWD/site/social-preview.png" \
+  "file://$PWD/images/social-preview.svg"
+```
+
+The PNG uses the rendering machine's monospace font, so check it before
+committing; `check` verifies that the file exists and matches the declared size.
+
 The `Pages` workflow validates the site on every pull request with read-only
 permissions and never deploys from one. It runs even when `site/` is unchanged,
 because a CLI change can break the demo commands. On pushes to `main` it
