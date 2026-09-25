@@ -404,6 +404,86 @@ Exact `vMAJOR.MINOR.PATCH` tags, optionally suffixed with PEP 440 `aN`, `bN`, or
 `rcN`, define releases. Untagged builds use hatch-vcs development metadata; its
 fallback only bootstraps empty or exported checkouts.
 
+## Website
+
+The project site at `https://sauljabin.github.io/kantrip/` is plain HTML, CSS,
+and vanilla JavaScript in `site/`, with no framework, build step, web fonts,
+analytics, cookies, or third-party requests. Deployment uploads the directory
+as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
+the same transcript as static text between the `demo-transcript` markers, so the
+page works without JavaScript, for screen readers, and with reduced motion.
+`site/site.js` replays that static transcript; it has no separate copy of the
+data. Links and assets are relative so the site works under the `/kantrip/`
+path.
+
+Validate the site, then regenerate the static transcript after editing
+`site/demo.json`:
+
+```bash
+uv run --locked python -m scripts.website check
+uv run --locked python -m scripts.website render
+```
+
+`check` verifies that the transcript matches the data file, that local links,
+assets, and anchors exist, that repository links point to existing files, that
+nothing is requested from another origin, that JavaScript and CSS stay under
+30 KB, and that the demo contains no sandbox-specific values. It also runs
+`kantrip COMMAND --help` for every `kantrip` command in the demo and fails when
+a command or option no longer exists, so a CLI rename must update the demo in
+the same pull request.
+
+Preview the site under the same `/kantrip/` prefix that GitHub Pages uses, on
+macOS or Linux:
+
+```bash
+pages="$(mktemp -d)"
+ln -s "$PWD/site" "$pages/kantrip"
+python3 -m http.server 8000 --bind 127.0.0.1 --directory "$pages"
+```
+
+Open `http://127.0.0.1:8000/kantrip/`. Before merging visual changes, check
+phone width (320 px), keyboard-only navigation of the copy and demo controls,
+JavaScript disabled, light and dark color schemes, and `prefers-reduced-motion`,
+in a Chromium- or Firefox-based browser on macOS or Linux.
+
+The `Pages` workflow validates the site on every pull request with read-only
+permissions and never deploys from one. It runs even when `site/` is unchanged,
+because a CLI change can break the demo commands. On pushes to `main` it
+uploads `site/` and deploys it; only the deploy job has `pages: write` and
+`id-token: write`. It requires this one-time repository setup:
+
+- Settings > Pages > Build and deployment > Source: **GitHub Actions**.
+- Settings > Environments > `github-pages` (created with the first setting) >
+  Deployment branches and tags: **Selected branches and tags**, allowing only
+  `main`.
+
+### Recapture the terminal demo
+
+The demo output must come from a real run against the sandbox, then be made
+generic. From an up-to-date `main` checkout with the sandbox running
+(`uv run --locked python -m sandbox up`), run in an interactive terminal:
+
+```bash
+uv run --locked kantrip add site-demo -b localhost:9094 --transport tls --ca-file sandbox/.state/ca.crt --auth scram-sha-512 --username kantrip-scram
+uv run --locked kantrip ping site-demo
+uv run --locked kantrip exec site-demo -- kcat -L
+uv run --locked kantrip exec site-demo
+```
+
+Type the SCRAM-SHA-512 password at the no-echo prompt yourself; never paste it
+into a file, a command, or an AI session. In the subshell run `kantrip current`,
+`kafka-topics --list`, and `exit`, then remove the profile with
+`uv run --locked kantrip remove site-demo --force`.
+
+Copy only the commands and their output into `site/demo.json`. Replace the
+profile with `prod`, the broker with `kafka.example.com:9093`, the CA path with
+`./ca.pem`, the user with `app`, the database path with
+`/home/demo/.local/share/kantrip/profiles.db`, and topic names with synthetic
+ones. Keep the wording, order, and emoji of Kantrip's lines, trim long `kcat`
+metadata, and record the date and client versions in the `capture` note. Colors
+follow the CLI styles in `kantrip/console.py` (`"style": "success"` for a
+passed ping). Then run `render` and `check`.
+
 ## Architecture and security
 
 - Stable design decisions: [Architecture](ARCHITECTURE.md)

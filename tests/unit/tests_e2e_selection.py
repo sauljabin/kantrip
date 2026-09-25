@@ -26,6 +26,7 @@ class TestE2ESelection(unittest.TestCase):
             "DEVELOPMENT.md",
             "images/banner.svg",
             "site/index.html",
+            "site/demo.json",
             ".github/ISSUE_TEMPLATE/bug_report.yml",
             ".github/PULL_REQUEST_TEMPLATE/pull_request.md",
             "LICENSE",

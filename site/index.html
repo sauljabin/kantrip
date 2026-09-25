@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark light">
+<title>Kantrip: switch Kafka profiles like magic</title>
+<meta name="description" content="Kantrip securely manages Kafka profiles for kcat, the official Kafka CLIs, Kaskade, and compatible applications, keeping secrets in the OS credential store.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+<script src="site.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="wand" viewBox="0 0 95 95"><path d="M 69 36.8 C 66 36.8 63.4 35.7 61.2 33.6 C 59.1 31.4 58.1 28.9 58.1 25.8 C 58.1 22.8 59.1 20.2 61.2 18 C 63.4 15.8 66 14.7 69 14.7 C 72 14.7 74.7 15.8 76.8 18 C 79 20.2 80.1 22.8 80.1 25.8 C 80.1 28.9 79 31.4 76.8 33.6 C 74.7 35.7 72 36.8 69 36.8Z M 55.6 33.1 L 0.9 87.7 L 7.1 93.9 L 61.8 39.2 C 59.2 37.7 57.1 35.6 55.6 33.1Z M 49.2 19.2 L 52.1 13.1 L 58.1 10.4 L 52.1 7.7 L 49.2 1.5 L 46.5 7.7 L 40.5 10.4 L 46.5 13.1Z M 84.4 19.2 L 87.1 13.1 L 93.3 10.4 L 87.1 7.7 L 84.4 1.5 L 81.8 7.7 L 75.6 10.4 L 81.8 13.1Z L 81.8 42.8 L 75.6 45.6 L 81.8 48.3 L 84.4 54.3 L 87.1 48.3 L 93.3 45.6 L 87.1 42.8Z"/></symbol>
+</svg>
+
+<header class="site-header">
+  <div class="container header-row">
+    <a class="brand" href="./"><svg class="wand" aria-hidden="true" focusable="false"><use href="#wand"/></svg>kantrip</a>
+    <nav aria-label="Primary">
+      <ul class="nav-list">
+        <li><a href="#demo">Demo</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md">Usage</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md">Compatibility</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero container" aria-labelledby="title">
+    <h1 id="title" class="visually-hidden">Kantrip: switch kafka profiles like magic</h1>
+    <div class="window banner-window">
+      <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">Kantrip</span></div>
+<pre class="banner" aria-hidden="true"><span class="t-accent">╭──────────────────────────────────────────╮</span>
+<span class="t-accent">│</span><span class="t-title">     _               _        _           </span><span class="t-accent">│</span>
+<span class="t-accent">│</span><span class="t-title">    | | ____ _ _ __ | |_ _ __(_)_ __      </span><span class="t-accent">│</span>
+<span class="t-accent">│</span><span class="t-title">    | |/ / _` | &#x27;_ \| __| &#x27;__| | &#x27;_ \     </span><span class="t-accent">│</span>
+<span class="t-accent">│</span><span class="t-title">    |   &lt; (_| | | | | |_| |  | | |_) |    </span><span class="t-accent">│</span>
+<span class="t-accent">│</span><span class="t-title">    |_|\_\__,_|_| |_|\__|_|  |_| .__/     </span><span class="t-accent">│</span>
+<span class="t-accent">│</span> <span class="t-wand">-</span><span class="t-warning">*</span><span class="t-secondary"> switch kafka profiles like </span><span class="t-title">|_|</span><span class="t-secondary"> magic</span>  <span class="t-accent">│</span>
+<span class="t-accent">╰──────────────────────────────────────────╯</span></pre>
+    </div>
+    <p class="lede">Kantrip securely manages plaintext, TLS, SASL, mTLS, and OAuth Kafka profiles
+      for kcat, the official Kafka CLIs, Kaskade, and compatible applications. Save a
+      profile once, keep its secrets in your operating system's credential store, and run
+      your usual clients inside a scoped, supervised session.</p>
+    <div class="install">
+      <div class="window install-window">
+        <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">install</span></div>
+        <div class="install-row">
+          <pre class="code"><code><span class="t-prompt" aria-hidden="true">$ </span><span id="install-command">pipx install kantrip</span></code></pre>
+          <button type="button" class="button copy" data-copy="install-command" hidden>Copy</button>
+        </div>
+      </div>
+      <p class="copy-status" role="status" aria-live="polite"></p>
+    </div>
+    <p class="note">Pre-release for macOS and Linux: commands, output, and stored profiles may
+      change before v0.1.0. See <a href="https://github.com/sauljabin/kantrip/releases">Releases</a>.</p>
+  </section>
+
+  <section id="demo" class="container section" aria-labelledby="demo-title">
+    <h2 id="demo-title">A session, start to finish</h2>
+    <p>Add a SCRAM profile over verified TLS, check it, and hand it to kcat and the Kafka CLIs.
+      The password prompt shows nothing, and the secret never reaches the profile, the
+      command line, or the output.</p>
+    <figure class="window demo" data-demo>
+      <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">kantrip demo</span></div>
+      <div class="demo-stage">
+        <pre class="transcript" id="demo-transcript"><code><!-- demo-transcript:start --><span class="ln cmd"><span class="t-prompt">$ </span>kantrip add prod -b kafka.example.com:9093 --transport tls --ca-file ./ca.pem --auth scram-sha-512 --username app</span>
+<span class="ln out" data-wait="1400">Kafka password: </span>
+<span class="ln out">Added profile &#x27;prod&#x27; to /home/demo/.local/share/kantrip/profiles.db</span>
+<span class="ln cmd" data-spinner="Checking profile &#x27;prod&#x27;"><span class="t-prompt">$ </span>kantrip ping prod</span>
+<span class="ln out t-success">✅ Kafka transport: verified TLS; authentication: SCRAM-SHA-512</span>
+<span class="ln cmd"><span class="t-prompt">$ </span>kantrip exec prod -- kcat -L</span>
+<span class="ln out">Metadata for all topics (from broker 0: sasl_ssl://kafka.example.com:9093/0):</span>
+<span class="ln out"> 1 brokers:</span>
+<span class="ln out">  broker 0 at kafka.example.com:9093 (controller)</span>
+<span class="ln out"> 2 topics:</span>
+<span class="ln out">  topic &quot;orders&quot; with 1 partitions:</span>
+<span class="ln out">    partition 0, leader 0, replicas: 0, isrs: 0</span>
+<span class="ln out">  topic &quot;payments&quot; with 1 partitions:</span>
+<span class="ln out">    partition 0, leader 0, replicas: 0, isrs: 0</span>
+<span class="ln cmd"><span class="t-prompt">$ </span>kantrip exec prod</span>
+<span class="ln cmd"><span class="t-prompt">$ </span>kantrip current</span>
+<span class="ln out">prod</span>
+<span class="ln cmd"><span class="t-prompt">$ </span>kafka-topics --list</span>
+<span class="ln out">orders</span>
+<span class="ln out">payments</span>
+<span class="ln cmd"><span class="t-prompt">$ </span>exit</span><!-- demo-transcript:end --></code></pre>
+      </div>
+      <figcaption class="demo-caption">Replayed from a real run against a local Kafka cluster; hosts and names are made generic.</figcaption>
+    </figure>
+    <div class="demo-controls" hidden>
+      <button type="button" class="button" data-demo-toggle aria-controls="demo-transcript">Pause</button>
+      <button type="button" class="button" data-demo-replay aria-controls="demo-transcript">Replay</button>
+    </div>
+  </section>
+
+  <section class="container section" aria-labelledby="why-title">
+    <h2 id="why-title">Why Kantrip</h2>
+    <ul class="cards">
+      <li class="card">
+        <h3>Secrets stay in the OS store</h3>
+        <p>Passwords, private keys, and client secrets are collected without echo and stored in
+          macOS Keychain or Linux Secret Service. They never appear in profile documents,
+          command arguments, or <code>describe</code> output.</p>
+      </li>
+      <li class="card">
+        <h3>One profile for every client</h3>
+        <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's schema console clients, and
+          Kaskade each receive private configuration generated from the same profile, with
+          connection overrides blocked.</p>
+      </li>
+      <li class="card">
+        <h3>Supervised, self-cleaning sessions</h3>
+        <p>Commands and Bash, Zsh, or Fish subshells run supervised, with signals forwarded and
+          exit codes preserved. Private session files are cleaned up, and stale sessions are
+          recovered automatically or with <code>kantrip doctor --repair</code>.</p>
+      </li>
+    </ul>
+  </section>
+
+  <section class="container section" aria-labelledby="clients-title">
+    <h2 id="clients-title">Supported clients</h2>
+    <dl class="clients">
+      <div>
+        <dt><code>kcat</code> and <code>kafkacat</code></dt>
+        <dd>Metadata, produce, and consume, including Confluent-compatible Avro.</dd>
+      </div>
+      <div>
+        <dt>Apache Kafka and Confluent Platform CLIs</dt>
+        <dd>Topics, console producer and consumer, consumer groups, configs, ACLs, and broker
+          API versions, with or without the <code>.sh</code> suffix.</dd>
+      </div>
+      <div>
+        <dt>Confluent schema console clients</dt>
+        <dd>Avro, JSON Schema, and Protobuf producers and consumers.</dd>
+      </div>
+      <div>
+        <dt>Kaskade</dt>
+        <dd><code>admin</code> and <code>consumer</code>, with Confluent and native Apicurio
+          decoding.</dd>
+      </div>
+    </dl>
+    <p>Kafka connections use plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256,
+      SCRAM-SHA-512, mTLS, or OAuth; registries use Confluent Schema Registry or Apicurio.
+      Interactive sessions support Bash, Zsh, and Fish. The
+      <a href="https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md">compatibility guide</a>
+      lists versions and limits.</p>
+  </section>
+
+  <section class="container section" aria-labelledby="security-title">
+    <h2 id="security-title">Credential handling and its limits</h2>
+    <div class="columns">
+      <div>
+        <h3>What Kantrip does</h3>
+        <ul class="checks">
+          <li>Stores secrets only in macOS Keychain or Linux Secret Service and rejects other
+            keyring backends.</li>
+          <li>Keeps references, never values, in profiles; <code>describe</code> reports only
+            whether each credential is stored.</li>
+          <li>Requires verified TLS for Kafka authentication; certificate and hostname checks
+            cannot be disabled.</li>
+          <li>Writes client configuration to a private session directory, never to command
+            arguments, and removes it when the session ends.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>What it cannot do</h3>
+        <ul class="limits">
+          <li>The client you run receives usable credentials; Kantrip cannot control what it
+            does with them or what it prints.</li>
+          <li>Malware running as your user, or an unlocked or compromised credential store, can
+            read your secrets.</li>
+          <li><code>kantrip ping</code> proves the connection and authentication, not access to
+            topics, groups, or schemas.</li>
+          <li>A process that daemonizes can escape supervision, and a crash can leave private
+            files until the next cleanup.</li>
+        </ul>
+      </div>
+    </div>
+    <p>Read the <a href="https://github.com/sauljabin/kantrip/blob/main/THREAT_MODEL.md">threat model</a>
+      and report vulnerabilities privately through the
+      <a href="https://github.com/sauljabin/kantrip/blob/main/SECURITY.md">security policy</a>.</p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <nav aria-label="Project">
+      <ul class="nav-list">
+        <li><a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md">Usage</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md">Compatibility</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip/releases">Releases</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip/issues">Issues</a></li>
+        <li><a href="https://github.com/sauljabin/kantrip">Source</a></li>
+        <li><a href="https://pypi.org/project/kantrip/">PyPI</a></li>
+      </ul>
+    </nav>
+    <p>Kantrip is <a href="https://github.com/sauljabin/kantrip/blob/main/LICENSE">MIT licensed</a>
+      pre-release software. This site sets no cookies and loads nothing from third parties.</p>
+  </div>
+</footer>
+</body>
+</html>

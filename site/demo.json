@@ -1,0 +1,43 @@
+{
+  "capture": "DRAFT placeholder: replace with output captured from the local sandbox (see DEVELOPMENT.md, Website).",
+  "steps": [
+    {
+      "prompt": "$ ",
+      "command": "kantrip add prod -b kafka.example.com:9093 --transport tls --ca-file ./ca.pem --auth scram-sha-512 --username app",
+      "output": [
+        { "text": "Kafka password: ", "wait": 1400 },
+        { "text": "Added profile 'prod' to /home/demo/.local/share/kantrip/profiles.db" }
+      ]
+    },
+    {
+      "prompt": "$ ",
+      "command": "kantrip ping prod",
+      "spinner": "Checking profile 'prod'",
+      "output": [
+        { "text": "✅ Kafka transport: verified TLS; authentication: SCRAM-SHA-512", "style": "success" }
+      ]
+    },
+    {
+      "prompt": "$ ",
+      "command": "kantrip exec prod -- kcat -L",
+      "output": [
+        { "text": "Metadata for all topics (from broker 0: sasl_ssl://kafka.example.com:9093/0):" },
+        { "text": " 1 brokers:" },
+        { "text": "  broker 0 at kafka.example.com:9093 (controller)" },
+        { "text": " 2 topics:" },
+        { "text": "  topic \"orders\" with 1 partitions:" },
+        { "text": "    partition 0, leader 0, replicas: 0, isrs: 0" },
+        { "text": "  topic \"payments\" with 1 partitions:" },
+        { "text": "    partition 0, leader 0, replicas: 0, isrs: 0" }
+      ]
+    },
+    { "prompt": "$ ", "command": "kantrip exec prod", "output": [] },
+    { "prompt": "$ ", "command": "kantrip current", "output": [{ "text": "prod" }] },
+    {
+      "prompt": "$ ",
+      "command": "kafka-topics --list",
+      "output": [{ "text": "orders" }, { "text": "payments" }]
+    },
+    { "prompt": "$ ", "command": "exit", "output": [] }
+  ]
+}

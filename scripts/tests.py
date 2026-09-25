@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 _NON_E2E_FILES = {"LICENSE", "LICENSE.txt"}
 _IMAGE_SUFFIXES = frozenset({".gif", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
-_SITE_SUFFIXES = _IMAGE_SUFFIXES | {".css", ".html", ".js"}
+_SITE_SUFFIXES = _IMAGE_SUFFIXES | {".css", ".html", ".js", ".json"}
 _TEMPLATE_SUFFIXES = frozenset({".md", ".yaml", ".yml"})
 
 

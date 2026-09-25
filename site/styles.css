@@ -1,0 +1,530 @@
+/* Arcana terminal: kantrip/console.py ARCANA_COLORS on the banner navy. */
+:root {
+  --bg: #071426;
+  --surface: #0c1d35;
+  --terminal: #071426;
+  --fg: #eff6ff;
+  --muted: #9db0c8;
+  --border: rgb(239 246 255 / 0.35);
+  --primary: #3b82f6;
+  --secondary: #22d3ee;
+  --accent: #60a5fa;
+  --success: #34d399;
+  --warning: #fbbf24;
+  --error: #fb7185;
+  --wand: #a16207;
+  --focus: #fbbf24;
+  --mono: ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, "Noto Sans",
+    "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+}
+
+/* Same hues, darkened for WCAG AA contrast on light surfaces. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f7fc;
+    --surface: #ffffff;
+    --terminal: #ffffff;
+    --fg: #0b1b33;
+    --muted: #4a5b72;
+    --border: rgb(11 27 51 / 0.3);
+    --primary: #1d4ed8;
+    --secondary: #0e7490;
+    --accent: #2563eb;
+    --success: #047857;
+    --warning: #b45309;
+    --error: #be123c;
+    --wand: #92400e;
+    --focus: #b45309;
+    color-scheme: light;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 1rem/1.6 var(--sans);
+}
+
+h1,
+h2,
+h3,
+code,
+pre,
+.brand,
+.button {
+  font-family: var(--mono);
+}
+
+h2 {
+  margin: 0 0 1rem;
+  color: var(--primary);
+  font-size: 1.35rem;
+  line-height: 1.3;
+}
+
+h2::before {
+  content: "# ";
+  color: var(--muted);
+}
+
+h3 {
+  margin: 0 0 0.5rem;
+  color: var(--secondary);
+  font-size: 1rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  color: var(--secondary);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sprite {
+  display: none;
+}
+
+.skip-link {
+  position: absolute;
+  top: 0.5rem;
+  left: 1rem;
+  z-index: 10;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+.container {
+  width: 100%;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+.section {
+  padding-top: 3rem;
+}
+
+/* Header and footer */
+.site-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.header-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: 0.75rem;
+}
+
+.brand {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  color: var(--fg);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.wand {
+  width: 1.25em;
+  height: 1.25em;
+  fill: var(--warning);
+}
+
+.nav-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer {
+  margin-top: 4rem;
+  padding-block: 2rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer .nav-list {
+  margin-bottom: 1rem;
+}
+
+/* Terminal window, as in images/banner.svg */
+.window {
+  margin: 0;
+  overflow: hidden;
+  background: var(--terminal);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.window-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.dots {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.dots i {
+  width: 0.8rem;
+  height: 0.8rem;
+  background: #ff5f57;
+  border-radius: 50%;
+}
+
+.dots i:nth-child(2) {
+  background: #febc2e;
+}
+
+.dots i:nth-child(3) {
+  background: #28c840;
+}
+
+.window-title {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font: 700 0.85rem var(--mono);
+  pointer-events: none;
+}
+
+pre {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.t-prompt {
+  color: var(--secondary);
+}
+
+.t-title {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.t-primary {
+  color: var(--primary);
+}
+
+.t-secondary {
+  color: var(--secondary);
+}
+
+.t-accent {
+  color: var(--accent);
+}
+
+.t-success {
+  color: var(--success);
+}
+
+.t-warning {
+  color: var(--warning);
+}
+
+.t-error {
+  color: var(--error);
+}
+
+.t-muted {
+  color: var(--muted);
+}
+
+.t-wand {
+  color: var(--wand);
+}
+
+/* Hero */
+.hero {
+  padding-top: 2.5rem;
+}
+
+.banner-window {
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+.banner {
+  padding: 0.75rem 1rem 1rem;
+  /* 44 columns fit the window from 320px phones upward. */
+  font-size: clamp(0.5rem, calc((100vw - 4.5rem) / 26.5), 1.125rem);
+  line-height: 1.25;
+}
+
+.lede {
+  max-width: 44rem;
+  margin: 1.5rem auto;
+  font-size: 1.1rem;
+  text-align: center;
+}
+
+.install {
+  max-width: 28rem;
+  margin: 0 auto;
+}
+
+.install-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0.75rem 0.75rem 1rem;
+}
+
+.install-row pre {
+  min-width: 0;
+  overflow-x: auto;
+  font-size: 1rem;
+}
+
+@media (max-width: 24rem) {
+  .install-row {
+    gap: 0.5rem;
+    padding-inline: 0.75rem 0.5rem;
+  }
+
+  .install-row pre {
+    font-size: 0.875rem;
+  }
+
+  .lede {
+    text-align: left;
+  }
+}
+
+.copy-status {
+  min-height: 1.6em;
+  margin: 0.25rem 0 0;
+  color: var(--success);
+  font: 0.85rem var(--mono);
+  text-align: center;
+}
+
+.note {
+  max-width: 44rem;
+  margin: 1rem auto 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.button {
+  flex: none;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.9rem;
+  color: var(--fg);
+  font-size: 0.9rem;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.button:hover:enabled {
+  color: var(--bg);
+  background: var(--accent);
+}
+
+.button:disabled {
+  color: var(--muted);
+  border-color: var(--border);
+  cursor: default;
+}
+
+/* Demo: the static transcript and the animated layer share one grid cell, so
+   the window keeps its final height while the replay types. */
+.demo-stage {
+  display: grid;
+  padding: 1rem;
+}
+
+.demo-stage > pre {
+  grid-area: 1 / 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ln {
+  display: inline;
+}
+
+.demo.is-playing .transcript {
+  opacity: 0;
+}
+
+.cursor {
+  display: inline-block;
+  width: 0.6em;
+  margin-left: 1px;
+  color: transparent;
+  background: var(--fg);
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.demo-caption {
+  padding: 0.6rem 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.demo-controls {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.demo-controls[hidden] {
+  display: none;
+}
+
+/* Cards, clients, and security */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.card p {
+  margin: 0;
+}
+
+.clients {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem 2rem;
+  margin: 0 0 1.5rem;
+}
+
+.clients dt {
+  color: var(--secondary);
+  font: 700 1rem var(--mono);
+}
+
+.clients dd {
+  margin: 0.25rem 0 0;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem 2rem;
+  margin-bottom: 1rem;
+}
+
+.checks,
+.limits {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.checks li,
+.limits li {
+  position: relative;
+  margin-bottom: 0.6rem;
+  padding-left: 1.75rem;
+}
+
+.checks li::before,
+.limits li::before {
+  position: absolute;
+  left: 0;
+  font: 700 1rem var(--mono);
+}
+
+.checks li::before {
+  content: "✓";
+  color: var(--success);
+}
+
+.limits li::before {
+  content: "!";
+  left: 0.3rem;
+  color: var(--warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+}

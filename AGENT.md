@@ -315,6 +315,12 @@ uv build --clear
 uv run --locked python -m scripts.verify_release dist
 ```
 
+Keep the GitHub Pages site in `site/` as plain HTML, CSS, and vanilla
+JavaScript without third-party requests. Its demo comes from a real sandbox run
+made generic (see [Development](DEVELOPMENT.md#website)); run
+`uv run --locked python -m scripts.website check` after site or CLI option
+changes.
+
 Regenerate `images/banner.svg` with `uv run --locked python -m scripts.banner`
 when the banner, console theme, or SVG helper changes.
 
