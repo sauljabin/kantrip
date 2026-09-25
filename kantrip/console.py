@@ -138,8 +138,7 @@ def create_profile_description(observation: Mapping[str, Any]) -> Group:
                 ("Bootstrap servers", _bootstrap_servers(kafka)),
                 ("Transport", _mapping_value(kafka, "transport")),
                 ("TLS trust", _tls_trust(kafka)),
-                ("Authentication", _auth_type(kafka)),
-                ("Credentials", _credential_states(kafka)),
+                *_auth_rows(kafka),
             ),
         ),
         _details_section("Registry", _registry_details(registry)),
@@ -184,23 +183,45 @@ def _mapping_value(value: object, key: str) -> object:
     return value.get(key, "-") if isinstance(value, Mapping) else "-"
 
 
-def _auth_type(kafka: object) -> object:
-    auth = kafka.get("auth", {}) if isinstance(kafka, Mapping) else {}
-    return _mapping_value(auth, "type")
+def _auth_rows(connection: object) -> tuple[tuple[str, object], ...]:
+    auth = connection.get("auth", {}) if isinstance(connection, Mapping) else {}
+    if not isinstance(auth, Mapping):
+        return (("Authentication", "-"),)
+    rows: list[tuple[str, object]] = [("Authentication", auth.get("type", "-"))]
+    if "username" in auth:
+        rows.append(("Username", auth["username"]))
+    certificate = auth.get("clientCertificate")
+    if isinstance(certificate, Mapping):
+        rows.append(("Client certificate", certificate.get("subject") or "unreadable"))
+        rows.append(("Certificate expires", certificate.get("expires") or "-"))
+    oauth = auth.get("oauth")
+    if isinstance(oauth, Mapping):
+        rows.extend(
+            (
+                ("OAuth token URL", oauth.get("tokenUrl")),
+                ("OAuth client ID", oauth.get("clientId")),
+                ("OAuth scopes", " ".join(oauth.get("scopes", ())) or "-"),
+                ("OAuth token trust", oauth.get("trust")),
+            )
+        )
+        if "logicalCluster" in oauth:
+            rows.append(("Logical cluster", oauth["logicalCluster"]))
+        if "identityPoolId" in oauth:
+            rows.append(("Identity pool ID", oauth["identityPoolId"]))
+    rows.append(("Credentials", _credentials(auth.get("credentials"))))
+    return tuple(rows)
 
 
-def _credential_states(kafka: object) -> object:
-    auth = kafka.get("auth", {}) if isinstance(kafka, Mapping) else {}
-    credentials = auth.get("credentials", {}) if isinstance(auth, Mapping) else {}
+def _credentials(credentials: object) -> object:
     if not isinstance(credentials, Mapping) or not credentials:
         return "-"
     return ", ".join(f"{field}: {state}" for field, state in sorted(credentials.items()))
 
 
-def _tls_trust(kafka: object) -> object:
-    if not isinstance(kafka, Mapping):
+def _tls_trust(connection: object) -> object:
+    if not isinstance(connection, Mapping):
         return "-"
-    tls = kafka.get("tls")
+    tls = connection.get("tls")
     if not isinstance(tls, Mapping):
         return "-"
     return _mapping_value(tls, "trust")
@@ -209,7 +230,12 @@ def _tls_trust(kafka: object) -> object:
 def _registry_details(registry: object) -> tuple[tuple[str, object], ...]:
     if not isinstance(registry, Mapping):
         return (("Status", "Not configured"),)
-    return (("Provider", registry.get("provider")), ("URL", registry.get("url")))
+    return (
+        ("Provider", registry.get("provider")),
+        ("URL", registry.get("url")),
+        ("TLS trust", _tls_trust(registry)),
+        *_auth_rows(registry),
+    )
 
 
 def _label_color(key: str) -> str:

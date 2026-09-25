@@ -53,7 +53,8 @@ class TestProfileOutput(unittest.TestCase):
         self.assertEqual(
             {
                 "type": "scram-sha-512",
-                "credentials": {"kafka/password": "unavailable"},
+                "username": "application",
+                "credentials": {"kafka.auth.password": "configured"},
             },
             observation["kafka"]["auth"],
         )
