@@ -260,34 +260,51 @@ class TestProfiles(unittest.TestCase):
                 load_profiles(path)
             self.assertEqual([], list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*")))
 
-    def test_upgrades_sequence_one_to_the_reconciliation_journal(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "profiles.db"
-            add_profile("local", path)
-            with closing(sqlite3.connect(path)) as connection:
-                connection.execute("DROP TABLE credential_reconciliation")
-                connection.execute("DELETE FROM schema_migrations WHERE sequence = 2")
-                connection.execute("PRAGMA user_version = 1")
-                connection.commit()
+    def test_rejects_pre_release_databases_with_reset_guidance(self) -> None:
+        pre_release_histories = {
+            "v0.1.0a1": (
+                (
+                    1,
+                    "initial profile store",
+                    "a211043fcbe848180ab783b81fd9a28ecfc4b85780c45c7ce2d55790a4d3f740",
+                ),
+            ),
+            "v0.1.0a2": (
+                (
+                    1,
+                    "initial profile store",
+                    "a211043fcbe848180ab783b81fd9a28ecfc4b85780c45c7ce2d55790a4d3f740",
+                ),
+                (
+                    2,
+                    "add reconciliation journal",
+                    "60de4ddf3c37d95e114b759b6c21e41cf73f06e9d186e995d7a2a7ba085f6d5f",
+                ),
+            ),
+        }
+        for release, history in pre_release_histories.items():
+            with self.subTest(release=release), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "profiles.db"
+                add_profile("local", path)
+                with closing(sqlite3.connect(path)) as connection:
+                    connection.execute("DELETE FROM schema_migrations")
+                    connection.executemany(
+                        "INSERT INTO schema_migrations VALUES (?, ?, ?, 'then', ?)",
+                        [(*row, release) for row in history],
+                    )
+                    connection.execute(f"PRAGMA user_version = {len(history)}")
+                    connection.commit()
+                before = path.read_bytes()
 
-            profiles = load_profiles(path)
+                with self.assertRaisesRegex(
+                    ProfileStoreError, "pre-release version of Kantrip.*recreate your profiles"
+                ):
+                    load_profiles(path)
 
-            self.assertIn("local", profiles.profiles)
-            with closing(sqlite3.connect(path)) as connection:
-                version = connection.execute("PRAGMA user_version").fetchone()[0]
-                history = connection.execute(
-                    "SELECT sequence FROM schema_migrations ORDER BY sequence"
-                ).fetchall()
-                journal_exists = connection.execute(
-                    "SELECT 1 FROM sqlite_master "
-                    "WHERE type = 'table' AND name = 'credential_reconciliation'"
-                ).fetchone()
-            backups = list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*"))
-            self.assertEqual(2, version)
-            self.assertEqual([(1,), (2,)], history)
-            self.assertIsNotNone(journal_exists)
-            self.assertEqual(1, len(backups))
-            self.assertEqual(0o600, backups[0].stat().st_mode & 0o777)
+                self.assertEqual(before, path.read_bytes())
+                self.assertEqual(
+                    [], list(path.parent.glob(f"{path.name}{DATABASE_BACKUP_PREFIX}*"))
+                )
 
     def test_each_migration_pass_keeps_a_uniquely_timestamped_private_backup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

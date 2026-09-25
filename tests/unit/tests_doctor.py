@@ -46,7 +46,7 @@ class TestDoctor(unittest.TestCase):
         messages = [check.message for check in report.checks]
         self.assertTrue(report.healthy)
         self.assertIn(
-            "Profile database is healthy (1 profile, schema version 2)",
+            "Profile database is healthy (1 profile, schema version 1)",
             messages,
         )
         self.assertTrue(any(message.startswith("kcat: ") for message in messages))

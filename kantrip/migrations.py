@@ -102,7 +102,7 @@ def _sql(value: str) -> str:
 
 
 class InitialProfileStore(SqlMigration):
-    """Create the initial SQLite profile store."""
+    """Create the v0.1 profile store and its credential cleanup journal."""
 
     sequence = 1
     name = "initial profile store"
@@ -115,15 +115,6 @@ class InitialProfileStore(SqlMigration):
                 document TEXT NOT NULL
             )
             """),
-    )
-
-
-class AddReconciliationJournal(SqlMigration):
-    """Add the exact-reference credential cleanup journal."""
-
-    sequence = 2
-    name = "add reconciliation journal"
-    statements = (
         _sql("""
             CREATE TABLE credential_reconciliation (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -134,9 +125,20 @@ class AddReconciliationJournal(SqlMigration):
     )
 
 
-MIGRATIONS = MigrationChain(
-    InitialProfileStore(),
-    AddReconciliationJournal(),
+MIGRATIONS = MigrationChain(InitialProfileStore())
+
+# Migrations shipped only in pre-release packages (v0.1.0a1 and v0.1.0a2). No
+# backward compatibility is promised before v0.1.0, so their databases are
+# rejected with reset guidance instead of being upgraded.
+_PRE_RELEASE_CHECKSUMS = frozenset(
+    {
+        "a211043fcbe848180ab783b81fd9a28ecfc4b85780c45c7ce2d55790a4d3f740",
+        "60de4ddf3c37d95e114b759b6c21e41cf73f06e9d186e995d7a2a7ba085f6d5f",
+    }
+)
+PRE_RELEASE_DATABASE_MESSAGE = (
+    "profile database was created by a pre-release version of Kantrip and cannot be "
+    "upgraded; move it aside and recreate your profiles"
 )
 LATEST_SEQUENCE = MIGRATIONS.latest_sequence
 
@@ -237,6 +239,8 @@ def _validate_history_rows(
     rows: list[sqlite3.Row],
     chain: MigrationChain,
 ) -> None:
+    if any(row["checksum"] in _PRE_RELEASE_CHECKSUMS for row in rows):
+        raise MigrationError(PRE_RELEASE_DATABASE_MESSAGE)
     if len(rows) > len(chain):
         raise MigrationError("profile database contains unknown migrations")
     for index, row in enumerate(rows):
@@ -397,6 +401,7 @@ def _nonempty_text(value: object) -> bool:
 __all__ = [
     "LATEST_SEQUENCE",
     "MIGRATIONS",
+    "PRE_RELEASE_DATABASE_MESSAGE",
     "MigrationChain",
     "MigrationError",
     "MigrationResult",

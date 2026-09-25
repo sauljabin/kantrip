@@ -32,10 +32,7 @@ class SecondMigration(SqlMigration):
 class TestMigrations(unittest.TestCase):
     def test_bundled_migration_checksums_are_immutable(self) -> None:
         self.assertEqual(
-            [
-                "a211043fcbe848180ab783b81fd9a28ecfc4b85780c45c7ce2d55790a4d3f740",
-                "60de4ddf3c37d95e114b759b6c21e41cf73f06e9d186e995d7a2a7ba085f6d5f",
-            ],
+            ["c48fea5f89c59bb7a02e4dd7a5a88546387960567c32e0f27e29d3c9ca22ca2e"],
             [migration.checksum for migration in MIGRATIONS],
         )
 
