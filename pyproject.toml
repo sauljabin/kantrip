@@ -71,6 +71,8 @@ packages = ["kantrip"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "/.github/actions",
+    "/.github/workflows",
     "/AGENT.md",
     "/ARCHITECTURE.md",
     "/COMPATIBILITY.md",

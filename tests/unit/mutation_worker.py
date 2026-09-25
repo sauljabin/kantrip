@@ -10,6 +10,7 @@ from pathlib import Path
 
 from kantrip.profiles import KafkaAuthInput, add_profile, edit_profile
 from kantrip.secret_store import SecretNotFoundError
+from kantrip.secret_value import Secret
 
 FIRST_SECRET = "synthetic-first-secret"
 SECOND_SECRET = "synthetic-second-secret"
@@ -91,7 +92,7 @@ def _barrier(name: str) -> None:
 
 
 def _run(scenario: str, database: Path, store_root: Path) -> None:
-    auth = KafkaAuthInput("plain", username="alice", password=FIRST_SECRET)
+    auth = KafkaAuthInput("plain", username="alice", password=Secret(FIRST_SECRET))
     if scenario == "before-store-write":
         add_profile(
             "local",
@@ -138,7 +139,7 @@ def _run(scenario: str, database: Path, store_root: Path) -> None:
         edit_profile(
             "local",
             database,
-            auth=KafkaAuthInput("plain", username="alice", password=SECOND_SECRET),
+            auth=KafkaAuthInput("plain", username="alice", password=Secret(SECOND_SECRET)),
             secret_store=FileSecretStore(store_root, scenario),
         )
         return

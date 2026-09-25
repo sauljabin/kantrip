@@ -72,6 +72,7 @@ from kantrip.secret_store import (
     load_secret_store,
     parse_secret_reference,
 )
+from kantrip.secret_value import Secret
 
 DATABASE_FILENAME = "profiles.db"
 DATABASE_SCHEMA_VERSION = LATEST_SEQUENCE
@@ -137,14 +138,14 @@ class KafkaAuthInput:
 
     auth_type: str
     username: str | None = None
-    password: str | None = None
+    password: Secret | None = None
     client_certificate: str | None = None
-    private_key: str | None = None
-    private_key_password: str | None = None
+    private_key: Secret | None = None
+    private_key_password: Secret | None = None
     oauth_token_url: str | None = None
     oauth_client_id: str | None = None
     oauth_scopes: tuple[str, ...] | None = None
-    oauth_client_secret: str | None = None
+    oauth_client_secret: Secret | None = None
     oauth_ca_certificates: str | None = None
     oauth_default_trust: bool = False
 
@@ -156,15 +157,15 @@ class RegistryAuthInput:
     auth_type: str = "none"
     ca_certificates: str | None = None
     username: str | None = None
-    password: str | None = None
-    token: str | None = None
+    password: Secret | None = None
+    token: Secret | None = None
     client_certificate: str | None = None
-    private_key: str | None = None
-    private_key_password: str | None = None
+    private_key: Secret | None = None
+    private_key_password: Secret | None = None
     oauth_token_url: str | None = None
     oauth_client_id: str | None = None
     oauth_scopes: tuple[str, ...] | None = None
-    oauth_client_secret: str | None = None
+    oauth_client_secret: Secret | None = None
     oauth_ca_certificates: str | None = None
     oauth_logical_cluster: str | None = None
     oauth_identity_pool_id: str | None = None
@@ -1381,7 +1382,7 @@ def _validate_registry_none_input(requested: RegistryAuthInput) -> None:
 def _registry_secret_replacements(
     requested: RegistryAuthInput,
     field: str,
-    value: str | None,
+    value: Secret | None,
     previous: str | None,
     current_references: Mapping[str, str],
 ) -> tuple[dict[str, str], tuple[SecretReplacement, ...]]:

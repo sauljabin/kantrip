@@ -18,6 +18,7 @@ from kantrip.oauth import OAuthConnection
 from kantrip.registry import RegistryConnection
 from kantrip.runtime import create_session_runtime
 from kantrip.secret_store import secret_reference
+from kantrip.secret_value import Secret
 from kantrip.session import SessionError, _oauth_trust_bundle, run_profile_session
 from tests.unit.pki import synthetic_pki
 
@@ -55,7 +56,7 @@ class TestProfileSession(unittest.TestCase):
             "schema.registry.url",
             auth_type="basic",
             username="synthetic-user",
-            password="synthetic-password",
+            password=Secret("synthetic-password"),
         )
         with (
             patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
@@ -395,7 +396,7 @@ class TestProfileSession(unittest.TestCase):
             pki.ca,
             "mtls",
             client_certificate=pki.client_certificate,
-            private_key=pki.client_key,
+            private_key=Secret(pki.client_key),
         )
         observed: dict[str, object] = {}
 

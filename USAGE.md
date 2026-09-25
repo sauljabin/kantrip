@@ -95,6 +95,11 @@ and applies one five-second deadline across configured services, configurable wi
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
 
+`ping` reports each service separately and exits `0` only when every attempted
+check passed. If Kafka succeeds and the Registry fails, the Kafka result is
+still printed and the Registry failure follows on stderr (exit `1`). If Kafka
+fails, the Registry is not contacted and is reported as skipped.
+
 Kafka success does not prove topic, group, schema, cluster, or administrative
 access. Registry success proves only that the configured read/search query is
 allowed; it does not prove access to a particular schema or permission to write.

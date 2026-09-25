@@ -34,7 +34,7 @@ from kantrip.kafka import (
     read_private_key,
 )
 from kantrip.maintenance import run_repair
-from kantrip.ping import PingError, ping_profile
+from kantrip.ping import PingError, PingResult, ping_profile
 from kantrip.profile_output import (
     OutputFormat,
     describe_observation,
@@ -52,6 +52,7 @@ from kantrip.profiles import (
     remove_profile,
     resolve_profile_snapshot,
 )
+from kantrip.secret_value import Secret
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 
 EPILOG = "More information at https://github.com/sauljabin/kantrip."
@@ -216,7 +217,7 @@ def _read_client_identity(
     key_path: Path,
     *,
     label: str = "Kafka",
-) -> tuple[str, str, str | None]:
+) -> tuple[str, Secret, Secret | None]:
     try:
         certificate = read_client_certificate(certificate_path)
         key = read_private_key(key_path)
@@ -233,14 +234,14 @@ def _read_client_identity(
         return certificate, key, password
 
 
-def _password_prompt() -> str:
+def _password_prompt() -> Secret:
     value = _secret_prompt("Kafka password")
     if not value:
         raise click.ClickException("Kafka password must not be empty")
     return value
 
 
-def _secret_prompt(label: str) -> str:
+def _secret_prompt(label: str) -> Secret:
     descriptor: int | None = None
     try:
         descriptor = os.open("/dev/tty", os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
@@ -252,7 +253,7 @@ def _secret_prompt(label: str) -> str:
         if descriptor is not None:
             os.close(descriptor)
     try:
-        return getpass.getpass(f"{label}: ")
+        return Secret(getpass.getpass(f"{label}: "))
     except (EOFError, KeyboardInterrupt) as error:
         raise click.ClickException(f"{label} collection was canceled") from error
 
@@ -352,8 +353,8 @@ def _registry_auth_input(  # noqa: C901
     registry_url: str | None,
     ca_certificates: str | None = None,
     client_certificate: str | None = None,
-    private_key: str | None = None,
-    private_key_password: str | None = None,
+    private_key: Secret | None = None,
+    private_key_password: Secret | None = None,
     oauth_token_url: str | None = None,
     oauth_client_id: str | None = None,
     oauth_scopes: tuple[str, ...] | None = None,
@@ -500,7 +501,7 @@ def _registry_auth_input(  # noqa: C901
     raise click.UsageError("unsupported Registry authentication type")
 
 
-def _required_secret_prompt(label: str) -> str:
+def _required_secret_prompt(label: str) -> Secret:
     value = _secret_prompt(label)
     if not value:
         raise click.ClickException(f"{label} must not be empty")
@@ -1848,8 +1849,14 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
 def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool) -> None:
     """Check PROFILE's Kafka and configured registry connections."""
     console = console_from_context(context)
+    error_console = error_console_from_context(context)
     try:
         snapshot = resolve_profile_snapshot(profile_name)
+    except ProfileStoreError as error:
+        if not quiet:
+            error_console.print(create_status_text(error_console, "error", str(error)))
+        raise click.exceptions.Exit(1) from error
+    try:
         progress = (
             nullcontext() if quiet else show_progress(console, f"Checking profile '{profile_name}'")
         )
@@ -1860,25 +1867,32 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
                 kafka=snapshot.kafka,
                 resolved_registry=snapshot.registry,
             )
-    except ProfileStoreError as error:
-        if not quiet:
-            error_console = error_console_from_context(context)
-            error_console.print(create_status_text(error_console, "error", str(error)))
-        raise click.exceptions.Exit(1) from error
     except PingError as error:
         if not quiet:
-            error_console = error_console_from_context(context)
-            detail = f"\nCause: {error.detail}" if error.detail else ""
-            error_console.print(
-                create_status_text(
-                    error_console,
-                    "error",
-                    f"Could not connect for profile '{profile_name}': {error}{detail}",
-                )
+            _print_ping_failure(
+                error_console, f"Could not connect for profile '{profile_name}'", error
             )
+            if snapshot.registry is not None:
+                error_console.print(
+                    create_status_text(
+                        error_console,
+                        "warning",
+                        f"{snapshot.registry.display_name} check skipped: Kafka check failed",
+                    )
+                )
         raise click.exceptions.Exit(1) from error
-    if quiet:
-        return
+    if not quiet:
+        _print_ping_result(console, error_console, profile_name, result)
+    if not result.healthy:
+        raise click.exceptions.Exit(1)
+
+
+def _print_ping_result(
+    console: Console,
+    error_console: Console,
+    profile_name: str,
+    result: PingResult,
+) -> None:
     console.print(
         create_status_text(
             console,
@@ -1901,6 +1915,17 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
                 f"proof: {result.registry.proof}",
             )
         )
+    if result.registry_error is not None:
+        _print_ping_failure(
+            error_console,
+            f"Registry check failed for profile '{profile_name}'",
+            result.registry_error,
+        )
+
+
+def _print_ping_failure(error_console: Console, prefix: str, error: PingError) -> None:
+    detail = f"\nCause: {error.detail}" if error.detail else ""
+    error_console.print(create_status_text(error_console, "error", f"{prefix}: {error}{detail}"))
 
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})

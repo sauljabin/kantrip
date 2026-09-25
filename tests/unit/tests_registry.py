@@ -11,6 +11,7 @@ from kantrip.registry import (
     resolve_registry_connection,
 )
 from kantrip.secret_store import secret_reference
+from kantrip.secret_value import Secret
 from tests.unit.pki import KEY_PASSWORD, synthetic_pki
 
 
@@ -36,7 +37,7 @@ class TestRegistry(unittest.TestCase):
                 scopes=("registry.read", "profile"),
                 client_secret_reference="secret-reference",
                 ca_certificates="registry-ca",
-                client_secret="client-secret",
+                client_secret=Secret("client-secret"),
             ),
         )
 
@@ -58,8 +59,8 @@ class TestRegistry(unittest.TestCase):
             property_name="apicurio.registry.url",
             auth_type="mtls",
             client_certificate="certificate",
-            private_key="private-key",
-            private_key_password="key-password",
+            private_key=Secret("private-key"),
+            private_key_password=Secret("key-password"),
         )
 
         with self.assertRaisesRegex(RegistryProfileError, "encrypted PEM"):
@@ -200,8 +201,8 @@ class TestRegistry(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(pki.encrypted_client_key, resolved.private_key)
-        self.assertEqual(KEY_PASSWORD, resolved.private_key_password)
+        self.assertEqual(Secret(pki.encrypted_client_key), resolved.private_key)
+        self.assertEqual(Secret(KEY_PASSWORD), resolved.private_key_password)
 
 
 if __name__ == "__main__":

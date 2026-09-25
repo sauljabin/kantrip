@@ -19,6 +19,7 @@ from kantrip.ping import (
 )
 from kantrip.registry import RegistryConnection
 from kantrip.secret_store import secret_reference
+from kantrip.secret_value import Secret
 from tests.unit.pki import synthetic_pki
 
 
@@ -66,7 +67,7 @@ class TestPing(unittest.TestCase):
             "schema.registry.url",
             auth_type="basic",
             username="synthetic-user",
-            password="synthetic-password",
+            password=Secret("synthetic-password"),
         )
         registry_result = RegistryPingResult("confluent", "server-tls", "authenticated-read")
         with (
@@ -330,13 +331,14 @@ else:
                 "kantrip.ping._open_request",
                 side_effect=(authenticated, public),
             ) as open_registry,
-            self.assertRaisesRegex(PingError, "endpoint is public"),
         ):
-            ping_profile(
+            result = ping_profile(
                 profile,
                 timeout=1,
                 secret_store=_Store({reference: "synthetic-password"}),
             )
+
+        self.assertRegex(str(_registry_failure(result)), "endpoint is public")
 
         request = open_registry.call_args_list[0].args[0]
         self.assertTrue(request.get_header("Authorization").startswith("Basic "))
@@ -557,15 +559,16 @@ else:
         with (
             patch("kantrip.ping._probe_kafka"),
             patch("kantrip.ping._open_request", return_value=response),
-            self.assertRaisesRegex(PingError, "token response is invalid") as raised,
         ):
-            ping_profile(
+            result = ping_profile(
                 profile,
                 timeout=1,
                 secret_store=_Store({reference: "never-print-this-secret"}),
             )
 
-        self.assertNotIn("never-print-this-secret", str(raised.exception))
+        error = _registry_failure(result)
+        self.assertRegex(str(error), "token response is invalid")
+        self.assertNotIn("never-print-this-secret", f"{error} {error.detail} {result!r}")
 
     def test_registry_mtls_requires_client_exchange_and_anonymous_rejection(self) -> None:
         profile_id = "018f8f13-7c21-7cee-8000-000000000010"
@@ -614,9 +617,9 @@ else:
         with (
             patch("kantrip.ping._probe_kafka"),
             patch("kantrip.ping._open_request", return_value=html),
-            self.assertRaisesRegex(PingError, "non-JSON"),
         ):
-            ping_profile(profile, timeout=1)
+            result = ping_profile(profile, timeout=1)
+        self.assertRegex(str(_registry_failure(result)), "non-JSON")
 
         for status, message in (
             (401, "authentication"),
@@ -634,9 +637,9 @@ else:
                 self.subTest(status=status),
                 patch("kantrip.ping._probe_kafka"),
                 patch("kantrip.ping._open_request", side_effect=error),
-                self.assertRaisesRegex(PingError, message),
             ):
-                ping_profile(profile, timeout=1)
+                result = ping_profile(profile, timeout=1)
+                self.assertRegex(str(_registry_failure(result)), message)
 
     def test_registry_redirect_handler_never_forwards_a_request(self) -> None:
         self.assertIsNone(
@@ -649,11 +652,12 @@ else:
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
             patch("kantrip.ping._open_request", side_effect=URLError("connection refused")),
-            self.assertRaisesRegex(PingError, "Confluent Schema Registry did not return") as raised,
         ):
-            ping_profile(self._registry_profile("confluent"))
+            result = ping_profile(self._registry_profile("confluent"))
 
-        self.assertEqual("connection refused", raised.exception.detail)
+        error = _registry_failure(result)
+        self.assertRegex(str(error), "Confluent Schema Registry did not return")
+        self.assertEqual("connection refused", error.detail)
 
     def test_profile_converts_exhausted_kafka_to_registry_deadline(self) -> None:
         profile = self._registry_profile("confluent")
@@ -661,14 +665,12 @@ else:
         with (
             patch("kantrip.ping._probe_kafka"),
             patch("kantrip.ping.time.monotonic", side_effect=(0.0, 6.0)),
-            self.assertRaisesRegex(
-                PingError,
-                "Confluent Schema Registry did not return registry metadata",
-            ) as raised,
         ):
-            ping_profile(profile, timeout=5)
+            result = ping_profile(profile, timeout=5)
 
-        self.assertEqual("network deadline exhausted", raised.exception.detail)
+        error = _registry_failure(result)
+        self.assertRegex(str(error), "Confluent Schema Registry did not return registry metadata")
+        self.assertEqual("network deadline exhausted", error.detail)
 
     def test_profile_rejects_invalid_apicurio_version_search_metadata(self) -> None:
         response = MagicMock()
@@ -676,9 +678,9 @@ else:
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
             patch("kantrip.ping._open_request", return_value=response),
-            self.assertRaisesRegex(PingError, "invalid version-search metadata"),
         ):
-            ping_profile(self._registry_profile("apicurio"))
+            result = ping_profile(self._registry_profile("apicurio"))
+        self.assertRegex(str(_registry_failure(result)), "invalid version-search metadata")
 
     def test_profile_rejects_invalid_confluent_subject_search_metadata(self) -> None:
         response = MagicMock()
@@ -686,9 +688,9 @@ else:
         with (
             patch("kantrip.ping.AdminClient", side_effect=_connected_admin),
             patch("kantrip.ping._open_request", return_value=response),
-            self.assertRaisesRegex(PingError, "invalid subject-search metadata"),
         ):
-            ping_profile(self._registry_profile("confluent"))
+            result = ping_profile(self._registry_profile("confluent"))
+        self.assertRegex(str(_registry_failure(result)), "invalid subject-search metadata")
 
     @staticmethod
     def _registry_profile(provider: str) -> dict[str, object]:
@@ -711,6 +713,15 @@ else:
             },
             "registry": registry,
         }
+
+
+def _registry_failure(result: PingResult) -> PingError:
+    """Return the Registry failure while proving Kafka's success was retained."""
+    if result.kafka_transport == "" or result.registry is not None:
+        raise AssertionError("Kafka success must be kept and no Registry success reported")
+    if result.registry_error is None or result.healthy:
+        raise AssertionError("expected a Registry failure after Kafka success")
+    return result.registry_error
 
 
 if __name__ == "__main__":

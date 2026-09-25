@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from kantrip.secret_value import Secret
+
 
 class OAuthProfileError(ValueError):
     """Raised when an OAuth client-credentials configuration is unsafe."""
@@ -19,7 +21,7 @@ class OAuthConnection:
     scopes: tuple[str, ...]
     client_secret_reference: str
     ca_certificates: str | None = None
-    client_secret: str | None = None
+    client_secret: Secret | None = None
 
 
 def validate_oauth_endpoint(url: str) -> str:

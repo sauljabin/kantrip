@@ -25,6 +25,7 @@ from kantrip.kafka import (
     validate_client_identity,
 )
 from kantrip.secret_store import SecretNotFoundError, secret_reference
+from kantrip.secret_value import Secret
 from tests.unit.pki import synthetic_pki, temporary_pki_files
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -182,7 +183,7 @@ class TestKafkaConnection(unittest.TestCase):
             "plaintext",
             auth_type="plain",
             username="synthetic-user",
-            password="synthetic-password",
+            password=Secret("synthetic-password"),
         )
         for renderer in (java_properties, librdkafka_properties):
             with (
@@ -222,7 +223,7 @@ class TestKafkaConnection(unittest.TestCase):
         certificate, _ = _client_identity()
         _, other_key = _client_identity()
         with self.assertRaisesRegex(KafkaProfileError, "does not match"):
-            validate_client_identity(certificate, other_key)
+            validate_client_identity(certificate, Secret(other_key))
 
         profile = _authenticated_profile("plain")
         with self.assertRaisesRegex(KafkaProfileError, "could not be resolved"):
@@ -239,7 +240,7 @@ class TestKafkaConnection(unittest.TestCase):
             oversized.write_bytes(b"x" * (MAX_CA_BUNDLE_BYTES + 1))
 
             self.assertEqual(certificate, read_client_certificate(certificate_path))
-            self.assertEqual(private_key, read_private_key(key_path))
+            self.assertEqual(private_key, read_private_key(key_path).reveal())
             with self.assertRaisesRegex(KafkaProfileError, "1 MiB"):
                 read_private_key(oversized)
             key_path.write_text(private_key + "unexpected\n", encoding="utf-8")

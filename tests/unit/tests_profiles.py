@@ -36,6 +36,7 @@ from kantrip.profiles import (
 )
 from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
+from kantrip.secret_value import Secret
 from tests.unit.pki import synthetic_pki
 
 
@@ -164,8 +165,8 @@ class TestProfiles(unittest.TestCase):
                 self.assertEqual(durable is not False, "local" in persisted)
 
     def test_lost_commit_ack_is_confirmed_for_authenticated_mutation_family(self) -> None:
-        auth = KafkaAuthInput("plain", username="alice", password="first-secret")
-        replacement = KafkaAuthInput("plain", username="alice", password="second-secret")
+        auth = KafkaAuthInput("plain", username="alice", password=Secret("first-secret"))
+        replacement = KafkaAuthInput("plain", username="alice", password=Secret("second-secret"))
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "add.db"
@@ -542,7 +543,7 @@ class TestProfiles(unittest.TestCase):
                 "local",
                 path,
                 transport="tls",
-                auth=KafkaAuthInput("plain", username="alice", password="old-secret"),
+                auth=KafkaAuthInput("plain", username="alice", password=Secret("old-secret")),
                 secret_store=store,
             )
             entered = Event()
@@ -561,7 +562,7 @@ class TestProfiles(unittest.TestCase):
                     edit_profile,
                     "local",
                     path,
-                    auth=KafkaAuthInput("plain", username="alice", password="new-secret"),
+                    auth=KafkaAuthInput("plain", username="alice", password=Secret("new-secret")),
                     secret_store=store,
                 )
                 release.set()
@@ -569,7 +570,7 @@ class TestProfiles(unittest.TestCase):
                 edited = edit_future.result()
 
             self.assertEqual(1, snapshot.revision)
-            self.assertEqual("old-secret", snapshot.kafka.password)
+            self.assertEqual(Secret("old-secret"), snapshot.kafka.password)
             self.assertEqual(2, edited.revision("local"))
             active_reference = edited.profile("local")["kafka"]["auth"]["passwordRef"]
             self.assertEqual("new-secret", store.values[active_reference])
@@ -583,7 +584,7 @@ class TestProfiles(unittest.TestCase):
                 path,
                 registry_url="https://registry.example.com",
                 registry_auth=RegistryAuthInput(
-                    "basic", username="synthetic-user", password="old-registry-secret"
+                    "basic", username="synthetic-user", password=Secret("old-registry-secret")
                 ),
                 secret_store=store,
             ).profile("local")
@@ -602,7 +603,7 @@ class TestProfiles(unittest.TestCase):
                     "local",
                     path,
                     registry_auth=RegistryAuthInput(
-                        "basic", username="synthetic-user", password="new-registry-secret"
+                        "basic", username="synthetic-user", password=Secret("new-registry-secret")
                     ),
                     secret_store=store,
                 )
@@ -613,7 +614,7 @@ class TestProfiles(unittest.TestCase):
             self.assertEqual(1, snapshot.revision)
             self.assertIsNotNone(snapshot.registry)
             assert snapshot.registry is not None
-            self.assertEqual("old-registry-secret", snapshot.registry.password)
+            self.assertEqual(Secret("old-registry-secret"), snapshot.registry.password)
             self.assertEqual(2, edited.revision("local"))
             self.assertIn(old_reference, store.deleted)
             self.assertNotIn(old_reference, store.values)
@@ -626,10 +627,12 @@ class TestProfiles(unittest.TestCase):
                 "local",
                 path,
                 transport="tls",
-                auth=KafkaAuthInput("plain", username="kafka-user", password="old-kafka-secret"),
+                auth=KafkaAuthInput(
+                    "plain", username="kafka-user", password=Secret("old-kafka-secret")
+                ),
                 registry_url="https://registry.example.com",
                 registry_auth=RegistryAuthInput(
-                    "basic", username="registry-user", password="old-registry-secret"
+                    "basic", username="registry-user", password=Secret("old-registry-secret")
                 ),
                 secret_store=store,
             ).profile("local")
@@ -650,10 +653,10 @@ class TestProfiles(unittest.TestCase):
                 removed = remove_future.result()
 
             self.assertEqual(1, snapshot.revision)
-            self.assertEqual("old-kafka-secret", snapshot.kafka.password)
+            self.assertEqual(Secret("old-kafka-secret"), snapshot.kafka.password)
             self.assertIsNotNone(snapshot.registry)
             assert snapshot.registry is not None
-            self.assertEqual("old-registry-secret", snapshot.registry.password)
+            self.assertEqual(Secret("old-registry-secret"), snapshot.registry.password)
             self.assertEqual({}, removed.profiles)
             self.assertNotIn(kafka_reference, store.values)
             self.assertNotIn(registry_reference, store.values)
@@ -666,7 +669,7 @@ class TestProfiles(unittest.TestCase):
                 "local",
                 path,
                 transport="tls",
-                auth=KafkaAuthInput("plain", username="alice", password="old-secret"),
+                auth=KafkaAuthInput("plain", username="alice", password=Secret("old-secret")),
                 secret_store=store,
             )
             entered = Event()
@@ -683,7 +686,7 @@ class TestProfiles(unittest.TestCase):
                     edit_profile,
                     "local",
                     path,
-                    auth=KafkaAuthInput("plain", username="alice", password="new-secret"),
+                    auth=KafkaAuthInput("plain", username="alice", password=Secret("new-secret")),
                     secret_store=blocking_store,
                 )
                 self.assertTrue(entered.wait(timeout=5))
@@ -760,7 +763,7 @@ class TestProfiles(unittest.TestCase):
                 path,
                 registry_url="https://registry.example.com",
                 registry_auth=RegistryAuthInput(
-                    "basic", username="synthetic-user", password="synthetic-password"
+                    "basic", username="synthetic-user", password=Secret("synthetic-password")
                 ),
                 secret_store=store,
             )
@@ -780,7 +783,7 @@ class TestProfiles(unittest.TestCase):
                 path,
                 registry_url="https://registry.example.com",
                 registry_auth=RegistryAuthInput(
-                    "basic", username="synthetic-user", password="first-password"
+                    "basic", username="synthetic-user", password=Secret("first-password")
                 ),
                 secret_store=store,
             )
@@ -788,7 +791,7 @@ class TestProfiles(unittest.TestCase):
                 "local",
                 path,
                 registry_auth=RegistryAuthInput(
-                    "basic", username="synthetic-user", password="second-password"
+                    "basic", username="synthetic-user", password=Secret("second-password")
                 ),
                 secret_store=store,
             ).profile("local")
@@ -816,8 +819,8 @@ class TestProfiles(unittest.TestCase):
                 registry_auth=RegistryAuthInput(
                     "mtls",
                     client_certificate=certificate,
-                    private_key=private_key,
-                    private_key_password="registry-key-password",
+                    private_key=Secret(private_key),
+                    private_key_password=Secret("registry-key-password"),
                 ),
                 secret_store=store,
             ).profile("local")
@@ -847,7 +850,7 @@ class TestProfiles(unittest.TestCase):
                 transport="tls",
                 registry_url="https://registry.example.com",
                 registry_auth=RegistryAuthInput(
-                    "basic", username="registry-user", password="old-registry-password"
+                    "basic", username="registry-user", password=Secret("old-registry-password")
                 ),
                 secret_store=store,
             ).profile("local")
@@ -856,9 +859,11 @@ class TestProfiles(unittest.TestCase):
             edited = edit_profile(
                 "local",
                 path,
-                auth=KafkaAuthInput("plain", username="kafka-user", password="kafka-password"),
+                auth=KafkaAuthInput(
+                    "plain", username="kafka-user", password=Secret("kafka-password")
+                ),
                 registry_auth=RegistryAuthInput(
-                    "basic", username="registry-user", password="new-registry-password"
+                    "basic", username="registry-user", password=Secret("new-registry-password")
                 ),
                 secret_store=store,
             ).profile("local")
@@ -878,10 +883,12 @@ class TestProfiles(unittest.TestCase):
                 "local",
                 path,
                 transport="tls",
-                auth=KafkaAuthInput("plain", username="kafka-user", password="kafka-password"),
+                auth=KafkaAuthInput(
+                    "plain", username="kafka-user", password=Secret("kafka-password")
+                ),
                 registry_url="https://registry.example.com",
                 registry_auth=RegistryAuthInput(
-                    "basic", username="registry-user", password="registry-password"
+                    "basic", username="registry-user", password=Secret("registry-password")
                 ),
                 secret_store=store,
             ).profile("local")
@@ -990,7 +997,7 @@ class TestProfiles(unittest.TestCase):
                 auth=KafkaAuthInput(
                     "scram-sha-512",
                     username="application",
-                    password="synthetic-password-one",
+                    password=Secret("synthetic-password-one"),
                 ),
                 secret_store=store,
             )
@@ -1000,7 +1007,7 @@ class TestProfiles(unittest.TestCase):
             edited = edit_profile(
                 "production",
                 path,
-                auth=KafkaAuthInput("plain", password="synthetic-password-two"),
+                auth=KafkaAuthInput("plain", password=Secret("synthetic-password-two")),
                 expected_revision=added.revision("production"),
                 secret_store=store,
             )
@@ -1032,7 +1039,7 @@ class TestProfiles(unittest.TestCase):
                     oauth_token_url="https://idp.example.com/oauth/token",
                     oauth_client_id="kafka-client",
                     oauth_scopes=("openid", "kafka"),
-                    oauth_client_secret="first-client-secret",
+                    oauth_client_secret=Secret("first-client-secret"),
                     oauth_ca_certificates=synthetic_pki().ca,
                 ),
                 secret_store=store,
@@ -1066,7 +1073,7 @@ class TestProfiles(unittest.TestCase):
                     auth=KafkaAuthInput(
                         "plain",
                         username="application",
-                        password="synthetic-password",
+                        password=Secret("synthetic-password"),
                     ),
                     secret_store=store,
                 )
@@ -1079,7 +1086,7 @@ class TestProfiles(unittest.TestCase):
                 auth=KafkaAuthInput(
                     "plain",
                     username="application",
-                    password="synthetic-password",
+                    password=Secret("synthetic-password"),
                 ),
                 secret_store=store,
             )
@@ -1087,7 +1094,7 @@ class TestProfiles(unittest.TestCase):
                 edit_profile(
                     "production",
                     path,
-                    auth=KafkaAuthInput("plain", password="replacement"),
+                    auth=KafkaAuthInput("plain", password=Secret("replacement")),
                     expected_revision=profiles.revision("production") + 1,
                     secret_store=store,
                 )
@@ -1104,8 +1111,8 @@ class TestProfiles(unittest.TestCase):
                 auth=KafkaAuthInput(
                     "mtls",
                     client_certificate=certificate,
-                    private_key=private_key,
-                    private_key_password="synthetic-key-password",
+                    private_key=Secret(private_key),
+                    private_key_password=Secret("synthetic-key-password"),
                 ),
                 secret_store=store,
             )

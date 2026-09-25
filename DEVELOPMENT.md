@@ -376,7 +376,9 @@ uv build --clear
 ```
 
 Verify versions, entry points, the packaged profile schema, public examples, and
-required documentation:
+required documentation. The check also extracts the source distribution and runs
+the bundled tests that read repository metadata (such as `.github` workflows)
+from inside it, so the sdist stays self-contained:
 
 ```bash
 uv run --locked python -m scripts.verify_release dist

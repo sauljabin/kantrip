@@ -4,8 +4,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from email.message import Message
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 from click.testing import CliRunner
 
@@ -16,6 +18,7 @@ from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult, ping_profile
 from kantrip.profiles import ProfileStoreError, add_profile, load_profiles
 from kantrip.secret_store import SecretNotFoundError
+from kantrip.secret_value import Secret
 from tests.unit.pki import synthetic_pki, temporary_pki_files
 
 
@@ -384,7 +387,10 @@ class TestCli(unittest.TestCase):
                 patch("kantrip.profiles.load_secret_store", return_value=store),
                 patch(
                     "kantrip.cli._secret_prompt",
-                    side_effect=("synthetic-password-one", "synthetic-password-two"),
+                    side_effect=(
+                        Secret("synthetic-password-one"),
+                        Secret("synthetic-password-two"),
+                    ),
                 ),
             ):
                 added = self.runner.invoke(
@@ -428,7 +434,7 @@ class TestCli(unittest.TestCase):
                 patch("kantrip.profiles.load_secret_store", return_value=store),
                 patch(
                     "kantrip.cli._secret_prompt",
-                    return_value="synthetic-registry-oauth-secret",
+                    return_value=Secret("synthetic-registry-oauth-secret"),
                 ),
             ):
                 added = self.runner.invoke(
@@ -977,6 +983,77 @@ class TestCli(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual([], list(temporary_path.iterdir()))
+
+    def test_ping_keeps_kafka_success_when_registry_fails(self) -> None:
+        failures = (
+            ("transport", URLError("connection refused"), "did not return registry metadata"),
+            ("authentication", _http_error(401), "rejected Registry authentication"),
+            ("authorization", _http_error(403), "denied Registry authorization"),
+        )
+        for name, failure, message in failures:
+            with self.subTest(name), self.runner.isolated_filesystem():
+                database_path = Path("profiles.db")
+                _add_test_profile(database_path, registry=True)
+                environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+                with (
+                    patch("kantrip.ping._probe_kafka"),
+                    patch("kantrip.ping._open_request", side_effect=failure),
+                ):
+                    result = self.runner.invoke(
+                        cli, ["--no-color", "ping", "local"], env=environment
+                    )
+
+                self.assertEqual(1, result.exit_code, result.output)
+                self.assertIn("[passed] Kafka transport: plaintext reachable", result.stdout)
+                self.assertNotIn("Schema Registry transport", result.stdout)
+                self.assertIn("Registry check failed for profile 'local'", result.stderr)
+                self.assertIn(message, " ".join(result.stderr.split()))
+
+    def test_ping_skips_registry_when_kafka_fails(self) -> None:
+        with self.runner.isolated_filesystem():
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path, registry=True)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+            with (
+                patch("kantrip.ping._probe_kafka", side_effect=PingError("broker unreachable")),
+                patch("kantrip.ping._open_request") as registry_request,
+            ):
+                result = self.runner.invoke(cli, ["--no-color", "ping", "local"], env=environment)
+
+        self.assertEqual(1, result.exit_code, result.output)
+        registry_request.assert_not_called()
+        self.assertEqual(
+            "", result.stdout.replace("[running] Checking profile 'local'", "").strip()
+        )
+        self.assertIn("Could not connect for profile 'local': broker unreachable", result.stderr)
+        self.assertIn(
+            "Confluent Schema Registry check skipped: Kafka check failed",
+            " ".join(result.stderr.split()),
+        )
+
+    def test_ping_quiet_is_silent_for_every_service_outcome(self) -> None:
+        outcomes = (
+            ("kafka failure", PingError("broker unreachable"), None, 1),
+            ("registry failure", None, URLError("connection refused"), 1),
+        )
+        for name, kafka_failure, registry_failure, status in outcomes:
+            with self.subTest(name), self.runner.isolated_filesystem():
+                database_path = Path("profiles.db")
+                _add_test_profile(database_path, registry=True)
+                environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+                with (
+                    patch("kantrip.ping._probe_kafka", side_effect=kafka_failure),
+                    patch("kantrip.ping._open_request", side_effect=registry_failure),
+                ):
+                    result = self.runner.invoke(cli, ["ping", "local", "-q"], env=environment)
+
+                self.assertEqual(status, result.exit_code, result.output)
+                self.assertEqual("", result.stdout)
+                self.assertEqual("", result.stderr)
+
+
+def _http_error(status: int) -> HTTPError:
+    return HTTPError("http://localhost:8081/subjects?limit=1", status, "rejected", Message(), None)
 
 
 def _add_test_profile(path: Path, *, registry: bool = False) -> None:

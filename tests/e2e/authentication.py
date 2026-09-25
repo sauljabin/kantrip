@@ -748,6 +748,10 @@ def _exercise_invalid_registry_credentials(
             accepted=(1,),
         )
         _require_redacted(output, credentials)
+        if "Kafka transport:" not in output or "Registry check failed" not in output:
+            raise AuthSmokeFailure(
+                f"{profile} ping must keep Kafka success and report the Registry failure"
+            )
 
 
 def _exercise_invalid_mtls(

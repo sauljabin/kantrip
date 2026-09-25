@@ -22,6 +22,7 @@ from kantrip.oauth import (
     validate_oauth_identity,
 )
 from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
+from kantrip.secret_value import Secret
 
 RegistryProvider = Literal["apicurio", "confluent"]
 RegistryAuthType = Literal["none", "basic", "token", "mtls", "oauth"]
@@ -63,10 +64,10 @@ class RegistryConnection:
     oauth: OAuthConnection | None = None
     oauth_logical_cluster: str | None = None
     oauth_identity_pool_id: str | None = None
-    password: str | None = None
-    token: str | None = None
-    private_key: str | None = None
-    private_key_password: str | None = None
+    password: Secret | None = None
+    token: Secret | None = None
+    private_key: Secret | None = None
+    private_key_password: Secret | None = None
 
     @property
     def display_name(self) -> str:
@@ -208,7 +209,7 @@ def _resolve_mtls_connection(
     store: SecretStore,
 ) -> RegistryConnection:
     assert connection.private_key_reference is not None
-    key = store.get(connection.private_key_reference)
+    key = Secret(store.get(connection.private_key_reference))
     password = (
         _secret(store, connection.private_key_password_reference)
         if connection.private_key_password_reference
@@ -332,7 +333,7 @@ def _add_confluent_registry_security(
         properties.update(
             {
                 "basic.auth.credentials.source": "USER_INFO",
-                "basic.auth.user.info": f"{connection.username}:{connection.password}",
+                "basic.auth.user.info": f"{connection.username}:{connection.password.reveal()}",
             }
         )
         return
@@ -342,7 +343,7 @@ def _add_confluent_registry_security(
         properties.update(
             {
                 "bearer.auth.credentials.source": "STATIC_TOKEN",
-                "bearer.auth.token": connection.token,
+                "bearer.auth.token": connection.token.reveal(),
             }
         )
         return
@@ -361,7 +362,7 @@ def _add_confluent_registry_security(
             "bearer.auth.credentials.source": "OAUTHBEARER",
             "bearer.auth.issuer.endpoint.url": oauth.token_url,
             "bearer.auth.client.id": oauth.client_id,
-            "bearer.auth.client.secret": oauth.client_secret or "",
+            "bearer.auth.client.secret": _revealed_client_secret(oauth),
             "bearer.auth.scope": " ".join(oauth.scopes),
         }
     )
@@ -393,11 +394,11 @@ def _add_confluent_java_tls(
         {
             "ssl.keystore.type": "PEM",
             "ssl.keystore.certificate.chain": connection.client_certificate,
-            "ssl.keystore.key": connection.private_key,
+            "ssl.keystore.key": connection.private_key.reveal(),
         }
     )
     if connection.private_key_password is not None:
-        properties["ssl.key.password"] = connection.private_key_password
+        properties["ssl.key.password"] = connection.private_key_password.reveal()
 
 
 def _add_apicurio_registry_security(
@@ -422,7 +423,7 @@ def _add_apicurio_registry_security(
         if connection.username is None or connection.password is None:
             raise RegistryProfileError("Registry Basic credentials are not resolved")
         properties["apicurio.registry.auth.username"] = connection.username
-        properties["apicurio.registry.auth.password"] = connection.password
+        properties["apicurio.registry.auth.password"] = connection.password.reveal()
         return
     if connection.auth_type == "token":
         raise RegistryProfileError("Apicurio does not support fixed Registry tokens")
@@ -436,7 +437,7 @@ def _add_apicurio_registry_security(
         {
             "apicurio.registry.auth.service.token.endpoint": oauth.token_url,
             "apicurio.registry.auth.client.id": oauth.client_id,
-            "apicurio.registry.auth.client.secret": oauth.client_secret or "",
+            "apicurio.registry.auth.client.secret": _revealed_client_secret(oauth),
         }
     )
     if oauth.scopes:
@@ -476,7 +477,7 @@ def _add_registry_tls_files(
                 "Kaskade Apicurio does not support encrypted PEM client keys"
             )
         else:
-            properties["ssl.key.password"] = connection.private_key_password
+            properties["ssl.key.password"] = connection.private_key_password.reveal()
 
 
 def _resolved_registry_oauth(connection: RegistryConnection) -> OAuthConnection:
@@ -484,6 +485,12 @@ def _resolved_registry_oauth(connection: RegistryConnection) -> OAuthConnection:
     if oauth is None or oauth.client_secret is None:
         raise RegistryProfileError("Registry OAuth credentials are not resolved")
     return oauth
+
+
+def _revealed_client_secret(oauth: OAuthConnection) -> str:
+    if oauth.client_secret is None:
+        raise RegistryProfileError("Registry OAuth credentials are not resolved")
+    return oauth.client_secret.reveal()
 
 
 def _parse_tls(tls: object) -> tuple[str | None, str | None]:
@@ -649,11 +656,11 @@ def _reject_auth_properties(auth: Mapping[str, Any], allowed: set[str]) -> None:
         )
 
 
-def _secret(store: SecretStore, reference: str) -> str:
+def _secret(store: SecretStore, reference: str) -> Secret:
     value = store.get(reference)
     if not value or any(character in value for character in ("\x00", "\r", "\n")):
         raise RegistryProfileError("Registry credentials are empty or contain unsupported controls")
-    return value
+    return Secret(value)
 
 
 __all__ = [
