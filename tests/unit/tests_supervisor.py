@@ -111,7 +111,9 @@ class TestProcessSupervisor(unittest.TestCase):
 
             recorded = events.read_text(encoding="utf-8").splitlines()
 
-        self.assertCountEqual(("leader", "grandchild"), recorded)
+        # The group cleanup may send the grandchild a second SIGTERM while its handler is still
+        # running, so assert which processes received the signal, not how many times.
+        self.assertEqual({"leader", "grandchild"}, set(recorded))
 
     def test_process_that_creates_a_new_session_is_outside_the_group(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
