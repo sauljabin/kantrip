@@ -124,6 +124,23 @@ def _run_suite(suite: str) -> None:
     ).run()
 
 
+def sandbox_state_dir(repository: Path) -> Path:
+    """Use this checkout's sandbox state, or the main checkout's from a Git worktree."""
+    state = repository / "sandbox" / ".state"
+    if state.is_dir():
+        return state
+    try:
+        common = subprocess.check_output(
+            ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            cwd=repository,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return state
+    return Path(common.strip()).parent / "sandbox" / ".state"
+
+
 def _run_staged_wheel() -> None:
     try:
         selected = os.environ.get("KANTRIP_E2E_FORCE") == "1" or staged_requires_e2e()
@@ -142,7 +159,7 @@ def _run_staged_wheel() -> None:
         source = root / "source"
         source.mkdir()
         _run("git", "checkout-index", "--all", f"--prefix={source}/", cwd=repository)
-        state = repository / "sandbox" / ".state"
+        state = sandbox_state_dir(repository)
         if state.is_dir():
             (source / "sandbox" / ".state").symlink_to(state, target_is_directory=True)
 

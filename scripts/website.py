@@ -25,6 +25,7 @@ import pyte
 
 from kantrip.console import ARCANA_COLORS
 from scripts import TerminalTimeout, run_terminal
+from scripts.tests import sandbox_state_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SITE_ROOT = PROJECT_ROOT / "site"
@@ -518,23 +519,6 @@ def capture_environment(directory: Path) -> dict[str, str]:
     return environment
 
 
-def default_state_dir() -> Path:
-    """Use this checkout's sandbox state, or the main checkout's from a Git worktree."""
-    local = PROJECT_ROOT / "sandbox" / ".state"
-    if local.is_dir():
-        return local
-    try:
-        common = subprocess.check_output(
-            ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
-            cwd=PROJECT_ROOT,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return local
-    return Path(common.strip()).parent / "sandbox" / ".state"
-
-
 def sort_topic_blocks(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Order kcat's topic metadata by name; kcat prints topics in arbitrary order."""
     starts = [index for index, line in enumerate(lines) if line["text"].startswith('  topic "')]
@@ -791,7 +775,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.action == "capture":
-        with sandbox_target(args.state_dir or default_state_dir()) as target:
+        with sandbox_target(args.state_dir or sandbox_state_dir(PROJECT_ROOT)) as target:
             capture = DemoCapture(target, capture_environment(target.database.parent))
             demo = capture_demo(load_demo(), capture)
         write_demo(demo)
