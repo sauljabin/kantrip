@@ -89,6 +89,11 @@ class TestE2ESelection(unittest.TestCase):
         self.assertFalse(event_requires_e2e("pull_request", action="synchronize", label="run-e2e"))
         self.assertFalse(event_requires_e2e("pull_request", action="labeled", label="other"))
         self.assertTrue(event_requires_e2e("pull_request", action="labeled", label="run-e2e"))
+        self.assertTrue(event_requires_e2e("pull_request", action="opened", labels=("run-e2e",)))
+        self.assertFalse(event_requires_e2e("pull_request", action="opened", labels=("other",)))
+        self.assertFalse(
+            event_requires_e2e("pull_request", action="synchronize", labels=("run-e2e",))
+        )
         self.assertTrue(event_requires_e2e("workflow_dispatch"))
         self.assertFalse(event_requires_e2e("push", before="old", after="new"))
         push.assert_called_once_with("old", "new")

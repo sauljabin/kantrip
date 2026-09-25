@@ -63,6 +63,9 @@ jobs:
   e2e-selection:
     name: E2E selection
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       run_e2e: ${{ steps.decide.outputs.run_e2e }}
     steps:
@@ -79,9 +82,18 @@ jobs:
           EVENT_LABEL: ${{ github.event.label.name || '' }}
           BEFORE: ${{ github.event.before || '' }}
           AFTER: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # A PR opened with a label may not carry it in the event payload; read
+          # the current labels so the racing opened and labeled runs agree.
+          pr_labels=""
+          if [ "$EVENT_NAME" = pull_request ] && [ "$EVENT_ACTION" = opened ]; then
+            pr_labels="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json labels --jq '[.labels[].name] | join(",")')"
+          fi
           selected="$(python3 scripts/tests.py --ci-event "$EVENT_NAME" \
-            --action "$EVENT_ACTION" --label "$EVENT_LABEL" \
+            --action "$EVENT_ACTION" --label "$EVENT_LABEL" --pr-labels "$pr_labels" \
             --before "$BEFORE" --after "$AFTER")"
           echo "run_e2e=$selected" >> "$GITHUB_OUTPUT"
           echo "E2E selected: $selected"
