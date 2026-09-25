@@ -70,7 +70,7 @@
     <p>Add a SCRAM profile over verified TLS, check it, and hand it to kcat and the Kafka CLIs.
       The password prompt shows nothing, and the secret never reaches the profile, the
       command line, or the output. Inside the session, your own prompt can
-      <a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md#show-the-active-profile-in-your-prompt">show the active profile</a>.</p>
+      <a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md#displaying-the-active-profile-in-your-prompt">show the active profile</a>.</p>
     <figure class="window demo" data-demo>
       <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">kantrip demo</span></div>
       <div class="demo-stage">
@@ -90,10 +90,10 @@
 <span class="ln out">  topic &quot;payments&quot; with 1 partitions:</span>
 <span class="ln out">    partition 0, leader 0, replicas: 0, isrs: 0</span>
 <span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip exec prod</span>
-<span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> prod </span><span class="t-secondary">❯ </span></span>kafka-topics --list</span>
+<span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> </span><span class="t-secondary">prod ❯ </span></span>kafka-topics --list</span>
 <span class="ln out">orders</span>
 <span class="ln out">payments</span>
-<span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> prod </span><span class="t-secondary">❯ </span></span>exit</span><!-- demo-transcript:end --></code></pre>
+<span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> </span><span class="t-secondary">prod ❯ </span></span>exit</span><!-- demo-transcript:end --></code></pre>
       </div>
       <figcaption class="demo-caption">Replayed from a real run against a local Kafka cluster; hosts and names are made generic.</figcaption>
     </figure>

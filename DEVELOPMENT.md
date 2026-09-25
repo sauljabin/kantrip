@@ -489,7 +489,7 @@ sandbox state, `capture` uses the main checkout's `sandbox/.state`; pass
 
 The interactive session runs Zsh without global startup files and with a
 private `.zshrc` whose prompt shows `$KANTRIP_PROFILE`, as in
-[Usage](USAGE.md#show-the-active-profile-in-your-prompt), so the demo shows the
+[Usage](USAGE.md#displaying-the-active-profile-in-your-prompt), so the demo shows the
 active profile the way users configure it. Output is deterministic (kcat topics
 are sorted by name), so an unchanged CLI recaptures an identical file.
 

@@ -363,43 +363,6 @@ detached children are unsupported; exit before starting another session.
 `kantrip current` prints the active profile or reports that none is selected. It
 is equivalent to reading `KANTRIP_PROFILE`.
 
-### Show the active profile in your prompt
-
-Kantrip does not change your prompt. Your shell or prompt tool can show
-`KANTRIP_PROFILE`, which is set only inside a session. The `󱀏` glyph needs a
-[Nerd Font](https://www.nerdfonts.com/); use any text instead if you prefer.
-
-Zsh, including Oh My Zsh themes (add it after `source $ZSH/oh-my-zsh.sh`):
-
-```zsh
-setopt PROMPT_SUBST
-PROMPT='%F{blue}${KANTRIP_PROFILE:+󱀏 $KANTRIP_PROFILE }%f'$PROMPT
-```
-
-Bash, in `~/.bashrc`:
-
-```bash
-PS1='${KANTRIP_PROFILE:+󱀏 $KANTRIP_PROFILE }'"$PS1"
-```
-
-Fish, in `~/.config/fish/config.fish`:
-
-```fish
-functions --copy fish_prompt kantrip_original_prompt
-function fish_prompt
-    set -q KANTRIP_PROFILE; and printf '󱀏 %s ' $KANTRIP_PROFILE
-    kantrip_original_prompt
-end
-```
-
-[Starship](https://starship.rs/), in `~/.config/starship.toml`:
-
-```toml
-[env_var.KANTRIP_PROFILE]
-format = "[󱀏 $env_value]($style) "
-style = "bold blue"
-```
-
 The subshell preserves normal startup files and history. It neutralizes aliases,
 functions, and Fish abbreviations that shadow adapters, keeps the shim directory
 first on `PATH`, and removes these changes on exit.
@@ -448,6 +411,10 @@ Configure only the integration that renders your prompt:
 - Use **Powerlevel10k** if Powerlevel10k controls your prompt, even when it is
   installed through Oh My Zsh.
 - Use **Oh My Zsh** for a theme that uses the standard `PROMPT` variable.
+- Use **Bash** or **Fish** for their own prompt without a prompt framework.
+
+Kantrip keeps your normal startup files, so these settings also load inside the
+session.
 
 ### Choose a display style
 
@@ -571,6 +538,30 @@ p10k segment -f 5 -t "󱀏 ${KANTRIP_PROFILE}"
 
 Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
 `POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file.
+
+### Bash
+
+Add this to the end of `~/.bashrc`:
+
+```bash
+PS1='${KANTRIP_PROFILE:+kantrip:$KANTRIP_PROFILE }'"$PS1"
+```
+
+For a compact prefix, replace `kantrip:` with `🪄 `, `󱡄 `, or `󱀏 `.
+
+### Fish
+
+Add this to `~/.config/fish/config.fish`:
+
+```fish
+functions --copy fish_prompt kantrip_original_prompt
+function fish_prompt
+    set -q KANTRIP_PROFILE; and printf 'kantrip:%s ' $KANTRIP_PROFILE
+    kantrip_original_prompt
+end
+```
+
+For a compact prefix, replace `kantrip:` with `🪄 `, `󱡄 `, or `󱀏 `.
 
 ### Verify the prompt
 

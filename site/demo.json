@@ -86,11 +86,11 @@
     {
       "prompt": [
         {
-          "text": "󱀏 prod ",
+          "text": "󱀏 ",
           "style": "accent"
         },
         {
-          "text": "❯ ",
+          "text": "prod ❯ ",
           "style": "secondary"
         }
       ],
@@ -107,11 +107,11 @@
     {
       "prompt": [
         {
-          "text": "󱀏 prod ",
+          "text": "󱀏 ",
           "style": "accent"
         },
         {
-          "text": "❯ ",
+          "text": "prod ❯ ",
           "style": "secondary"
         }
       ],

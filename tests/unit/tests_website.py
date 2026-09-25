@@ -9,6 +9,7 @@ import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
@@ -421,13 +422,18 @@ class TestDemoCapture(unittest.TestCase):
         )
 
     def test_capture_environment_uses_a_private_zsh_prompt(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("scripts.website.shutil.which", return_value="/usr/bin/zsh"),
+        ):
             environment = capture_environment(Path(directory))
             wrapper = Path(environment["SHELL"])
             self.assertEqual(wrapper.name, "zsh")
-            self.assertIn(" -d ", wrapper.read_text(encoding="utf-8"))
+            wrapper_text = wrapper.read_text(encoding="utf-8")
             zshrc = (Path(directory) / ".zshrc").read_text(encoding="utf-8")
-        self.assertIn("${KANTRIP_PROFILE:+\U000f100f $KANTRIP_PROFILE }", zshrc)
+        self.assertIn("kantrip_prompt_info()", zshrc)
+        self.assertIn("\U000f100f", zshrc)
+        self.assertIn("exec /usr/bin/zsh -d", wrapper_text)
         self.assertEqual(environment["ZDOTDIR"], directory)
         self.assertEqual(environment["KANTRIP_DATABASE"], str(Path(directory) / "profiles.db"))
         self.assertNotIn("NO_COLOR", environment)

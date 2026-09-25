@@ -377,12 +377,20 @@ STYLE_BY_COLOR = {
 }
 DEFAULT_STYLES = frozenset({"default", "foreground"})
 SESSION_MARKER = "__KANTRIP_SITE_DEMO_{}__"
-# The session runs Zsh without global startup files and with this .zshrc: an
-# existing prompt ("❯") prefixed with the active profile, as USAGE.md shows.
-DEMO_ZSHRC = """setopt PROMPT_SUBST
+# The session runs Zsh without global startup files and with this .zshrc: the
+# Oh My Zsh snippet from USAGE.md (Apache Kafka glyph, Arcana colors) in front of
+# an existing "❯" prompt.
+DEMO_ZSHRC = """kantrip_prompt_info() {
+  [[ -n ${KANTRIP_PROFILE:-} ]] || return
+  print -P -n '%F{#60A5FA}\U000f100f %f%F{#22D3EE}'
+  print -rn -- "$KANTRIP_PROFILE"
+  print -P -n '%f '
+}
+
+setopt prompt_subst
 unsetopt PROMPT_SP
 PROMPT='%F{#22D3EE}❯%f '
-PROMPT='%F{#60A5FA}${KANTRIP_PROFILE:+\U000f100f $KANTRIP_PROFILE }%f'$PROMPT
+PROMPT='$(kantrip_prompt_info)'"$PROMPT"
 """
 CAPTURE_NOTE = (
     "Captured by 'python -m scripts.website capture' against the local sandbox's "
