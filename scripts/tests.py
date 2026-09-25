@@ -80,13 +80,25 @@ def push_requires_e2e(before: str, after: str) -> bool:
 
 
 def event_requires_e2e(
-    event: str, *, action: str = "", label: str = "", before: str = "", after: str = ""
+    event: str,
+    *,
+    action: str = "",
+    label: str = "",
+    labels: tuple[str, ...] = (),
+    before: str = "",
+    after: str = "",
 ) -> bool:
-    """PR E2E is a one-shot label event; dispatch and relevant main pushes run."""
+    """PR E2E is a one-shot label event; dispatch and relevant main pushes run.
+
+    A PR opened with the label counts as the label being applied: the separate
+    ``opened`` and ``labeled`` runs race and cancel each other, so both select E2E.
+    """
     if event == "workflow_dispatch":
         return True
     if event == "pull_request":
-        return action == "labeled" and label == "run-e2e"
+        return (action == "labeled" and label == "run-e2e") or (
+            action == "opened" and "run-e2e" in labels
+        )
     if event == "push":
         return push_requires_e2e(before, after)
     raise ValueError(f"unsupported CI event: {event}")
@@ -176,6 +188,7 @@ def main() -> None:
     mode.add_argument("--verify-e2e-result", nargs=2, metavar=("SELECTED", "RESULT"))
     parser.add_argument("--action", default="")
     parser.add_argument("--label", default="")
+    parser.add_argument("--pr-labels", default="", help="comma-separated current PR labels")
     parser.add_argument("--before", default="")
     parser.add_argument("--after", default="")
     arguments = parser.parse_args()
@@ -188,6 +201,7 @@ def main() -> None:
             arguments.ci_event,
             action=arguments.action,
             label=arguments.label,
+            labels=tuple(filter(None, arguments.pr_labels.split(","))),
             before=arguments.before,
             after=arguments.after,
         )

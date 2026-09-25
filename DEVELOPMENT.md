@@ -333,11 +333,13 @@ The same path classification drives local staged checks and `main` push CI:
 | Runtime code, schemas, dependencies/lockfiles, packaging, sandbox, E2E tests/tools, or E2E workflow/hook infrastructure | Run E2E | Run E2E on `main` |
 | Mixed changes, deleted/renamed runtime paths, or unknown paths | Run E2E | Run E2E on `main` |
 | PR opened, synchronized, or reopened | Classify staged changes independently | Fast CI only |
-| Newly applied `run-e2e` PR label or explicit CI workflow dispatch | Not applicable | Run full E2E once |
+| Newly applied `run-e2e` PR label, a PR opened with it, or explicit CI workflow dispatch | Not applicable | Run full E2E once |
 | Release tag | Not applicable | Run full E2E against the exact release wheel |
 
 The PR label is a one-shot request: subsequent pushes do not repeat E2E merely
-because the label remains. Remove and reapply it to request another run. The
+because the label remains. Opening a PR with the label fires separate `opened`
+and `labeled` runs that cancel each other; the `opened` run reads the PR's
+current labels so either survivor runs E2E. Remove and reapply it to request another run. The
 `main` selector compares the complete push range; a missing base or an unknown
 path selects E2E conservatively. Documentation that changes an executable
 contract needs an explicit force: `KANTRIP_E2E_FORCE=1` locally, a fresh

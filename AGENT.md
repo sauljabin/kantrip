@@ -300,7 +300,8 @@ changes. Mixed, renamed/deleted runtime, or unknown paths require E2E. The
 shared staged/`main` selection policy lives in `scripts/tests.py` and
 is documented in [Development](DEVELOPMENT.md#sandbox-services-and-e2e-workflow).
 Force E2E explicitly when docs change executable behavior. PRs run it only on
-a newly applied `run-e2e` label or explicit workflow dispatch; releases always
+a newly applied `run-e2e` label (including a PR opened with it) or explicit
+workflow dispatch; releases always
 run it against the exact wheel, regardless of changed paths.
 
 Run the applicable checks:
