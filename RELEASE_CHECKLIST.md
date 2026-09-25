@@ -14,22 +14,19 @@ release authorization, requesting it only if absent.
 
 ## First Stable Release — Additional Gate
 
-These roadmap-completion checks apply to the first stable release, not to an
+These checks apply to the first stable release (v0.1.0), not to an
 intermediate alpha or beta. Pre-releases use the shared preparation and
 pre-release sections below; their exact-wheel release E2E remains mandatory.
 
-- [ ] Complete the [first-release manual QA](MVP.md#manual-qa--first-release-checklist),
-  or its implemented scenarios moved to [Manual Testing](MANUAL_TESTING.md),
-  against the candidate wheel on Linux and macOS. Record actual results;
-  automated unit and E2E tests do not replace the human checklist.
+- [ ] Run every scenario in [Manual Testing](MANUAL_TESTING.md) against the
+  candidate wheel on macOS and one Linux distribution. Record actual results;
+  automated unit and E2E tests do not replace the human checks.
 - [ ] Confirm every required CLI/protocol/authentication/input-format cell in
   [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
   conditional and unsupported cells explicitly, including ping proof limits.
-- [ ] Complete the final roadmap cleanup: preserve technical decisions in
-  `ARCHITECTURE.md`, keep durable agent conventions in `AGENT.md`, align
-  `THREAT_MODEL.md`, and move all human QA into `MANUAL_TESTING.md`. Remove the
-  temporary roadmap and its links/packaging requirements only after all its
-  implementation and verification obligations are complete.
+- [ ] Confirm every v0.1 milestone issue is closed with evidence, technical
+  decisions are recorded in `ARCHITECTURE.md`, and `THREAT_MODEL.md` matches
+  the implemented controls.
 - [ ] Check documentation audiences: `USAGE.md` and `COMPATIBILITY.md` contain
   installed commands and current support, without sandbox, `uv run`, internal-only
   capabilities, or future flags. Developer workflows and agent release steps
@@ -37,10 +34,11 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
 - [ ] Confirm the issue #8 site artifact passed PR validation, deployment ran
   only from `main`, and the published site passed the manual accessibility,
   content, asset, and link checks. Record the URL and deployed commit.
-- [ ] Establish the first published compatibility boundary. Earlier development
-  commits need no compatibility layer or upgrade path; test clean installation
-  and safe rejection of incompatible state. Shared prior-release comparison
-  checks are not applicable when no earlier release exists; record that reason.
+- [ ] Establish the compatibility boundary at v0.1.0. Earlier development
+  commits and published alphas/betas need no compatibility layer or upgrade
+  path; test clean installation and safe rejection of incompatible state.
+  Prior-release comparison checks are not applicable to v0.1.0; record that
+  reason.
 
 ## Shared Preparation — Every Release
 
@@ -50,7 +48,8 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
 - [ ] Confirm the version classification, backward compatibility, known issues,
   and relevant security advisories. Identify breaking changes and required
   migration guidance before choosing the release type.
-- [ ] Compare bundled database migrations with the previous release. Confirm
+- [ ] Compare bundled database migrations with the previous release (from
+  v0.1.0 on; before v0.1.0 the chain may be rewritten). Confirm
   that no released sequence, name, or payload changed; new sequences are ordered
   and checksummed; and product SemVer is used only as application metadata.
 - [ ] Test database creation from empty state and upgrades from every supported

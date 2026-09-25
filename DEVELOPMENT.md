@@ -10,8 +10,9 @@ user-facing exploratory checks from [Manual Testing](MANUAL_TESTING.md).
   in developer documentation.
 - Developers: this guide, [Architecture](ARCHITECTURE.md),
   [Threat Model](THREAT_MODEL.md), and [Manual Testing](MANUAL_TESTING.md).
-- AI agents: [Agent Instructions](AGENT.md),
-  [Release Checklist](RELEASE_CHECKLIST.md), and the temporary [MVP roadmap](MVP.md).
+- AI agents: [Agent Instructions](AGENT.md) and
+  [Release Checklist](RELEASE_CHECKLIST.md). Planned work lives in the
+  [milestone issues](https://github.com/sauljabin/kantrip/milestones).
 
 Architecture owns technical decisions and their rationale; agent instructions
 own implementation conventions. Record each decision when its implementation
@@ -104,13 +105,16 @@ Keep the profile schema in `schemas/`, synthetic examples in `examples/`, and
 private-data-free fixtures with their tests.
 
 When an application variable changes, update `USAGE.md`, architecture guidance,
-and tests together. Before the first release, obsolete contracts may be replaced
-without backward compatibility with development commits. Reject incompatible
-state explicitly; do not add aliases or silently reset user data.
+and tests together. No backward compatibility is promised before v0.1.0,
+including between published alphas: obsolete contracts may be replaced
+directly. Reject incompatible state explicitly; do not add aliases or silently
+reset user data.
 
-Implement the sequential PRs in [MVP.md](MVP.md), including their acceptance
-criteria and affected documentation. Its manual first-release QA is a separate
-human release gate; both unit and E2E suites remain required.
+Implement milestone issues in the order given by the delivery index
+([#47](https://github.com/sauljabin/kantrip/issues/47)), including their
+acceptance criteria and affected documentation. The human checks in
+[Manual Testing](MANUAL_TESTING.md) are a separate release gate; both unit and
+E2E suites remain required.
 
 ## Database migrations
 
@@ -221,9 +225,10 @@ uv run --locked python -m sandbox down
 Generated credentials, CA material, and Java client property files are private
 and ignored below `sandbox/.state`. The lifecycle command does not print their
 values. The generated assignment file is a laboratory input, not Kantrip's
-child environment contract; manual checks source it without blanket `set -a`.
-See [manual environment setup](MANUAL_TESTING.md#source-sandbox-variables-without-blanket-export)
-for the precedence checks. Every generated source variable uses the
+child environment contract. Source it only in a dedicated laboratory shell
+with `set +a; . sandbox/.state/credentials.env`, never with `set -a`, inside
+`kantrip exec`, or from shell startup files, and never print it. Every
+generated source variable uses the
 `KANTRIP_SANDBOX_*` namespace, which supervised children scrub. `down` removes
 the cluster but retains this private state so another
 `up` can reuse the same credentials; remove that exact directory to rotate the
@@ -384,7 +389,7 @@ fallback only bootstraps empty or exported checkouts.
 ## Architecture and security
 
 - Stable design decisions: [Architecture](ARCHITECTURE.md)
-- Planned MVP work: [MVP roadmap](MVP.md)
+- Planned work: [milestones](https://github.com/sauljabin/kantrip/milestones)
 - Assets, threats, controls, and limitations: [Threat model](THREAT_MODEL.md)
 - Private vulnerability reporting: [Security policy](SECURITY.md)
 

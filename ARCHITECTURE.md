@@ -1,8 +1,9 @@
 # Architecture
 
 This developer reference records the implemented architecture and its technical
-decisions. Remaining implementation decisions and first-release gates belong to
-[MVP.md](MVP.md).
+decisions. Planned work is tracked in the
+[v0.1](https://github.com/sauljabin/kantrip/milestone/1) and
+[v0.2](https://github.com/sauljabin/kantrip/milestone/2) milestones.
 The diagrams illustrate component boundaries; the capability limits in this
 text and [Compatibility](COMPATIBILITY.md) govern current behavior.
 
@@ -44,8 +45,37 @@ The CLI accepts explicit profile fields and no-echo credential prompts; `edit`
 without options opens a field editor. It has no file import yet. Kantrip has no separate `import`, `secret`,
 `export`, `clone`, or `configure` command family. Human, JSON, and YAML
 inspection are observations rather than round-trip profile documents; they omit
-secret values and internal credential references. The exact planned CLI
-contract remains centralized in [MVP.md](MVP.md).
+secret values and internal credential references. Planned CLI changes are
+tracked in milestone issues.
+
+## Design rules
+
+These rules bound every feature and are enforced before an operation starts:
+
+- **Explicit selection.** Every network command names `PROFILE`; there is no
+  ambient or globally active profile.
+- **No secret values in arguments.** Secrets enter only through no-echo
+  prompts or bounded private-key files. No flag accepts a literal password,
+  token, client secret, private key, or JAAS value.
+- **Verified TLS for authentication.** Authenticated Kafka, Registry, and
+  OAuth token endpoints require verified TLS, including on localhost; there is
+  no insecure test bypass. Plaintext is allowed only without authentication.
+- **Independent trust and credentials.** Kafka, Registry, and token-endpoint
+  trust and credentials are configured separately and never inherited from
+  one another.
+- **Capability checks name the gap.** An unsupported client/mechanism
+  combination fails before the operation with a message naming both. Support
+  in a library does not imply that a CLI built on it exposes the setting.
+
+## Outside the product scope
+
+Database downgrade; profile history or rollback; secret retrieval or
+round-trip export; detached or background sessions; Kubernetes discovery;
+arbitrary secret providers; Kafka fixed-token or refresh-token OAuth;
+client-side Strimzi OAuth callbacks; Windows; automatic JKS/PKCS12 conversion;
+HTTP proxy profiles; adapters without a versioned, tested safe contract; a
+hosted service, daemon, programmatic profile API, or interactive TUI. Amazon
+MSK IAM is tracked separately as a research item.
 
 ## Current capability boundaries
 
@@ -188,8 +218,8 @@ than relying on schema normalization or read-time inference.
 Profiles reject arbitrary property maps. Current renderers produce Java and
 librdkafka connection configuration and provider-specific HTTP Registry URL
 settings. Registry TLS/authentication and Kafka/Registry OAuth render into
-client-specific private configuration; property-file import normalization
-remains in the roadmap.
+client-specific private configuration. Property-file and Strimzi Secret
+import are planned for v0.2.
 
 ## Profile lifecycle and input sources
 
@@ -242,8 +272,8 @@ Each profile row has a stable UUID, a unique name, and a monotonically
 increasing revision. The revision is a generation and concurrency token, not
 retained history. The internal mutation API accepts an expected revision and
 rejects a concurrent change instead of overwriting it. Prompt and file
-collection occur before the maintenance lock. External file normalization
-remains specified in the roadmap.
+collection occur before the maintenance lock. External file import is planned
+for v0.2 and will feed this same mutation path.
 
 ## Session resolution and rendering
 

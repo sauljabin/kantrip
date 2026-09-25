@@ -15,8 +15,9 @@ latest stable release unless the project explicitly announces otherwise.
 ## Scope of current support
 
 Use [Compatibility](COMPATIBILITY.md) to distinguish executable authentication
-from file-input and Registry support. The remaining security work and
-first-release verification requirements are tracked in [MVP.md](MVP.md).
+from file-input and Registry support. Remaining security work and
+first-release verification are tracked in the
+[v0.1 milestone](https://github.com/sauljabin/kantrip/milestone/1).
 Kafka ping observes a completed broker connection without resource APIs; its
 transport/authentication proof does not establish application authorization.
 Registry ping reads only the selected provider's bounded list/search endpoint:
