@@ -4,12 +4,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from email.message import Message
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
+import yaml
 from click.testing import CliRunner
 
 from kantrip import APP_VERSION
@@ -21,7 +24,7 @@ from kantrip.profile_storage import ProfileStoreError, load_profiles
 from kantrip.profiles import add_profile
 from kantrip.secret_store import SecretNotFoundError
 from kantrip.secret_value import Secret
-from tests.unit.pki import synthetic_pki, temporary_pki_files
+from tests.unit.pki import KEY_PASSWORD, synthetic_pki, temporary_pki_files
 
 
 class TestCli(unittest.TestCase):
@@ -1224,6 +1227,261 @@ class TestEditRegistryAuthentication(unittest.TestCase):
     def _invoke(self, arguments: list[str], environment: dict[str, str]) -> Any:
         with patch("kantrip.cli_inputs.secret_prompt", return_value=Secret("synthetic-secret")):
             return self.runner.invoke(cli, arguments, env=environment)
+
+
+class TestDescribeCompleteness(unittest.TestCase):
+    """`describe` shows every public field and never touches the secret store."""
+
+    CERTIFICATE: ClassVar[dict[str, str]] = {
+        "subject": "CN=kantrip-client",
+        "expires": "2035-01-01T00:00:00Z",
+    }
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        pki = synthetic_pki()
+        files = temporary_pki_files(
+            ca=pki.ca,
+            certificate=pki.client_certificate,
+            key=pki.client_key,
+            encrypted_key=pki.encrypted_client_key,
+        )
+        self.paths = {name: str(path) for name, path in files.__enter__().items()}
+        self.addCleanup(files.__exit__, None, None, None)
+
+    def test_kafka_authentication_fields(self) -> None:
+        paths = self.paths
+        cases: dict[str, tuple[list[str], dict[str, Any]]] = {
+            "none": (
+                [],
+                {
+                    "bootstrapServers": ["localhost:9092"],
+                    "transport": "plaintext",
+                    "tls": None,
+                    "auth": {"type": "none", "credentials": {}},
+                },
+            ),
+            "scram": (
+                ["-b", "kafka.invalid:9093", "--transport", "tls", "--ca-file", paths["ca"]]
+                + ["--auth", "scram-sha-512", "--username", "app"],
+                {
+                    "bootstrapServers": ["kafka.invalid:9093"],
+                    "transport": "tls",
+                    "tls": {"trust": "custom"},
+                    "auth": {
+                        "type": "scram-sha-512",
+                        "username": "app",
+                        "credentials": {"kafka.auth.password": "configured"},
+                    },
+                },
+            ),
+            "mtls": (
+                ["-b", "kafka.invalid:9093", "--transport", "tls", "--auth", "mtls"]
+                + ["--client-certificate-file", paths["certificate"]]
+                + ["--client-key-file", paths["encrypted_key"]],
+                {
+                    "bootstrapServers": ["kafka.invalid:9093"],
+                    "transport": "tls",
+                    "tls": {"trust": "system"},
+                    "auth": {
+                        "type": "mtls",
+                        "clientCertificate": self.CERTIFICATE,
+                        "credentials": {
+                            "kafka.auth.private-key": "configured",
+                            "kafka.auth.private-key-password": "configured",
+                        },
+                    },
+                },
+            ),
+            "oauth": (
+                ["-b", "kafka.invalid:9093", "--transport", "tls", "--auth", "oauth"]
+                + ["--oauth-token-url", "https://idp.invalid/token"]
+                + ["--oauth-client-id", "kafka-client", "--oauth-scope", "kafka.read"]
+                + ["--oauth-ca-file", paths["ca"]],
+                {
+                    "bootstrapServers": ["kafka.invalid:9093"],
+                    "transport": "tls",
+                    "tls": {"trust": "system"},
+                    "auth": {
+                        "type": "oauth",
+                        "oauth": {
+                            "tokenUrl": "https://idp.invalid/token",
+                            "clientId": "kafka-client",
+                            "scopes": ["kafka.read"],
+                            "trust": "custom",
+                        },
+                        "credentials": {"kafka.auth.oauth.client-secret": "configured"},
+                    },
+                },
+            ),
+        }
+        for name, (arguments, expected) in cases.items():
+            with self.subTest(name):
+                observation = self._describe(arguments)
+                self.assertEqual(expected, observation["kafka"])
+                self.assertIsNone(observation["registry"])
+
+    def test_registry_authentication_fields(self) -> None:
+        paths = self.paths
+        https = ["--registry-url", "https://registry.invalid"]
+        cases: dict[str, tuple[list[str], dict[str, Any]]] = {
+            "none": (
+                ["--registry-url", "http://registry.invalid:8081"],
+                {
+                    "provider": "confluent",
+                    "url": "http://registry.invalid:8081",
+                    "tls": None,
+                    "auth": {"type": "none", "credentials": {}},
+                },
+            ),
+            "basic": (
+                [*https, "--registry-auth", "basic", "--registry-username", "registry-user"],
+                {
+                    "provider": "confluent",
+                    "url": "https://registry.invalid",
+                    "tls": {"trust": "system"},
+                    "auth": {
+                        "type": "basic",
+                        "username": "registry-user",
+                        "credentials": {"registry.auth.password": "configured"},
+                    },
+                },
+            ),
+            "token": (
+                [*https, "--registry-ca-file", paths["ca"], "--registry-auth", "token"],
+                {
+                    "provider": "confluent",
+                    "url": "https://registry.invalid",
+                    "tls": {"trust": "custom"},
+                    "auth": {
+                        "type": "token",
+                        "credentials": {"registry.auth.token": "configured"},
+                    },
+                },
+            ),
+            "mtls": (
+                ["--registry-provider", "apicurio"]
+                + ["--registry-url", "https://registry.invalid/apis/registry/v3"]
+                + ["--registry-auth", "mtls"]
+                + ["--registry-client-certificate-file", paths["certificate"]]
+                + ["--registry-client-key-file", paths["key"]],
+                {
+                    "provider": "apicurio",
+                    "url": "https://registry.invalid/apis/registry/v3",
+                    "tls": {"trust": "system"},
+                    "auth": {
+                        "type": "mtls",
+                        "clientCertificate": self.CERTIFICATE,
+                        "credentials": {"registry.auth.private-key": "configured"},
+                    },
+                },
+            ),
+            "oauth": (
+                [*https, "--registry-auth", "oauth"]
+                + ["--registry-oauth-token-url", "https://idp.invalid/token"]
+                + ["--registry-oauth-client-id", "registry-client"]
+                + ["--registry-oauth-scope", "registry.read"]
+                + ["--registry-oauth-logical-cluster", "lsrc-123"]
+                + ["--registry-oauth-identity-pool-id", "pool-abc"],
+                {
+                    "provider": "confluent",
+                    "url": "https://registry.invalid",
+                    "tls": {"trust": "system"},
+                    "auth": {
+                        "type": "oauth",
+                        "oauth": {
+                            "tokenUrl": "https://idp.invalid/token",
+                            "clientId": "registry-client",
+                            "scopes": ["registry.read"],
+                            "trust": "system",
+                            "logicalCluster": "lsrc-123",
+                            "identityPoolId": "pool-abc",
+                        },
+                        "credentials": {"registry.auth.oauth.client-secret": "configured"},
+                    },
+                },
+            ),
+        }
+        for name, (arguments, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(expected, self._describe(arguments)["registry"])
+
+    def test_human_output_lists_public_fields(self) -> None:
+        output = self._describe(
+            ["-b", "kafka.invalid:9093", "--transport", "tls", "--auth", "mtls"]
+            + ["--client-certificate-file", self.paths["certificate"]]
+            + ["--client-key-file", self.paths["key"]]
+            + ["--registry-url", "https://registry.invalid", "--registry-auth", "oauth"]
+            + ["--registry-oauth-token-url", "https://idp.invalid/token"]
+            + ["--registry-oauth-client-id", "registry-client"],
+            output_format="human",
+        )
+
+        words = " ".join(output.split())
+        for expected in (
+            "Client certificate CN=kantrip-client",
+            "Certificate expires 2035-01-01T00:00:00Z",
+            "Credentials kafka.auth.private-key: configured",
+            "OAuth token URL https://idp.invalid/token",
+            "OAuth client ID registry-client",
+            "Credentials registry.auth.oauth.client-secret: configured",
+        ):
+            self.assertIn(expected, words)
+
+    def _describe(self, arguments: list[str], *, output_format: str = "json") -> Any:
+        with tempfile.TemporaryDirectory() as directory:
+            store = _MemorySecretStore()
+            environment = {"KANTRIP_DATABASE": str(Path(directory) / "profiles.db")}
+            with (
+                patch("kantrip.profiles.load_secret_store", return_value=store),
+                patch("kantrip.cli_inputs.secret_prompt", side_effect=_synthetic_prompt),
+            ):
+                added = self.runner.invoke(cli, ["add", "p", *arguments], env=environment)
+            self.assertEqual(0, added.exit_code, added.output)
+            with _no_secret_store():
+                results = {
+                    selected: self.runner.invoke(
+                        cli, ["describe", "p", "-o", selected], env=environment
+                    )
+                    for selected in ("human", "json", "yaml")
+                }
+
+        for result in results.values():
+            self.assertEqual(0, result.exit_code, result.output)
+            for reference, value in store.values.items():
+                self.assertNotIn(reference, result.output)
+                self.assertNotIn(value, result.output)
+            self.assertNotIn("Ref", result.output)
+            self.assertNotIn("BEGIN", result.output)
+        observation = json.loads(results["json"].output)
+        self.assertEqual(observation, yaml.safe_load(results["yaml"].output))
+        if output_format == "human":
+            return results["human"].output
+        return observation
+
+
+def _synthetic_prompt(label: str) -> Secret:
+    if "private-key password" in label:
+        return Secret(KEY_PASSWORD)
+    return Secret(f"synthetic-{label.lower().replace(' ', '-')}")
+
+
+@contextmanager
+def _no_secret_store() -> Iterator[None]:
+    """Fail the test on any OS credential-store access."""
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("describe must not access the secret store")
+
+    with ExitStack() as stack:
+        for target in (
+            "kantrip.profiles.load_secret_store",
+            "kantrip.secret_store.load_secret_store",
+            "keyring.get_keyring",
+            "keyring.get_password",
+        ):
+            stack.enter_context(patch(target, side_effect=forbidden))
+        yield
 
 
 def _http_error(status: int) -> HTTPError:

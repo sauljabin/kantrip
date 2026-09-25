@@ -1,4 +1,9 @@
-"""Build safe profile observations for human and structured output."""
+"""Build safe profile observations for human and structured output.
+
+Observations never read the OS credential store: every secret the profile
+references is reported as `configured`, and `doctor` is the only command that
+checks whether a value is actually stored.
+"""
 
 from __future__ import annotations
 
@@ -7,15 +12,19 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 import yaml
-
-from kantrip.secret_store import (
-    SecretNotFoundError,
-    SecretStore,
-    SecretStoreError,
-    load_secret_store,
-)
+from cryptography import x509
 
 OutputFormat = Literal["json", "yaml"]
+
+# Stored reference property → public field name, shared with `--replace-secret`.
+_SECRET_FIELDS = (
+    ("passwordRef", "password"),
+    ("tokenRef", "token"),
+    ("privateKeyRef", "private-key"),
+    ("privateKeyPasswordRef", "private-key-password"),
+    ("clientSecretRef", "oauth.client-secret"),
+)
+_OAUTH_OPTIONAL_FIELDS = ("logicalCluster", "identityPoolId")
 
 
 def filter_profiles(
@@ -43,12 +52,22 @@ def describe_observation(
     name: str,
     revision: int,
     profile: Mapping[str, Any],
-    *,
-    secret_store: SecretStore | None = None,
 ) -> dict[str, Any]:
-    """Return one stable profile observation without arbitrary properties."""
+    """Return every public profile field without secrets, references, or properties."""
     observation = _profile_observation(name, profile, revision=revision)
-    observation["kafka"]["auth"]["credentials"] = _credential_states(profile, secret_store)
+    kafka = _mapping(profile.get("kafka"))
+    observation["kafka"]["auth"] = _auth_observation(
+        "kafka",
+        _mapping(kafka.get("auth")),
+        client_certificate=_mapping(kafka.get("auth")).get("clientCertificate"),
+    )
+    registry = profile.get("registry")
+    if isinstance(registry, Mapping):
+        observation["registry"]["auth"] = _auth_observation(
+            "registry",
+            _mapping(registry.get("auth")),
+            client_certificate=_mapping(registry.get("tls")).get("clientCertificate"),
+        )
     return observation
 
 
@@ -90,26 +109,23 @@ def _labels(profile: Mapping[str, Any]) -> dict[str, str]:
     return {str(key): str(value) for key, value in labels.items()}
 
 
+def _mapping(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _kafka_observation(profile: Mapping[str, Any]) -> dict[str, Any]:
     kafka = profile.get("kafka", {})
     if not isinstance(kafka, Mapping):
         return {}
-    auth = kafka.get("auth", {})
-    auth_type = auth.get("type") if isinstance(auth, Mapping) else None
+    tls = None
+    if kafka.get("transport") == "tls":
+        tls = _trust_observation(_mapping(kafka.get("tls")))
     return {
         "bootstrapServers": list(kafka.get("bootstrapServers", ())),
         "transport": kafka.get("transport"),
-        "tls": _tls_observation(kafka),
-        "auth": {"type": auth_type},
+        "tls": tls,
+        "auth": {"type": _mapping(kafka.get("auth")).get("type")},
     }
-
-
-def _tls_observation(kafka: Mapping[str, Any]) -> dict[str, str] | None:
-    if kafka.get("transport") != "tls":
-        return None
-    tls = kafka.get("tls")
-    custom_ca = isinstance(tls, Mapping) and bool(tls.get("caCertificates"))
-    return {"trust": "custom" if custom_ca else "system"}
 
 
 def _registry_observation(profile: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -118,45 +134,67 @@ def _registry_observation(profile: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
     provider = registry.get("provider")
     url_key = "apicurio.registry.url" if provider == "apicurio" else "schema.registry.url"
-    auth = registry.get("auth")
-    auth_type = auth.get("type") if isinstance(auth, Mapping) else "none"
-    return {"provider": provider, "url": registry.get(url_key), "auth": auth_type}
+    url = registry.get(url_key)
+    tls = None
+    if isinstance(url, str) and url.lower().startswith("https://"):
+        tls = _trust_observation(_mapping(registry.get("tls")))
+    return {
+        "provider": provider,
+        "url": url,
+        "tls": tls,
+        "auth": {"type": _mapping(registry.get("auth")).get("type", "none")},
+    }
 
 
-def _credential_states(
-    profile: Mapping[str, Any],
-    store: SecretStore | None,
-) -> dict[str, str]:
-    kafka = profile.get("kafka")
-    auth = kafka.get("auth") if isinstance(kafka, Mapping) else None
-    if not isinstance(auth, Mapping):
-        return {}
-    references = {
-        field: auth[property_name]
-        for property_name, field in (
-            ("passwordRef", "kafka/password"),
-            ("privateKeyRef", "kafka/tls/private-key"),
-            ("privateKeyPasswordRef", "kafka/tls/private-key-password"),
-        )
+def _trust_observation(tls: Mapping[str, Any]) -> dict[str, str]:
+    return {"trust": "custom" if tls.get("caCertificates") else "system"}
+
+
+def _auth_observation(
+    scope: str,
+    auth: Mapping[str, Any],
+    *,
+    client_certificate: object,
+) -> dict[str, Any]:
+    auth_type = auth.get("type", "none")
+    observation: dict[str, Any] = {"type": auth_type}
+    if isinstance(auth.get("username"), str):
+        observation["username"] = auth["username"]
+    if auth_type == "mtls" and isinstance(client_certificate, str):
+        observation["clientCertificate"] = _certificate_observation(client_certificate)
+    if auth_type == "oauth":
+        observation["oauth"] = _oauth_observation(auth)
+    observation["credentials"] = {
+        f"{scope}.auth.{field}": "configured"
+        for property_name, field in _SECRET_FIELDS
         if isinstance(auth.get(property_name), str)
     }
-    if not references:
-        return {}
+    return observation
+
+
+def _oauth_observation(auth: Mapping[str, Any]) -> dict[str, Any]:
+    observation: dict[str, Any] = {
+        "tokenUrl": auth.get("tokenUrl"),
+        "clientId": auth.get("clientId"),
+        "scopes": list(auth.get("scopes", ())),
+        **_trust_observation(auth),
+    }
+    for field in _OAUTH_OPTIONAL_FIELDS:
+        if isinstance(auth.get(field), str):
+            observation[field] = auth[field]
+    return observation
+
+
+def _certificate_observation(pem: str) -> dict[str, str | None]:
     try:
-        selected_store = store or load_secret_store()
-    except SecretStoreError:
-        return {field: "unavailable" for field in references}
-    states: dict[str, str] = {}
-    for field, reference in references.items():
-        try:
-            selected_store.get(reference)
-        except SecretNotFoundError:
-            states[field] = "missing"
-        except SecretStoreError:
-            states[field] = "unavailable"
-        else:
-            states[field] = "stored"
-    return states
+        certificate = x509.load_pem_x509_certificates(pem.encode("utf-8"))[0]
+    except (ValueError, IndexError):
+        # Stored profiles are validated on write; `doctor` reports a damaged one.
+        return {"subject": None, "expires": None}
+    return {
+        "subject": certificate.subject.rfc4514_string(),
+        "expires": certificate.not_valid_after_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
 
 
 __all__ = [

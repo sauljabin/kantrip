@@ -340,10 +340,24 @@ kantrip exec local -- kcat -L
 ```
 
 `describe` presents Rich sections by default. JSON and YAML are safe
-machine-readable observations rather than profile export documents. They omit
-arbitrary client properties, secret values, and internal credential references,
-and include the profile's current database revision plus safe per-field
-credential states: `stored`, `missing`, or `unavailable`.
+machine-readable observations rather than profile export documents. They show
+every public connection field and the profile's current database revision, and
+omit arbitrary client properties, secret values, and internal credential
+references. Kafka and Registry use the same `auth` shape: `type`, the
+type-specific public fields (`username`, `clientCertificate` subject and expiry,
+`oauth` endpoint, client ID, scopes, and token trust), and `credentials`, which
+lists each secret the profile uses as `configured`:
+
+```json
+"auth": {
+  "type": "scram-sha-512",
+  "username": "app",
+  "credentials": {"kafka.auth.password": "configured"}
+}
+```
+
+`describe` never reads the OS credential store, so it never prompts or unlocks
+anything. Run `kantrip doctor` to check that each credential is actually stored.
 
 Without a command, `kantrip exec PROFILE` opens a supervised Bash, Zsh, or Fish
 subshell from `SHELL`, falling back to Bash when it is unset. Other shells fail

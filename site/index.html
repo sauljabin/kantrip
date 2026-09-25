@@ -176,8 +176,8 @@
         <ul class="checks">
           <li>Stores secrets only in macOS Keychain or Linux Secret Service and rejects other
             keyring backends.</li>
-          <li>Keeps references, never values, in profiles; <code>describe</code> reports only
-            whether each credential is stored.</li>
+          <li>Keeps references, never values, in profiles; <code>describe</code> never reads
+            the credential store, and <code>doctor</code> checks that each credential is stored.</li>
           <li>Requires verified TLS for Kafka authentication; certificate and hostname checks
             cannot be disabled.</li>
           <li>Writes client configuration to a private session directory, never to command
