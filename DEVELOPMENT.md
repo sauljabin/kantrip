@@ -459,30 +459,29 @@ uploads `site/` and deploys it; only the deploy job has `pages: write` and
 
 ### Recapture the terminal demo
 
-The demo output must come from a real run against the sandbox, then be made
-generic. From an up-to-date `main` checkout with the sandbox running
-(`uv run --locked python -m sandbox up`), run in an interactive terminal:
+The demo output comes from a real run against the sandbox, made generic.
+`site/demo.json` keeps the generic commands (`prod`, `kafka.example.com:9093`,
+`./ca.pem`, `app`); edit a command there, then recapture whenever a change can
+affect the demo's options or Kantrip's output style. With the sandbox running
+and `kcat` and `kafka-topics` on `PATH`:
 
 ```bash
-uv run --locked kantrip add site-demo -b localhost:9094 --transport tls --ca-file sandbox/.state/ca.crt --auth scram-sha-512 --username kantrip-scram
-uv run --locked kantrip ping site-demo
-uv run --locked kantrip exec site-demo -- kcat -L
-uv run --locked kantrip exec site-demo
+uv run --locked python -m scripts.website capture
 ```
 
-Type the SCRAM-SHA-512 password at the no-echo prompt yourself; never paste it
-into a file, a command, or an AI session. In the subshell run `kantrip current`,
-`kafka-topics --list`, and `exit`, then remove the profile with
-`uv run --locked kantrip remove site-demo --force`.
-
-Copy only the commands and their output into `site/demo.json`. Replace the
-profile with `prod`, the broker with `kafka.example.com:9093`, the CA path with
-`./ca.pem`, the user with `app`, the database path with
-`/home/demo/.local/share/kantrip/profiles.db`, and topic names with synthetic
-ones. Keep the wording, order, and emoji of Kantrip's lines, trim long `kcat`
-metadata, and record the date and client versions in the `capture` note. Colors
-follow the CLI styles in `kantrip/console.py` (`"style": "success"` for a
-passed ping). Then run `render` and `check`.
+`capture` substitutes the sandbox's SCRAM-SHA-512 listener, CA, and user for the
+generic values, adds a temporary profile to a private temporary database, and
+creates two `kantrip-auth-site-demo-*` topics for the metadata and topic listing.
+It runs every step in a real terminal, so Kantrip prints its colored output,
+and types the sandbox password into the no-echo prompt. The password is read
+from `sandbox/.state` inside the process and is never printed; a capture that
+contains it anywhere fails without writing. The interactive session runs its
+commands in Bash between markers, so your shell prompt is not recorded.
+Terminal colors map back to the Arcana style names, the output is translated to
+the generic values, `site/demo.json` and the static transcript are rewritten,
+and `check` runs. The topics and the profile, including its credential-store
+entry, are removed even when a step fails. From a Git worktree without its own
+sandbox state, pass `--state-dir` with the main checkout's `sandbox/.state`.
 
 ## Architecture and security
 

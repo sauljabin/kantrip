@@ -1,4 +1,4 @@
-"""Render the static demo transcript and validate the GitHub Pages site."""
+"""Capture, render, and validate the GitHub Pages site and its terminal demo."""
 
 from __future__ import annotations
 
@@ -11,11 +11,22 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Mapping
+import tempfile
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from html.parser import HTMLParser
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+import pyte
+
+from kantrip import APP_VERSION
+from kantrip.console import ARCANA_COLORS
+from scripts import TerminalTimeout, run_terminal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SITE_ROOT = PROJECT_ROOT / "site"
@@ -29,7 +40,17 @@ OUTPUT_STYLES = frozenset(
     {"primary", "secondary", "accent", "success", "warning", "error", "muted"}
 )
 # Capture leftovers that must be made generic before the demo is committed.
-DEMO_FORBIDDEN = ("localhost", "127.0.0.1", "/Users/", "sandbox", "kantrip-scram", "site-demo")
+DEMO_FORBIDDEN = (
+    "localhost",
+    "127.0.0.1",
+    "/Users/",
+    "/var/",
+    "/tmp/",
+    "sandbox",
+    "kantrip-scram",
+    "kantrip-auth-",
+    "site-demo",
+)
 ASSET_BUDGET_BYTES = 30 * 1024
 REQUEST_TAGS = {"script": "src", "img": "src", "source": "src", "iframe": "src"}
 REQUEST_LINK_RELS = frozenset({"stylesheet", "icon", "preload", "modulepreload", "manifest"})
@@ -296,21 +317,353 @@ def check_site(help_runner: HelpRunner = run_kantrip_help) -> list[str]:
     ]
 
 
+# Demo capture: run the generic demo commands against the sandbox's
+# SCRAM-SHA-512 listener in a real terminal, then map the output back to the
+# generic values. The lab password is typed into the no-echo prompt and never
+# printed, written, or accepted in captured output.
+GENERIC_PROFILE = "prod"
+GENERIC_BOOTSTRAP = "kafka.example.com:9093"
+GENERIC_CA_FILE = "./ca.pem"
+GENERIC_USERNAME = "app"
+GENERIC_DATABASE = "/home/demo/.local/share/kantrip/profiles.db"
+CAPTURE_PROFILE = "kantrip-site-demo"
+CAPTURE_TOPICS = {
+    "kantrip-auth-site-demo-orders": "orders",
+    "kantrip-auth-site-demo-payments": "payments",
+}
+SANDBOX_BOOTSTRAP = "localhost:9094"
+SANDBOX_USERNAME = "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"
+SANDBOX_PASSWORD = "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"
+SECRET_PROMPT = "Kafka password"
+SECRET_PROMPT_WAIT_MS = 1400
+TERMINAL_COLUMNS = 120
+STYLE_BY_COLOR = {
+    **{value.lstrip("#").lower(): name for name, value in ARCANA_COLORS.items()},
+    "brightblack": "muted",
+}
+DEFAULT_STYLES = frozenset({"default", "foreground"})
+SESSION_MARKER = "__KANTRIP_SITE_DEMO_{}__"
+
+TerminalRunner = Callable[..., tuple[int, str]]
+CommandRunner = Callable[[Sequence[str], Mapping[str, str]], tuple[int, str]]
+
+
+class CaptureError(RuntimeError):
+    """The sandbox capture could not produce a trustworthy transcript."""
+
+
+@dataclass(frozen=True)
+class CaptureTarget:
+    """Sandbox values substituted for the demo's generic ones, and their inverse."""
+
+    kantrip: str
+    ca_file: Path
+    username: str
+    password: str
+    database: Path
+
+    def arguments(self, command: str) -> list[str]:
+        values = {
+            "kantrip": self.kantrip,
+            GENERIC_PROFILE: CAPTURE_PROFILE,
+            GENERIC_BOOTSTRAP: SANDBOX_BOOTSTRAP,
+            GENERIC_CA_FILE: str(self.ca_file),
+            GENERIC_USERNAME: self.username,
+        }
+        tokens = shlex.split(command)
+        return [values.get(token, token) if token != "--" else token for token in tokens]
+
+    def generic(self, text: str) -> str:
+        if self.password in text:
+            raise CaptureError("captured output contains the sandbox password; nothing was written")
+        replacements = {
+            str(self.database.resolve()): GENERIC_DATABASE,
+            str(self.database): GENERIC_DATABASE,
+            str(self.ca_file): GENERIC_CA_FILE,
+            SANDBOX_BOOTSTRAP: GENERIC_BOOTSTRAP,
+            self.username: GENERIC_USERNAME,
+            **CAPTURE_TOPICS,
+            CAPTURE_PROFILE: GENERIC_PROFILE,
+        }
+        for sandbox_value in sorted(replacements, key=len, reverse=True):
+            text = text.replace(sandbox_value, replacements[sandbox_value])
+        return text
+
+
+def render_screen(output: str) -> pyte.Screen:
+    """Replay terminal output on a virtual screen, as a user would see it."""
+    screen = pyte.Screen(TERMINAL_COLUMNS, output.count("\n") + 2)
+    pyte.Stream(screen).feed(output.replace("\r\n", "\n").replace("\n", "\r\n"))
+    return screen
+
+
+def screen_lines(
+    output: str | pyte.Screen, target: CaptureTarget, rows: range | None = None
+) -> list[dict[str, Any]]:
+    """Map screen rows to generic demo lines, trimming surrounding blank rows."""
+    screen = render_screen(output) if isinstance(output, str) else output
+    selected = range(screen.lines) if rows is None else rows
+    lines = [_screen_line(screen, row, target) for row in selected]
+    while lines and not lines[-1]["text"]:
+        lines.pop()
+    while lines and not lines[0]["text"]:
+        lines.pop(0)
+    return lines
+
+
+def _row_text(screen: pyte.Screen, row: int) -> str:
+    return "".join(screen.buffer[row][column].data for column in range(screen.columns)).rstrip()
+
+
+def _screen_line(screen: pyte.Screen, row: int, target: CaptureTarget) -> dict[str, Any]:
+    cells = [screen.buffer[row][column] for column in range(screen.columns)]
+    text = target.generic(_row_text(screen, row))
+    colors = {cell.fg for cell in cells if cell.data.strip()} - DEFAULT_STYLES
+    unknown = colors - STYLE_BY_COLOR.keys()
+    if unknown:
+        raise CaptureError(f"unknown terminal colors {sorted(unknown)} in {text!r}")
+    styles = {STYLE_BY_COLOR[color] for color in colors} - DEFAULT_STYLES
+    if len(styles) > 1:
+        raise CaptureError(f"mixed styles {sorted(styles)} in {text!r} are not supported")
+    line: dict[str, Any] = {"text": text}
+    if styles:
+        line["style"] = styles.pop()
+    if text.startswith(f"{SECRET_PROMPT}:"):
+        line.update(text=f"{SECRET_PROMPT}: ", wait=SECRET_PROMPT_WAIT_MS)
+    return line
+
+
+def capture_environment(database: Path) -> dict[str, str]:
+    """A colored terminal environment with an isolated profile database."""
+    bash = shutil.which("bash")
+    if bash is None:
+        raise CaptureError("bash is required for the interactive demo session")
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("KANTRIP_", "KAFKA_")) and key != "NO_COLOR"
+    }
+    environment.update(
+        KANTRIP_DATABASE=str(database),
+        TERM="xterm-256color",
+        COLUMNS=str(TERMINAL_COLUMNS),
+        LINES="50",
+        SHELL=bash,
+    )
+    return environment
+
+
+def run_quiet(arguments: Sequence[str], environment: Mapping[str, str]) -> tuple[int, str]:
+    result = subprocess.run(
+        tuple(arguments),
+        env=dict(environment),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    return result.returncode, result.stdout + result.stderr
+
+
+def _session_range(steps: Sequence[Mapping[str, Any]], start: int) -> int:
+    """Return the index of the 'exit' step that closes an interactive session."""
+    for index in range(start + 1, len(steps)):
+        if steps[index]["command"].strip() == "exit":
+            return index
+    raise CaptureError(f"step {start + 1} opens a session without a later 'exit' step")
+
+
+def _opens_session(command: str) -> bool:
+    tokens = shlex.split(command)
+    return tokens[:2] == ["kantrip", "exec"] and len(tokens) == 3
+
+
+@dataclass
+class DemoCapture:
+    """Run each demo step once and collect its generic output lines."""
+
+    target: CaptureTarget
+    environment: Mapping[str, str]
+    terminal: TerminalRunner = run_terminal
+    command: CommandRunner = run_quiet
+
+    def run(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
+        if shlex.split(steps[0]["command"])[:3] != ["kantrip", "add", GENERIC_PROFILE]:
+            raise CaptureError(f"the first demo step must be 'kantrip add {GENERIC_PROFILE}'")
+        try:
+            outputs = self._run_steps(steps)
+        except BaseException:
+            # The profile and its keychain entry may exist even when add failed.
+            for error in self._cleanup():
+                print(f"cleanup: {error}", file=sys.stderr)
+            raise
+        errors = self._cleanup()
+        if errors:
+            raise CaptureError("\n".join(errors))
+        return outputs
+
+    def _run_steps(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
+        outputs = [self._step(steps[0]["command"], secret=True)]
+        self._topics("--create", "--partitions", "1", "--if-not-exists")
+        index = 1
+        while index < len(steps):
+            if _opens_session(steps[index]["command"]):
+                end = _session_range(steps, index)
+                outputs.extend(self._session(steps[index : end + 1]))
+                index = end + 1
+            else:
+                outputs.append(self._step(steps[index]["command"]))
+                index += 1
+        return outputs
+
+    def _terminal(self, arguments: Sequence[str], inputs: Sequence[str], ready: str | None) -> str:
+        try:
+            status, output = self.terminal(
+                arguments, inputs, environment=self.environment, ready_text=ready, timeout=120
+            )
+        except TerminalTimeout as error:
+            raise CaptureError(f"{shlex.join(arguments[1:])} timed out") from error
+        generic = self.target.generic(output)
+        if status:
+            raise CaptureError(f"a demo command exited with {status}:\n{generic}")
+        return output
+
+    def _step(self, command: str, *, secret: bool = False) -> list[dict[str, Any]]:
+        arguments = self.target.arguments(command)
+        inputs = (self.target.password,) if secret else ()
+        output = self._terminal(arguments, inputs, SECRET_PROMPT if secret else None)
+        return screen_lines(output, self.target)
+
+    def _session(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
+        """Run the commands between 'kantrip exec PROFILE' and 'exit' in its subshell."""
+        commands = [step["command"] for step in steps[1:-1]]
+        with tempfile.TemporaryDirectory(prefix="kantrip-site-demo-") as directory:
+            driver = Path(directory) / "commands"
+            lines = []
+            for index, command in enumerate(commands):
+                lines.append(f"printf '%s\\n' {SESSION_MARKER.format(index)}")
+                lines.append(shlex.join(self.target.arguments(command)))
+            lines.append(f"printf '%s\\n' {SESSION_MARKER.format('end')}")
+            driver.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            driver.chmod(0o600)
+            output = self._terminal(
+                self.target.arguments(steps[0]["command"]),
+                (f". {shlex.quote(str(driver))} < /dev/null; exit $?",),
+                None,
+            )
+        # Only rows between markers are demo output; the user's prompt is not.
+        screen = render_screen(output)
+        texts = [_row_text(screen, row).strip() for row in range(screen.lines)]
+        markers = [SESSION_MARKER.format(index) for index in range(len(commands))]
+        markers.append(SESSION_MARKER.format("end"))
+        if any(marker not in texts for marker in markers):
+            raise CaptureError("the interactive session did not run every demo command")
+        positions = [texts.index(marker) for marker in markers]
+        inner = [
+            screen_lines(screen, self.target, range(start + 1, end))
+            for start, end in pairwise(positions)
+        ]
+        return [[], *inner, []]
+
+    def _topics(self, action: str, *options: str) -> None:
+        for topic in CAPTURE_TOPICS:
+            arguments = [self.target.kantrip, "exec", CAPTURE_PROFILE, "--", "kafka-topics"]
+            status, output = self.command(
+                [*arguments, action, "--topic", topic, *options], self.environment
+            )
+            if status:
+                generic = self.target.generic(output)
+                raise CaptureError(f"kafka-topics {action} {topic} failed:\n{generic}")
+
+    def _cleanup(self) -> list[str]:
+        errors: list[str] = []
+        try:
+            self._topics("--delete", "--if-exists")
+        except CaptureError as error:
+            errors.append(str(error))
+        status, output = self.command(
+            [self.target.kantrip, "remove", CAPTURE_PROFILE, "--force"], self.environment
+        )
+        if status:
+            errors.append(
+                f"kantrip remove {CAPTURE_PROFILE} failed; check the credential store:\n"
+                + self.target.generic(output)
+            )
+        return errors
+
+
+@contextmanager
+def sandbox_target(state_dir: Path) -> Iterator[CaptureTarget]:
+    """Load the sandbox SCRAM identity without printing it, in a private database."""
+    from sandbox.__main__ import load_credentials
+
+    kantrip = shutil.which("kantrip")
+    if kantrip is None:
+        raise CaptureError("kantrip is not on PATH; run through 'uv run --locked'")
+    for tool in ("kcat", "kafka-topics"):
+        if shutil.which(tool) is None:
+            raise CaptureError(f"{tool} is required on PATH for the demo capture")
+    ca_file = state_dir / "ca.crt"
+    if not ca_file.is_file():
+        raise CaptureError(f"{ca_file} is missing; run 'python -m sandbox up' first")
+    credentials = load_credentials(state_dir / "credentials.env")
+    with tempfile.TemporaryDirectory(prefix="kantrip-site-demo-db-") as directory:
+        yield CaptureTarget(
+            kantrip=kantrip,
+            ca_file=ca_file,
+            username=credentials[SANDBOX_USERNAME],
+            password=credentials[SANDBOX_PASSWORD],
+            database=Path(directory) / "profiles.db",
+        )
+
+
+def capture_demo(demo: Mapping[str, Any], capture: DemoCapture) -> dict[str, Any]:
+    """Replace every step's output with a fresh, generic capture."""
+    outputs = capture.run(demo["steps"])
+    steps = [
+        {**step, "output": output} for step, output in zip(demo["steps"], outputs, strict=True)
+    ]
+    note = (
+        f"Captured on {datetime.now(timezone.utc).date().isoformat()} with kantrip {APP_VERSION} by "
+        "'python -m scripts.website capture' against the local sandbox's SCRAM-SHA-512 "
+        "TLS listener; hosts, names, paths, and topics are made generic."
+    )
+    return {"capture": note, "steps": steps}
+
+
+def write_demo(demo: Mapping[str, Any]) -> None:
+    DEMO_PATH.write_text(json.dumps(demo, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    INDEX_PATH.write_text(
+        render_index(demo, INDEX_PATH.read_text(encoding="utf-8")), encoding="utf-8"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("check", "render"),
+        choices=("check", "render", "capture"),
         nargs="?",
         default="check",
-        help="check the site (default) or rewrite the transcript in index.html",
+        help="check the site (default), rewrite the transcript in index.html, "
+        "or recapture the demo from the running sandbox",
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=Path,
+        default=PROJECT_ROOT / "sandbox" / ".state",
+        help="private sandbox state directory used by capture",
     )
     args = parser.parse_args()
-    if args.action == "render":
-        demo = load_demo()
-        INDEX_PATH.write_text(
-            render_index(demo, INDEX_PATH.read_text(encoding="utf-8")), encoding="utf-8"
-        )
+    if args.action == "capture":
+        with sandbox_target(args.state_dir) as target:
+            capture = DemoCapture(target, capture_environment(target.database))
+            demo = capture_demo(load_demo(), capture)
+        write_demo(demo)
+        print(f"Captured the demo into {DEMO_PATH.relative_to(PROJECT_ROOT)}")
+    elif args.action == "render":
+        write_demo(load_demo())
         print(f"Rendered the demo transcript into {INDEX_PATH.relative_to(PROJECT_ROOT)}")
         return
     errors = check_site()
