@@ -42,7 +42,7 @@ inspects one safely. `doctor`, `ping`, `exec`, and `current` retain their
 diagnostic, connectivity, execution, and session roles.
 
 The CLI accepts explicit profile fields and no-echo credential prompts; `edit`
-without options opens a field editor. It has no file import yet. Kantrip has no separate `import`, `secret`,
+requires at least one option. It has no file import yet. Kantrip has no separate `import`, `secret`,
 `export`, `clone`, or `configure` command family. Human, JSON, and YAML
 inspection are observations rather than round-trip profile documents; they omit
 secret values and internal credential references. Planned CLI changes are
@@ -227,8 +227,9 @@ Profile mutations share validation, cross-store locking, secret staging,
 transactional database updates, and reconciliation. `edit` may add or update a
 Registry; only an explicit removal deletes it. Authentication mutation helpers
 preserve omitted secrets and replace immutable references. The CLI exposes them
-through typed options and an interactive editor that never displays or prefills
-secret values.
+through typed options; stored fields carry over only while the authentication
+type is unchanged, and a Registry provider change keeps authentication only when
+the new provider supports it. Secret values are never displayed or prefilled.
 
 The reusable cross-store transaction engine lives in
 `kantrip/credential_mutations.py`. Authentication-specific profile fields and

@@ -245,7 +245,8 @@ Registry Basic, fixed Confluent bearer tokens, mTLS, and OAuth use no-echo
 prompts or bounded private-key files. Kafka and Registry secrets and CA bundles
 are never inherited from one another. Use `--registry-default-trust`,
 `--registry-oauth-default-trust`, or the corresponding `--clear-*` flags only
-for an explicit removal. Changing provider requires a new Registry URL.
+for an explicit removal. Changing provider requires a new Registry URL and keeps
+the current authentication only when the new provider supports it.
 
 `add` creates the database when needed and never overwrites a profile. `-l` is
 the short form of repeatable `--label KEY=VALUE`. Edit explicit fields without
@@ -270,10 +271,15 @@ Switching to `--transport plaintext` removes the stored TLS configuration.
 `edit` adds or updates labels and can add a Registry to a profile that has none.
 When only `--registry-url` is supplied, the new Registry defaults to Confluent.
 Use `--clear-description`, repeatable `--remove-label KEY`, or
-`--remove-registry` for explicit removal. Omitting an option in a scripted edit
-preserves its current value. Calling `edit PROFILE` without options opens a
-field editor with keep/replace/remove choices; secret values are never shown or
-prefilled. Finishing the editor without a change fails safely.
+`--remove-registry` for explicit removal. Omitting an option preserves its
+current value. `edit` needs at least one option; `edit PROFILE` alone prints
+usage and exits with status 2.
+
+Changing the Registry authentication type (for example `--registry-auth none`
+or from OAuth to Basic) keeps no fields of the previous type; its stored
+credentials are retired after the change commits. Changing the provider keeps
+the current authentication when the new provider supports it; otherwise `edit`
+fails without changes and asks for an explicit `--registry-auth`.
 
 Remove one with:
 

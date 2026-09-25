@@ -950,6 +950,7 @@ def _requested_registry_edit_plan(
     stored_registry = current_registry if isinstance(current_registry, Mapping) else None
     if registry_auth is not None:
         return _plan_registry_authentication(profile_id, stored_registry, registry_auth)
+    _validate_retained_registry_auth(current, updated)
     current_references = _registry_auth_references(profile_id, stored_registry)
     if not current_references:
         return None
@@ -965,6 +966,29 @@ def _requested_registry_edit_plan(
         (),
         tuple(current_references.values()),
     )
+
+
+def _validate_retained_registry_auth(
+    current: Mapping[str, Any],
+    updated: Mapping[str, Any],
+) -> None:
+    """Reject a provider change whose retained authentication the new provider lacks."""
+    before, after = current.get("registry"), updated.get("registry")
+    if not isinstance(before, Mapping) or not isinstance(after, Mapping):
+        return
+    if before.get("provider") == after.get("provider"):
+        return
+    try:
+        _validate_profile(dict(updated))
+        registry_connection(updated)
+    except (ProfileStoreError, RegistryProfileError) as error:
+        auth = after.get("auth")
+        auth_type = auth.get("type") if isinstance(auth, Mapping) else "none"
+        raise ProfileStoreError(
+            f"Registry provider '{after.get('provider')}' does not support the current "
+            f"'{auth_type}' authentication; pass --registry-auth to choose a supported "
+            "method or none"
+        ) from error
 
 
 def _apply_edit_authentication_plans(
@@ -1186,11 +1210,13 @@ def _oauth_auth_plan(
         if ca_certificates is None and not requested.oauth_default_trust:
             stored_ca = current_auth.get("caCertificates")
             ca_certificates = stored_ca if isinstance(stored_ca, str) else None
-    if token_url is None or client_id is None or scopes is None:
-        raise ProfileStoreError("Kafka OAuth requires a token URL, client ID, and scopes")
+    if token_url is None or client_id is None:
+        raise ProfileStoreError("Kafka OAuth requires a token URL and client ID")
     try:
         validate_oauth_endpoint(token_url)
-        validated_client_id, validated_scopes = validate_oauth_identity(client_id, list(scopes))
+        validated_client_id, validated_scopes = validate_oauth_identity(
+            client_id, list(scopes or ())
+        )
     except OAuthProfileError as error:
         raise ProfileStoreError(str(error).replace("OAuth", "Kafka OAuth", 1)) from error
     validated_ca = _validated_ca_bundle(ca_certificates) if ca_certificates is not None else None
@@ -1820,7 +1846,9 @@ def _apply_registry_edits(
         "provider": selected_provider,
         property_name: selected_url,
     }
-    if isinstance(existing, Mapping) and existing.get("provider") == selected_provider:
+    if isinstance(existing, Mapping):
+        # Keep trust and authentication across a provider change; credentials are
+        # never dropped implicitly. Unsupported combinations are rejected later.
         for field in ("tls", "auth"):
             if field in existing:
                 replacement[field] = deepcopy(existing[field])
