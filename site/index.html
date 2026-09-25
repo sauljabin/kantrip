@@ -71,7 +71,7 @@
       The password prompt shows nothing, and the secret never reaches the profile, the
       command line, or the output. Inside the session, your own prompt can
       <a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md#displaying-the-active-profile-in-your-prompt">show the active profile</a>.</p>
-    <figure class="window demo" data-demo>
+    <figure class="window demo" data-demo aria-label="Terminal demo">
       <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">kantrip demo</span></div>
       <div class="demo-stage">
         <pre class="transcript" id="demo-transcript"><code><!-- demo-transcript:start --><span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip add prod -b kafka.example.com:9093 --transport tls --ca-file ./ca.pem --auth scram-sha-512 --username app</span>
@@ -95,7 +95,6 @@
 <span class="ln out">payments</span>
 <span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> </span><span class="t-secondary">prod ❯ </span></span>exit</span><!-- demo-transcript:end --></code></pre>
       </div>
-      <figcaption class="demo-caption">Replayed from a real run against a local Kafka cluster; hosts and names are made generic.</figcaption>
     </figure>
     <div class="demo-controls" hidden>
       <button type="button" class="button" data-demo-toggle aria-controls="demo-transcript">Pause</button>
