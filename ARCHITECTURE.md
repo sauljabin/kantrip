@@ -48,6 +48,12 @@ inspection are observations rather than round-trip profile documents; they omit
 secret values and internal credential references. Planned CLI changes are
 tracked in milestone issues.
 
+`cli.py` defines commands and presents results. `cli_inputs.py` turns options into
+typed inputs: each command receives one frozen options dataclass whose fields
+match Click's parameter names, validates conflicting flags, collects no-echo
+secrets from the controlling terminal, and builds the Kafka and Registry
+authentication inputs passed to the profile lifecycle.
+
 ## Design rules
 
 These rules bound every feature and are enforced before an operation starts:

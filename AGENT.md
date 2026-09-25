@@ -9,9 +9,9 @@
   guidance.
 - Do not add empty modules or speculative adapters. Keep cyclomatic complexity
   at or below 10 for new and materially changed functions; repository-wide Ruff
-  `C901` runs in `scripts.analyze`. Five existing functions carry narrow
-  suppressions; remove those through focused refactors rather than adding new
-  suppressions.
+  `C901` runs in `scripts.analyze`. Two existing functions (`session.py` and
+  `adapters.py`) carry narrow suppressions; remove those through focused
+  refactors rather than adding new suppressions.
 - Importing `kantrip` must have no filesystem, logging, console, or network side
   effects. Classify and redact values before presentation; keep behavior
   independent from Rich.
