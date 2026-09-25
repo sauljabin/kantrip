@@ -4,35 +4,23 @@ from __future__ import annotations
 
 import sys
 
-from kantrip.adapters import (
-    KAFKA_EXECUTABLE_OPTIONS,
-    KCAT_EXECUTABLES,
-    AdapterError,
-    _kcat_uses_schema_registry,
-    _reject_kafka_overrides,
-    _reject_kaskade_overrides,
-    _reject_kcat_overrides,
-)
+from kantrip.adapters import AdapterError, client_adapter
 
 
 def main() -> int:
     if len(sys.argv) < 2:
         return 2
     executable, *arguments = sys.argv[1:]
+    adapter = client_adapter(executable)
+    if adapter is None:
+        return 2
     try:
-        if executable in KAFKA_EXECUTABLE_OPTIONS:
-            _reject_kafka_overrides(executable, arguments, KAFKA_EXECUTABLE_OPTIONS[executable])
-        elif executable in KCAT_EXECUTABLES:
-            options = _reject_kcat_overrides(executable, arguments)
-            if _kcat_uses_schema_registry(options):
-                print("schema-registry")
-        elif executable == "kaskade":
-            _reject_kaskade_overrides(arguments)
-        else:
-            return 2
+        signal = adapter.check_arguments(executable, arguments)
     except AdapterError as error:
         print(error, file=sys.stderr)
         return 2
+    if signal is not None:
+        print(signal)
     return 0
 
 
