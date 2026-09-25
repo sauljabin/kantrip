@@ -22,6 +22,12 @@ repos:
         pass_filenames: false
         files: ^(kantrip/console\.py|scripts/(banner|__init__)\.py|pyproject\.toml|uv\.lock)$
         entry: uv run --locked python -m scripts.banner
+      - id: site-demo
+        name: capturing the site demo from the sandbox
+        language: system
+        pass_filenames: false
+        files: ^(kantrip/.*\.py|site/demo\.json|scripts/(website|__init__)\.py|pyproject\.toml|uv\.lock)$
+        entry: uv run --locked python -m scripts.website capture
       - id: analyze
         name: code analysis
         language: system

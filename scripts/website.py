@@ -14,8 +14,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from itertools import pairwise
 from pathlib import Path
@@ -24,7 +23,6 @@ from urllib.parse import urlsplit
 
 import pyte
 
-from kantrip import APP_VERSION
 from kantrip.console import ARCANA_COLORS
 from scripts import TerminalTimeout, run_terminal
 
@@ -54,6 +52,8 @@ DEMO_FORBIDDEN = (
 ASSET_BUDGET_BYTES = 30 * 1024
 REQUEST_TAGS = {"script": "src", "img": "src", "source": "src", "iframe": "src"}
 REQUEST_LINK_RELS = frozenset({"stylesheet", "icon", "preload", "modulepreload", "manifest"})
+# Nerd Font glyphs are drawn with inline SVG symbols; the site loads no fonts.
+GLYPH_SYMBOLS = {"\U000f100f": "kafka"}
 HELP_OPTION = re.compile(r"^\s{1,8}(-{1,2}[A-Za-z][\w-]*)(?:,\s*(-{1,2}[A-Za-z][\w-]*))?")
 
 HelpRunner = Callable[[tuple[str, ...]], "str | None"]
@@ -101,22 +101,45 @@ def load_demo(path: Path = DEMO_PATH) -> dict[str, Any]:
 def _validate_step(where: str, step: object) -> None:
     if not isinstance(step, dict) or set(step) - {"prompt", "command", "spinner", "output"}:
         raise SiteError(f"{where}: expected prompt, command, optional spinner, and output")
-    if not all(isinstance(step.get(key), str) for key in ("prompt", "command")):
-        raise SiteError(f"{where}: prompt and command must be strings")
+    if not isinstance(step.get("command"), str):
+        raise SiteError(f"{where}: command must be a string")
     if "spinner" in step and not isinstance(step["spinner"], str):
         raise SiteError(f"{where}: spinner must be a string")
-    output = step.get("output")
-    if not isinstance(output, list):
-        raise SiteError(f"{where}: output must be a list")
+    prompt, output = step.get("prompt"), step.get("output")
+    if not isinstance(prompt, list) or not prompt or not isinstance(output, list):
+        raise SiteError(f"{where}: prompt must be a non-empty list and output a list")
+    for segment in prompt:
+        if not _valid_text(segment, set()):
+            raise SiteError(f"{where}: invalid prompt segment {segment!r}")
     for line in output:
-        if (
-            not isinstance(line, dict)
-            or not isinstance(line.get("text"), str)
-            or set(line) - {"text", "style", "wait"}
-            or line.get("style", "primary") not in OUTPUT_STYLES
-            or not isinstance(line.get("wait", 0), int)
-        ):
+        if not _valid_text(line, {"wait"}) or not isinstance(line.get("wait", 0), int):
             raise SiteError(f"{where}: invalid output line {line!r}")
+
+
+def _valid_text(item: object, extra: set[str]) -> bool:
+    return (
+        isinstance(item, dict)
+        and isinstance(item.get("text"), str)
+        and not set(item) - {"text", "style", *extra}
+        and item.get("style", "primary") in OUTPUT_STYLES
+    )
+
+
+def _text_html(text: str) -> str:
+    """Escape terminal text, drawing Nerd Font glyphs as inline icons."""
+    escaped = html.escape(text)
+    for glyph, symbol in GLYPH_SYMBOLS.items():
+        escaped = escaped.replace(
+            glyph,
+            f'<svg class="glyph" aria-hidden="true" focusable="false"><use href="#{symbol}"/></svg>',
+        )
+    return escaped
+
+
+def _styled_html(item: Mapping[str, Any], classes: str = "", data: str = "") -> str:
+    names = " ".join(filter(None, (classes, f't-{item["style"]}' if "style" in item else "")))
+    class_attribute = f' class="{names}"' if names else ""
+    return f"<span{class_attribute}{data}>{_text_html(item['text'])}</span>"
 
 
 def render_transcript(demo: Mapping[str, Any]) -> str:
@@ -125,14 +148,14 @@ def render_transcript(demo: Mapping[str, Any]) -> str:
     for step in demo["steps"]:
         spinner = step.get("spinner")
         data = f' data-spinner="{html.escape(spinner)}"' if spinner else ""
+        prompt = "".join(_styled_html(segment) for segment in step["prompt"])
         lines.append(
-            f'<span class="ln cmd"{data}><span class="t-prompt">'
-            f'{html.escape(step["prompt"])}</span>{html.escape(step["command"])}</span>'
+            f'<span class="ln cmd"{data}><span class="t-prompt">{prompt}</span>'
+            f'{_text_html(step["command"])}</span>'
         )
         for line in step["output"]:
-            classes = "ln out" + (f' t-{line["style"]}' if "style" in line else "")
             wait = f' data-wait="{line["wait"]}"' if line.get("wait") else ""
-            lines.append(f'<span class="{classes}"{wait}>{html.escape(line["text"])}</span>')
+            lines.append(_styled_html(line, "ln out", wait))
     return "\n".join(lines)
 
 
@@ -343,6 +366,18 @@ STYLE_BY_COLOR = {
 }
 DEFAULT_STYLES = frozenset({"default", "foreground"})
 SESSION_MARKER = "__KANTRIP_SITE_DEMO_{}__"
+# The session runs Zsh without global startup files and with this .zshrc: an
+# existing prompt ("❯") prefixed with the active profile, as USAGE.md shows.
+DEMO_ZSHRC = """setopt PROMPT_SUBST
+unsetopt PROMPT_SP
+PROMPT='%F{#22D3EE}❯%f '
+PROMPT='%F{#60A5FA}${KANTRIP_PROFILE:+\U000f100f $KANTRIP_PROFILE }%f'$PROMPT
+"""
+CAPTURE_NOTE = (
+    "Captured by 'python -m scripts.website capture' against the local sandbox's "
+    "SCRAM-SHA-512 TLS listener. The session prompt comes from a Zsh configuration that "
+    "shows $KANTRIP_PROFILE. Hosts, names, paths, and topics are made generic."
+)
 # Private session paths differ per run and platform; show a generic Linux one.
 SESSION_PATH = re.compile(r"/\S*?/kantrip(?:-\d+)?/sessions/session-[0-9a-f]+/")
 GENERIC_SESSION_PATH = "/run/user/1000/kantrip/sessions/session-5f0c2a9d4b7e41c8a3d6e9f1b2c4a7d0/"
@@ -444,24 +479,94 @@ def _screen_line(screen: pyte.Screen, row: int, target: CaptureTarget) -> dict[s
     return line
 
 
-def capture_environment(database: Path) -> dict[str, str]:
-    """A colored terminal environment with an isolated profile database."""
-    bash = shutil.which("bash")
-    if bash is None:
-        raise CaptureError("bash is required for the interactive demo session")
+def capture_environment(directory: Path) -> dict[str, str]:
+    """A colored terminal environment with a Zsh prompt that shows the profile."""
+    zsh = shutil.which("zsh")
+    if zsh is None:
+        raise CaptureError("zsh is required for the interactive demo session")
+    wrapper_directory = directory / "bin"
+    wrapper_directory.mkdir(mode=0o700)
+    wrapper = wrapper_directory / "zsh"
+    wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(zsh)} -d "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o700)
+    (directory / ".zshrc").write_text(DEMO_ZSHRC, encoding="utf-8")
     environment = {
         key: value
         for key, value in os.environ.items()
         if not key.startswith(("KANTRIP_", "KAFKA_")) and key != "NO_COLOR"
     }
     environment.update(
-        KANTRIP_DATABASE=str(database),
+        KANTRIP_DATABASE=str(directory / "profiles.db"),
         TERM="xterm-256color",
+        COLORTERM="truecolor",
         COLUMNS=str(TERMINAL_COLUMNS),
         LINES="50",
-        SHELL=bash,
+        SHELL=str(wrapper),
+        ZDOTDIR=str(directory),
+        PATH=f"{wrapper_directory}{os.pathsep}{os.environ.get('PATH', '')}",
     )
     return environment
+
+
+def default_state_dir() -> Path:
+    """Use this checkout's sandbox state, or the main checkout's from a Git worktree."""
+    local = PROJECT_ROOT / "sandbox" / ".state"
+    if local.is_dir():
+        return local
+    try:
+        common = subprocess.check_output(
+            ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            cwd=PROJECT_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return local
+    return Path(common.strip()).parent / "sandbox" / ".state"
+
+
+def sort_topic_blocks(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order kcat's topic metadata by name; kcat prints topics in arbitrary order."""
+    starts = [index for index, line in enumerate(lines) if line["text"].startswith('  topic "')]
+    if not starts:
+        return lines
+    end = starts[-1] + 1
+    while end < len(lines) and lines[end]["text"].startswith("    "):
+        end += 1
+    blocks = [lines[start:stop] for start, stop in zip(starts, [*starts[1:], end], strict=True)]
+    blocks.sort(key=lambda block: block[0]["text"])
+    return [*lines[: starts[0]], *(line for block in blocks for line in block), *lines[end:]]
+
+
+def prompt_segments(screen: pyte.Screen, typed: str, target: CaptureTarget) -> list[dict[str, Any]]:
+    """Return the styled prompt printed before the typed text on the screen.
+
+    The last match wins: input typed before the line editor starts is echoed once
+    without a prompt.
+    """
+    for row in reversed(range(screen.lines)):
+        cells = [screen.buffer[row][column] for column in range(screen.columns)]
+        texts = [cell.data for cell in cells]
+        for column in range(len(cells)):
+            if "".join(texts[column:]).startswith(typed):
+                return _segments(cells[:column], target)
+    raise CaptureError("the interactive session prompt was not found")
+
+
+def _segments(cells: Sequence[Any], target: CaptureTarget) -> list[dict[str, Any]]:
+    segments: list[dict[str, Any]] = []
+    for cell in cells:
+        style = None if not cell.data.strip() or cell.fg in DEFAULT_STYLES else cell.fg
+        if style is not None and style not in STYLE_BY_COLOR:
+            raise CaptureError(f"unknown prompt color {style!r}")
+        name = STYLE_BY_COLOR.get(style or "", None) if style else None
+        if segments and (name is None or segments[-1].get("style") == name):
+            segments[-1]["text"] += cell.data
+        else:
+            segments.append({"text": cell.data, **({"style": name} if name else {})})
+    for segment in segments:
+        segment["text"] = target.generic(segment["text"])
+    return segments
 
 
 def run_quiet(arguments: Sequence[str], environment: Mapping[str, str]) -> tuple[int, str]:
@@ -498,6 +603,7 @@ class DemoCapture:
     environment: Mapping[str, str]
     terminal: TerminalRunner = run_terminal
     command: CommandRunner = run_quiet
+    prompts: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
 
     def run(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
         if shlex.split(steps[0]["command"])[:3] != ["kantrip", "add", GENERIC_PROFILE]:
@@ -521,7 +627,9 @@ class DemoCapture:
         while index < len(steps):
             if _opens_session(steps[index]["command"]):
                 end = _session_range(steps, index)
-                outputs.extend(self._session(steps[index : end + 1]))
+                prompt, session_outputs = self._session(steps[index : end + 1])
+                self.prompts.update({inner: prompt for inner in range(index + 1, end + 1)})
+                outputs.extend(session_outputs)
                 index = end + 1
             else:
                 outputs.append(self._step(steps[index]["command"]))
@@ -544,9 +652,11 @@ class DemoCapture:
         arguments = self.target.arguments(command)
         inputs = (self.target.password,) if secret else ()
         output = self._terminal(arguments, inputs, SECRET_PROMPT if secret else None)
-        return screen_lines(output, self.target)
+        return sort_topic_blocks(screen_lines(output, self.target))
 
-    def _session(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
+    def _session(
+        self, steps: Sequence[Mapping[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[list[dict[str, Any]]]]:
         """Run the commands between 'kantrip exec PROFILE' and 'exit' in its subshell."""
         commands = [step["command"] for step in steps[1:-1]]
         with tempfile.TemporaryDirectory(prefix="kantrip-demo-session-") as directory:
@@ -558,11 +668,8 @@ class DemoCapture:
             lines.append(f"printf '%s\\n' {SESSION_MARKER.format('end')}")
             driver.write_text("\n".join(lines) + "\n", encoding="utf-8")
             driver.chmod(0o600)
-            output = self._terminal(
-                self.target.arguments(steps[0]["command"]),
-                (f". {shlex.quote(str(driver))} < /dev/null; exit $?",),
-                None,
-            )
+            typed = f". {shlex.quote(str(driver))} < /dev/null; exit $?"
+            output = self._terminal(self.target.arguments(steps[0]["command"]), (typed,), None)
         # Only rows between markers are demo output; the user's prompt is not.
         screen = render_screen(output)
         texts = [_row_text(screen, row).strip() for row in range(screen.lines)]
@@ -575,7 +682,7 @@ class DemoCapture:
             screen_lines(screen, self.target, range(start + 1, end))
             for start, end in pairwise(positions)
         ]
-        return [[], *inner, []]
+        return prompt_segments(screen, typed, self.target), [[], *inner, []]
 
     def _topics(self, action: str, *options: str) -> None:
         for topic in CAPTURE_TOPICS:
@@ -619,7 +726,7 @@ def sandbox_target(state_dir: Path) -> Iterator[CaptureTarget]:
     if not ca_file.is_file():
         raise CaptureError(f"{ca_file} is missing; run 'python -m sandbox up' first")
     credentials = load_credentials(state_dir / "credentials.env")
-    with tempfile.TemporaryDirectory(prefix="kantrip-demo-db-") as directory:
+    with tempfile.TemporaryDirectory(prefix="kantrip-demo-") as directory:
         yield CaptureTarget(
             kantrip=kantrip,
             ca_file=ca_file,
@@ -630,17 +737,18 @@ def sandbox_target(state_dir: Path) -> Iterator[CaptureTarget]:
 
 
 def capture_demo(demo: Mapping[str, Any], capture: DemoCapture) -> dict[str, Any]:
-    """Replace every step's output with a fresh, generic capture."""
+    """Replace every step's output, and session prompts, with a fresh generic capture."""
     outputs = capture.run(demo["steps"])
     steps = [
-        {**step, "output": output} for step, output in zip(demo["steps"], outputs, strict=True)
+        {**step, "prompt": capture.prompts.get(index, step["prompt"]), "output": output}
+        for index, (step, output) in enumerate(zip(demo["steps"], outputs, strict=True))
     ]
-    note = (
-        f"Captured on {datetime.now(timezone.utc).date().isoformat()} with kantrip {APP_VERSION} by "
-        "'python -m scripts.website capture' against the local sandbox's SCRAM-SHA-512 "
-        "TLS listener; hosts, names, paths, and topics are made generic."
-    )
-    captured = {"capture": note, "steps": steps}
+    captured = {"capture": CAPTURE_NOTE, "steps": steps}
+    for index, step in enumerate(steps):
+        try:
+            _validate_step(f"captured step {index + 1}", step)
+        except SiteError as error:
+            raise CaptureError(f"the capture was not written: {error}") from error
     errors = check_demo_content(captured)
     if errors:
         raise CaptureError("\n".join(("the capture was not written:", *errors)))
@@ -667,13 +775,14 @@ def main() -> None:
     parser.add_argument(
         "--state-dir",
         type=Path,
-        default=PROJECT_ROOT / "sandbox" / ".state",
-        help="private sandbox state directory used by capture",
+        default=None,
+        help="private sandbox state directory used by capture (default: this "
+        "checkout's, or the main checkout's from a Git worktree)",
     )
     args = parser.parse_args()
     if args.action == "capture":
-        with sandbox_target(args.state_dir) as target:
-            capture = DemoCapture(target, capture_environment(target.database))
+        with sandbox_target(args.state_dir or default_state_dir()) as target:
+            capture = DemoCapture(target, capture_environment(target.database.parent))
             demo = capture_demo(load_demo(), capture)
         write_demo(demo)
         print(f"Captured the demo into {DEMO_PATH.relative_to(PROJECT_ROOT)}")

@@ -484,7 +484,22 @@ dropped, because the sandbox listens on IPv4 loopback only and a real broker
 host does not produce them. The capture then rewrites `site/demo.json` and the
 static transcript, and runs `check`; it writes nothing if sandbox values remain. The topics and the profile, including its credential-store
 entry, are removed even when a step fails. From a Git worktree without its own
-sandbox state, pass `--state-dir` with the main checkout's `sandbox/.state`.
+sandbox state, `capture` uses the main checkout's `sandbox/.state`; pass
+`--state-dir` to choose another directory.
+
+The interactive session runs Zsh without global startup files and with a
+private `.zshrc` whose prompt shows `$KANTRIP_PROFILE`, as in
+[Usage](USAGE.md#show-the-active-profile-in-your-prompt), so the demo shows the
+active profile the way users configure it. Output is deterministic (kcat topics
+are sorted by name), so an unchanged CLI recaptures an identical file.
+
+The `site-demo` pre-commit hook runs `capture` when staged changes touch
+`kantrip/`, `site/demo.json`, `scripts/website.py`, `scripts/__init__.py`, or the
+dependency files. Like the `banner` hook, it rewrites files and fails the commit
+when the demo changed; review and stage `site/demo.json` and `site/index.html`,
+then commit again. It needs the running sandbox, the same as E2E-impacting
+changes. Skip it for one commit only when the demo cannot change, with
+`SKIP=site-demo git commit ...`.
 
 ## Architecture and security
 

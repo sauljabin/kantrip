@@ -19,6 +19,7 @@ from scripts.website import (
     DemoCapture,
     SiteError,
     capture_demo,
+    capture_environment,
     check_demo_commands,
     check_demo_content,
     check_pages,
@@ -30,24 +31,26 @@ from scripts.website import (
     render_index,
     render_transcript,
     screen_lines,
+    sort_topic_blocks,
 )
 
+PROMPT = [{"text": "❯ ", "style": "secondary"}]
 DEMO: dict[str, Any] = {
     "capture": "synthetic",
     "steps": [
         {
-            "prompt": "$ ",
+            "prompt": PROMPT,
             "command": "kantrip add prod -b kafka.example.com:9093 --transport=tls --auth plain",
             "output": [{"text": "Kafka password: ", "wait": 900}, {"text": "Added <prod>"}],
         },
         {
-            "prompt": "$ ",
+            "prompt": PROMPT,
             "command": "kantrip ping prod",
             "spinner": "Checking profile 'prod'",
             "output": [{"text": "ok", "style": "success"}],
         },
-        {"prompt": "$ ", "command": "kantrip exec prod -- kcat -L -b other", "output": []},
-        {"prompt": "$ ", "command": "kafka-topics --list --bogus", "output": []},
+        {"prompt": PROMPT, "command": "kantrip exec prod -- kcat -L -b other", "output": []},
+        {"prompt": PROMPT, "command": "kafka-topics --list --bogus", "output": []},
     ],
 }
 
@@ -112,7 +115,23 @@ class TestTranscript(unittest.TestCase):
         self.assertIn('data-wait="900"', html)
         self.assertIn('data-spinner="Checking profile &#x27;prod&#x27;"', html)
         self.assertIn('<span class="ln out t-success">ok</span>', html)
+        self.assertIn(
+            '<span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span>'
+            "</span>kantrip exec prod -- kcat -L -b other</span>",
+            html,
+        )
         self.assertEqual(html.count("\n"), 6)
+
+    def test_nerd_font_glyphs_become_inline_icons(self) -> None:
+        demo = copy.deepcopy(DEMO)
+        demo["steps"][0]["prompt"] = [{"text": "\U000f100f prod ", "style": "accent"}]
+        html = render_transcript(demo)
+        self.assertIn(
+            '<span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false">'
+            '<use href="#kafka"/></svg> prod </span>',
+            html,
+        )
+        self.assertNotIn("\U000f100f", html)
 
     def test_stale_transcript_is_reported(self) -> None:
         page = "<pre><!-- demo-transcript:start -->old<!-- demo-transcript:end --></pre>"
@@ -123,7 +142,7 @@ class TestTranscript(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "demo.json"
             path.write_text(
-                '{"capture": "x", "steps": [{"prompt": "$ ", "command": "kantrip list",'
+                '{"capture": "x", "steps": [{"prompt": [{"text": "$ "}], "command": "kantrip list",'
                 ' "output": [{"text": "x", "style": "blink"}]}]}',
                 encoding="utf-8",
             )
@@ -178,21 +197,22 @@ class TestPages(unittest.TestCase):
 
 PASSWORD = "synthetic-lab-password"
 SUCCESS = "\x1b[38;2;52;211;153m"
+ACCENT = "\x1b[38;2;96;165;250m"
+SECONDARY = "\x1b[38;2;34;211;238m"
 PRIMARY = "\x1b[38;2;59;130;246m"
 RESET = "\x1b[0m"
 CAPTURE_STEPS: list[dict[str, Any]] = [
     {
-        "prompt": "$ ",
+        "prompt": PROMPT,
         "command": "kantrip add prod -b kafka.example.com:9093 --transport tls "
         "--ca-file ./ca.pem --auth scram-sha-512 --username app",
         "output": [],
     },
-    {"prompt": "$ ", "command": "kantrip ping prod", "spinner": "Checking", "output": []},
-    {"prompt": "$ ", "command": "kantrip exec prod -- kcat -L", "output": []},
-    {"prompt": "$ ", "command": "kantrip exec prod", "output": []},
-    {"prompt": "$ ", "command": "kantrip current", "output": []},
-    {"prompt": "$ ", "command": "kafka-topics --list", "output": []},
-    {"prompt": "$ ", "command": "exit", "output": []},
+    {"prompt": PROMPT, "command": "kantrip ping prod", "spinner": "Checking", "output": []},
+    {"prompt": PROMPT, "command": "kantrip exec prod -- kcat -L", "output": []},
+    {"prompt": PROMPT, "command": "kantrip exec prod", "output": []},
+    {"prompt": PROMPT, "command": "kafka-topics --list", "output": []},
+    {"prompt": PROMPT, "command": "exit", "output": []},
 ]
 
 
@@ -237,14 +257,17 @@ class FakeLab:
                 "Connect to ipv6#[::1]:9094 failed: Connection refused\r\n"
                 "Metadata for all topics (from broker 0: sasl_ssl://localhost:9094/0):\r\n"
                 " 1 brokers:\r\n  broker 0 at localhost:9094 (controller)\r\n"
+                ' 2 topics:\r\n  topic "kantrip-auth-site-demo-payments" with 1 partitions:\r\n'
+                "    partition 0, leader 0, replicas: 0, isrs: 0\r\n"
+                '  topic "kantrip-auth-site-demo-orders" with 1 partitions:\r\n'
+                "    partition 0, leader 0, replicas: 0, isrs: 0\r\n"
             )
         self.driver = Path(shlex.split(inputs[0])[1]).read_text(encoding="utf-8")
+        prompt = f"{ACCENT}\U000f100f kantrip-site-demo {RESET}{SECONDARY}❯{RESET} "
         return 0, (
-            "\x1b[1;31muser@host\x1b[0m$ . commands\r\n"
-            "__KANTRIP_SITE_DEMO_0__\r\nkantrip-site-demo\r\n"
-            "__KANTRIP_SITE_DEMO_1__\r\nkantrip-auth-site-demo-orders\r\n"
+            f"{inputs[0]}\r\n{prompt}{inputs[0]}\r\n"
+            "__KANTRIP_SITE_DEMO_0__\r\nkantrip-auth-site-demo-orders\r\n"
             "kantrip-auth-site-demo-payments\r\n__KANTRIP_SITE_DEMO_end__\r\n"
-            "\x1b[1;31muser@host\x1b[0m$ exit\r\n"
         )
 
     def command(self, arguments: Sequence[str], environment: Mapping[str, str]) -> tuple[int, str]:
@@ -289,7 +312,7 @@ class TestDemoCapture(unittest.TestCase):
             ],
         )
         self.assertEqual(add_arguments[-1], "kantrip-scram")
-        self.assertIn("/venv/bin/kantrip current\nprintf", lab.driver)
+        self.assertIn("__KANTRIP_SITE_DEMO_0__\nkafka-topics --list\nprintf", lab.driver)
         outputs = [step["output"] for step in demo["steps"]]
         self.assertEqual(
             outputs[0],
@@ -320,11 +343,17 @@ class TestDemoCapture(unittest.TestCase):
             ],
         )
         self.assertIn({"text": "  broker 0 at kafka.example.com:9093 (controller)"}, outputs[2])
+        self.assertEqual(outputs[2][-4]["text"], '  topic "orders" with 1 partitions:')
+        self.assertEqual(outputs[3:], [[], [{"text": "orders"}, {"text": "payments"}], []])
+        session_prompt = [
+            {"text": "\U000f100f prod ", "style": "accent"},
+            {"text": "❯ ", "style": "secondary"},
+        ]
         self.assertEqual(
-            outputs[3:], [[], [{"text": "prod"}], [{"text": "orders"}, {"text": "payments"}], []]
+            [step["prompt"] for step in demo["steps"][3:]], [PROMPT] + [session_prompt] * 2
         )
         self.assertEqual(demo["steps"][1]["spinner"], "Checking")
-        self.assertIn("kantrip", demo["capture"])
+        self.assertIn("KANTRIP_PROFILE", demo["capture"])
         self.assertEqual(check_demo_content(demo), [])
         self.assertEqual([command[5] for command in lab.commands[:2]], ["--create"] * 2)
         self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--force"])
@@ -358,6 +387,39 @@ class TestDemoCapture(unittest.TestCase):
             screen_lines("\x1b[90mquiet\x1b[0m\r\n", self.target),
             [{"text": "quiet", "style": "muted"}],
         )
+
+    def test_topic_blocks_are_sorted_by_name(self) -> None:
+        lines = [
+            {"text": " 2 topics:"},
+            {"text": '  topic "b" with 1 partitions:'},
+            {"text": "    partition 0"},
+            {"text": '  topic "a" with 1 partitions:'},
+            {"text": "    partition 0"},
+            {"text": "after"},
+        ]
+        self.assertEqual(
+            [line["text"] for line in sort_topic_blocks(lines)],
+            [
+                " 2 topics:",
+                '  topic "a" with 1 partitions:',
+                "    partition 0",
+                '  topic "b" with 1 partitions:',
+                "    partition 0",
+                "after",
+            ],
+        )
+
+    def test_capture_environment_uses_a_private_zsh_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = capture_environment(Path(directory))
+            wrapper = Path(environment["SHELL"])
+            self.assertEqual(wrapper.name, "zsh")
+            self.assertIn(" -d ", wrapper.read_text(encoding="utf-8"))
+            zshrc = (Path(directory) / ".zshrc").read_text(encoding="utf-8")
+        self.assertIn("${KANTRIP_PROFILE:+\U000f100f $KANTRIP_PROFILE }", zshrc)
+        self.assertEqual(environment["ZDOTDIR"], directory)
+        self.assertEqual(environment["KANTRIP_DATABASE"], str(Path(directory) / "profiles.db"))
+        self.assertNotIn("NO_COLOR", environment)
 
 
 if __name__ == "__main__":

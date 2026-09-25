@@ -1,8 +1,13 @@
 {
-  "capture": "Captured on 2026-09-25 with kantrip 0.1.0a3.dev7 by 'python -m scripts.website capture' against the local sandbox's SCRAM-SHA-512 TLS listener; hosts, names, paths, and topics are made generic.",
+  "capture": "Captured by 'python -m scripts.website capture' against the local sandbox's SCRAM-SHA-512 TLS listener. The session prompt comes from a Zsh configuration that shows $KANTRIP_PROFILE. Hosts, names, paths, and topics are made generic.",
   "steps": [
     {
-      "prompt": "$ ",
+      "prompt": [
+        {
+          "text": "❯ ",
+          "style": "secondary"
+        }
+      ],
       "command": "kantrip add prod -b kafka.example.com:9093 --transport tls --ca-file ./ca.pem --auth scram-sha-512 --username app",
       "output": [
         {
@@ -15,7 +20,12 @@
       ]
     },
     {
-      "prompt": "$ ",
+      "prompt": [
+        {
+          "text": "❯ ",
+          "style": "secondary"
+        }
+      ],
       "command": "kantrip ping prod",
       "spinner": "Checking profile 'prod'",
       "output": [
@@ -26,7 +36,12 @@
       ]
     },
     {
-      "prompt": "$ ",
+      "prompt": [
+        {
+          "text": "❯ ",
+          "style": "secondary"
+        }
+      ],
       "command": "kantrip exec prod -- kcat -L",
       "output": [
         {
@@ -59,21 +74,26 @@
       ]
     },
     {
-      "prompt": "$ ",
+      "prompt": [
+        {
+          "text": "❯ ",
+          "style": "secondary"
+        }
+      ],
       "command": "kantrip exec prod",
       "output": []
     },
     {
-      "prompt": "$ ",
-      "command": "kantrip current",
-      "output": [
+      "prompt": [
         {
-          "text": "prod"
+          "text": "󱀏 prod ",
+          "style": "accent"
+        },
+        {
+          "text": "❯ ",
+          "style": "secondary"
         }
-      ]
-    },
-    {
-      "prompt": "$ ",
+      ],
       "command": "kafka-topics --list",
       "output": [
         {
@@ -85,7 +105,16 @@
       ]
     },
     {
-      "prompt": "$ ",
+      "prompt": [
+        {
+          "text": "󱀏 prod ",
+          "style": "accent"
+        },
+        {
+          "text": "❯ ",
+          "style": "secondary"
+        }
+      ],
       "command": "exit",
       "output": []
     }
