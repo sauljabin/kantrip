@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <!-- Social preview for the site and the GitHub repository. Render the PNG with
+       the command in DEVELOPMENT.md (Website); fonts are the system's own. -->
+  <defs>
+    <radialGradient id="glow" cx="640" cy="-40" r="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#071426"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <rect x="275.5" y="85.5" width="729" height="326" rx="12" fill="#071426" stroke="#eff6ff" stroke-opacity="0.35"/>
+  <line x1="275" y1="131.5" x2="1004" y2="131.5" stroke="#eff6ff" stroke-opacity="0.35"/>
+  <circle cx="303" cy="108" r="8" fill="#ff5f57"/>
+  <circle cx="329" cy="108" r="8" fill="#febc2e"/>
+  <circle cx="355" cy="108" r="8" fill="#28c840"/>
+  <text x="640" y="114" text-anchor="middle" fill="#9db0c8" font-family="ui-monospace, SFMono-Regular, Menlo, 'DejaVu Sans Mono', monospace" font-size="17" font-weight="700">Kantrip</text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="24">
+    <text x="323" y="167"><tspan fill="#60a5fa">╭──────────────────────────────────────────╮</tspan></text>
+    <text x="323" y="197"><tspan fill="#60a5fa">│</tspan><tspan fill="#3b82f6" font-weight="700">&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#60a5fa">│</tspan></text>
+    <text x="323" y="227"><tspan fill="#60a5fa">│</tspan><tspan fill="#3b82f6" font-weight="700">&#160;&#160;&#160;&#160;|&#160;|&#160;____&#160;_&#160;_&#160;__&#160;|&#160;|_&#160;_&#160;__(_)_&#160;__&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#60a5fa">│</tspan></text>
+    <text x="323" y="257"><tspan fill="#60a5fa">│</tspan><tspan fill="#3b82f6" font-weight="700">&#160;&#160;&#160;&#160;|&#160;|/&#160;/&#160;_`&#160;|&#160;&#x27;_&#160;\|&#160;__|&#160;&#x27;__|&#160;|&#160;&#x27;_&#160;\&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#60a5fa">│</tspan></text>
+    <text x="323" y="287"><tspan fill="#60a5fa">│</tspan><tspan fill="#3b82f6" font-weight="700">&#160;&#160;&#160;&#160;|&#160;&#160;&#160;&lt;&#160;(_|&#160;|&#160;|&#160;|&#160;|&#160;|_|&#160;|&#160;&#160;|&#160;|&#160;|_)&#160;|&#160;&#160;&#160;&#160;</tspan><tspan fill="#60a5fa">│</tspan></text>
+    <text x="323" y="317"><tspan fill="#60a5fa">│</tspan><tspan fill="#3b82f6" font-weight="700">&#160;&#160;&#160;&#160;|_|\_\__,_|_|&#160;|_|\__|_|&#160;&#160;|_|&#160;.__/&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#60a5fa">│</tspan></text>
+    <text x="323" y="347"><tspan fill="#60a5fa">│</tspan><tspan fill="#eff6ff">&#160;</tspan><tspan fill="#a16207">-</tspan><tspan fill="#fbbf24">*</tspan><tspan fill="#22d3ee">&#160;switch&#160;kafka&#160;profiles&#160;like&#160;</tspan><tspan fill="#3b82f6" font-weight="700">|_|</tspan><tspan fill="#22d3ee">&#160;magic&#160;&#160;</tspan><tspan fill="#60a5fa">│</tspan></text>
+    <text x="323" y="377"><tspan fill="#60a5fa">╰──────────────────────────────────────────╯</tspan></text>
+  </g>
+  <text x="640" y="487" text-anchor="middle" fill="#eff6ff" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, 'Noto Sans', Arial, sans-serif" font-size="34" font-weight="600">Secure Kafka profiles for kcat, the Kafka CLIs, and Kaskade</text>
+  <text x="640" y="545" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, 'DejaVu Sans Mono', monospace" font-size="28"><tspan fill="#22d3ee">$&#160;</tspan><tspan fill="#c5d3e8">pipx&#160;install&#160;kantrip</tspan></text>
+</svg>
