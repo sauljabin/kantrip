@@ -68,6 +68,19 @@ Migration backups include their UTC creation time and a unique suffix, so later
 migrations preserve earlier recovery points. Unreleased databases without
 migration history are unsupported and must be recreated.
 
+A profile database created by a pre-release (alpha) version is rejected with
+"created by a pre-release version of Kantrip". Kantrip does not modify it. To
+start over, move it aside and add your profiles again:
+
+```bash
+mv ~/.local/share/kantrip/profiles.db ~/.local/share/kantrip/profiles.db.pre-release
+```
+
+Use the path reported by `kantrip doctor --verbose` if you set
+`KANTRIP_DATABASE` or `XDG_DATA_HOME`. The old credentials stay in the OS
+credential store under the service name `kantrip`; delete them with Keychain
+Access (macOS) or your Secret Service manager (Linux) once the new profiles work.
+
 ## Kafka and registry connectivity
 
 Check Kafka and, when configured, registry connectivity:

@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.doctor import run_doctor
-from kantrip.profiles import DATABASE_BACKUP_PREFIX, add_profile, load_profiles
+from kantrip.profile_storage import DATABASE_BACKUP_PREFIX, load_profiles
+from kantrip.profiles import add_profile
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 from kantrip.secret_store import SecretStoreError, SecretStoreInfo, secret_reference
@@ -45,7 +46,7 @@ class TestDoctor(unittest.TestCase):
         messages = [check.message for check in report.checks]
         self.assertTrue(report.healthy)
         self.assertIn(
-            "Profile database is healthy (1 profile, schema version 2)",
+            "Profile database is healthy (1 profile, schema version 1)",
             messages,
         )
         self.assertTrue(any(message.startswith("kcat: ") for message in messages))

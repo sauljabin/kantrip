@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from kantrip.profiles import (
+from kantrip.profile_storage import (
     DATABASE_SCHEMA_VERSION,
     ProfileStoreError,
     database_maintenance_lock,

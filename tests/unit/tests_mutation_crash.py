@@ -8,7 +8,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from kantrip.profiles import load_profiles, reconcile_pending_secrets
+from kantrip.profile_storage import load_profiles, reconcile_pending_secrets
 from kantrip.reconciliation import pending_secret_cleanup
 from tests.unit.mutation_worker import FIRST_SECRET, SECOND_SECRET, FileSecretStore
 

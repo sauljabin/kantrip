@@ -9,7 +9,8 @@ from pathlib import Path
 from kantrip.credential_mutations import SecretReplacement
 from kantrip.kafka import KafkaConnection
 from kantrip.oauth import OAuthConnection
-from kantrip.profiles import KafkaAuthInput, ProfileSnapshot, RegistryAuthInput
+from kantrip.profile_auth import KafkaAuthInput, RegistryAuthInput
+from kantrip.profiles import ProfileSnapshot
 from kantrip.registry import RegistryConnection
 from kantrip.secret_value import Secret
 
