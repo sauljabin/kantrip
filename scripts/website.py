@@ -34,6 +34,7 @@ INDEX_PATH = SITE_ROOT / "index.html"
 TRANSCRIPT_START = "<!-- demo-transcript:start -->"
 TRANSCRIPT_END = "<!-- demo-transcript:end -->"
 REPOSITORY_URL = "https://github.com/sauljabin/kantrip"
+SITE_URL = "https://sauljabin.github.io/kantrip/"
 LINK_HOSTS = frozenset({"github.com", "pypi.org"})
 OUTPUT_STYLES = frozenset(
     {"primary", "secondary", "accent", "success", "warning", "error", "muted"}
@@ -71,11 +72,14 @@ class _Page(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.ids: set[str] = set()
         self.references: list[tuple[str, str, str]] = []
+        self.meta: dict[str, str] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = {name: value or "" for name, value in attrs}
         if "id" in values:
             self.ids.add(values["id"])
+        if tag == "meta" and "content" in values:
+            self.meta[values.get("property") or values.get("name", "")] = values["content"]
         if tag == "a" and "href" in values:
             self.references.append(("link", tag, values["href"]))
         elif tag == "link" and "href" in values:
@@ -324,6 +328,23 @@ def _check_repository_link(repository_root: Path, reference: str) -> str | None:
     return None
 
 
+def check_social_preview(site_root: Path) -> list[str]:
+    """The Open Graph image must be a published site file with its declared size."""
+    meta = _parse_page(site_root / "index.html").meta
+    image = meta.get("og:image", "")
+    target = site_root / image.removeprefix(SITE_URL)
+    if meta.get("og:url") != SITE_URL or not image.startswith(SITE_URL) or not target.is_file():
+        return [f"site/index.html: og:url must be {SITE_URL} and og:image a file in site/"]
+    header = target.read_bytes()[:24]
+    if header[:8] != b"\x89PNG\r\n\x1a\n":
+        return [f"site/{target.name}: the social preview must be a PNG"]
+    size = (int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big"))
+    declared = (meta.get("og:image:width"), meta.get("og:image:height"))
+    if declared != (str(size[0]), str(size[1])):
+        return [f"site/{target.name}: is {size[0]}x{size[1]}, but og:image declares {declared}"]
+    return []
+
+
 def check_asset_budget(site_root: Path) -> list[str]:
     assets: Iterable[Path] = (*site_root.rglob("*.js"), *site_root.rglob("*.css"))
     total = sum(path.stat().st_size for path in assets)
@@ -346,6 +367,7 @@ def check_site(help_runner: HelpRunner = run_kantrip_help) -> list[str]:
         *check_demo_commands(page_commands(index_text), help_runner, "site/index.html"),
         *check_demo_content(demo),
         *check_pages(SITE_ROOT),
+        *check_social_preview(SITE_ROOT),
         *check_asset_budget(SITE_ROOT),
         *check_demo_commands(demo, help_runner),
     ]
