@@ -6,7 +6,6 @@ import os
 import sys
 from collections.abc import Callable
 from contextlib import nullcontext
-from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import click
@@ -24,6 +23,7 @@ from kantrip.cli_inputs import (
     edit_registry_authentication,
     validate_edit_options,
 )
+from kantrip.cli_options import add_profile_options, edit_profile_options, parse_labels
 from kantrip.console import (
     StatusKind,
     create_console,
@@ -34,10 +34,6 @@ from kantrip.console import (
     show_progress,
 )
 from kantrip.doctor import DoctorReport, run_doctor
-from kantrip.kafka import (
-    KafkaProfileError,
-    read_ca_bundle,
-)
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, PingResult, ping_profile
 from kantrip.profile_output import (
@@ -165,166 +161,10 @@ def _print_structured_observation(
     )
 
 
-def _split_bootstrap_servers(
-    context: click.Context, parameter: click.Parameter, value: str | None
-) -> tuple[str, ...] | None:
-    del context, parameter
-    if value is None:
-        return None
-    servers = tuple(server.strip() for server in value.split(","))
-    if not servers or any(not server for server in servers):
-        raise click.BadParameter("must be a comma-separated list of host:port addresses")
-    return servers
-
-
-def _parse_labels(
-    context: click.Context,
-    parameter: click.Parameter,
-    values: tuple[str, ...],
-) -> dict[str, str]:
-    del context, parameter
-    labels: dict[str, str] = {}
-    for value in values:
-        name, separator, label_value = value.partition("=")
-        if not separator or not name:
-            raise click.BadParameter("must use KEY=VALUE")
-        if name in labels:
-            raise click.BadParameter(f"label '{name}' was supplied more than once")
-        labels[name] = label_value
-    return labels
-
-
-def _read_ca_file(
-    context: click.Context,
-    parameter: click.Parameter,
-    value: Path | None,
-) -> str | None:
-    del context
-    if value is None:
-        return None
-    try:
-        return read_ca_bundle(value)
-    except KafkaProfileError as error:
-        raise click.BadParameter(str(error), param=parameter) from error
-
-
 @cli.command("add")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
-@cloup.option(
-    "-b",
-    "--bootstrap-servers",
-    "bootstrap_servers",
-    default="localhost:9092",
-    show_default=True,
-    callback=_split_bootstrap_servers,
-    help="Comma-separated Kafka broker addresses.",
-)
-@cloup.option("-d", "--description", help="Optional profile description.")
-@cloup.option(
-    "-l",
-    "--label",
-    "labels",
-    multiple=True,
-    callback=_parse_labels,
-    metavar="KEY=VALUE",
-    help="Add a label; repeat for multiple labels.",
-)
-@cloup.option(
-    "--transport",
-    type=cloup.Choice(("plaintext", "tls")),
-    default="plaintext",
-    show_default=True,
-    help="Kafka transport security.",
-)
-@cloup.option(
-    "--ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Copy a PEM CA bundle for Kafka TLS verification.",
-)
-@cloup.option(
-    "--auth",
-    "auth_type",
-    type=cloup.Choice(("none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth")),
-    default="none",
-    show_default=True,
-    help="Kafka authentication mechanism.",
-)
-@cloup.option("--username", help="Kafka SASL username.")
-@cloup.option(
-    "--client-certificate-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Copy a public PEM Kafka client certificate chain.",
-)
-@cloup.option(
-    "--client-key-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Read a PEM Kafka client private key into the credential store.",
-)
-@cloup.option("--oauth-token-url", help="HTTPS Kafka OAuth token endpoint.")
-@cloup.option("--oauth-client-id", help="Kafka OAuth client identifier.")
-@cloup.option("--oauth-scope", multiple=True, help="Kafka OAuth scope; repeat as needed.")
-@cloup.option(
-    "--oauth-ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Copy a PEM CA bundle for the Kafka OAuth token endpoint.",
-)
-@cloup.option(
-    "--registry-provider",
-    type=cloup.Choice(("confluent", "apicurio")),
-    help="Registry provider; defaults to confluent when --registry-url is supplied.",
-)
-@cloup.option(
-    "--registry-url",
-    help="Optional Registry URL without embedded credentials.",
-)
-@cloup.option(
-    "--registry-auth",
-    type=cloup.Choice(("none", "basic", "token", "mtls", "oauth")),
-    default="none",
-    show_default=True,
-    help="Registry authentication mechanism.",
-)
-@cloup.option("--registry-username", help="Registry Basic authentication username.")
-@cloup.option(
-    "--registry-client-certificate-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Copy a public PEM Registry client certificate chain.",
-)
-@cloup.option(
-    "--registry-client-key-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Read a PEM Registry client private key into the credential store.",
-)
-@cloup.option(
-    "--registry-ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Copy a PEM CA bundle for Registry TLS verification.",
-)
-@cloup.option("--registry-oauth-token-url", help="HTTPS Registry OAuth token endpoint.")
-@cloup.option("--registry-oauth-client-id", help="Registry OAuth client identifier.")
-@cloup.option(
-    "--registry-oauth-scope", multiple=True, help="Registry OAuth scope; repeat as needed."
-)
-@cloup.option(
-    "--registry-oauth-ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Copy a PEM CA bundle for the Registry OAuth token endpoint.",
-)
-@cloup.option("--registry-oauth-logical-cluster", help="Confluent OAuth logical cluster.")
-@cloup.option("--registry-oauth-identity-pool-id", help="Confluent OAuth identity pool ID.")
+@add_profile_options
 def add_configured_profile(profile_name: str, **values: Any) -> None:
     """Add a profile."""
     options = AddOptions(**values)
@@ -350,158 +190,7 @@ def add_configured_profile(profile_name: str, **values: Any) -> None:
 @cli.command("edit")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
-@cloup.option(
-    "-b",
-    "--bootstrap-servers",
-    callback=_split_bootstrap_servers,
-    help="Replace the comma-separated Kafka broker addresses.",
-)
-@cloup.option("-d", "--description", help="Replace the profile description.")
-@cloup.option("--clear-description", is_flag=True, help="Remove the profile description.")
-@cloup.option(
-    "-l",
-    "--label",
-    "labels",
-    multiple=True,
-    callback=_parse_labels,
-    metavar="KEY=VALUE",
-    help="Add or replace a label; repeat for multiple labels.",
-)
-@cloup.option(
-    "--remove-label",
-    "remove_labels",
-    multiple=True,
-    metavar="KEY",
-    help="Remove a label; repeat for multiple labels.",
-)
-@cloup.option(
-    "--transport",
-    type=cloup.Choice(("plaintext", "tls")),
-    help="Replace Kafka transport security.",
-)
-@cloup.option(
-    "--ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Replace the PEM CA bundle used for Kafka TLS verification.",
-)
-@cloup.option(
-    "--default-trust",
-    is_flag=True,
-    help="Use the client's default trust store for Kafka TLS.",
-)
-@cloup.option(
-    "--auth",
-    "auth_type",
-    type=cloup.Choice(("none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth")),
-    help="Replace the Kafka authentication mechanism.",
-)
-@cloup.option("--username", help="Replace the Kafka SASL username.")
-@cloup.option(
-    "--client-certificate-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Replace the public PEM Kafka client certificate chain.",
-)
-@cloup.option(
-    "--client-key-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Replace the PEM Kafka client private key in the credential store.",
-)
-@cloup.option("--oauth-token-url", help="Replace the Kafka OAuth token endpoint.")
-@cloup.option("--oauth-client-id", help="Replace the Kafka OAuth client identifier.")
-@cloup.option("--oauth-scope", multiple=True, help="Replace Kafka OAuth scopes.")
-@cloup.option("--clear-oauth-scopes", is_flag=True, help="Remove all Kafka OAuth scopes.")
-@cloup.option(
-    "--oauth-ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Replace Kafka OAuth token-endpoint trust with a PEM CA bundle.",
-)
-@cloup.option(
-    "--oauth-default-trust",
-    is_flag=True,
-    help="Use default trust for the Kafka OAuth token endpoint.",
-)
-@cloup.option(
-    "--replace-secret",
-    "replace_secrets",
-    multiple=True,
-    metavar="FIELD",
-    help="Replace one supported Kafka credential field; repeat as needed.",
-)
-@cloup.option(
-    "--registry-provider",
-    type=cloup.Choice(("confluent", "apicurio")),
-    help="Replace the Registry provider.",
-)
-@cloup.option("--registry-url", help="Add or replace the Registry URL.")
-@cloup.option(
-    "--registry-auth",
-    type=cloup.Choice(("none", "basic", "token", "mtls", "oauth")),
-    help="Replace Registry authentication.",
-)
-@cloup.option("--registry-username", help="Replace Registry Basic username.")
-@cloup.option(
-    "--registry-client-certificate-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Replace the Registry client certificate chain.",
-)
-@cloup.option(
-    "--registry-client-key-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    metavar="PATH",
-    help="Replace the Registry client private key.",
-)
-@cloup.option(
-    "--registry-ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Replace Registry TLS trust with a PEM CA bundle.",
-)
-@cloup.option(
-    "--registry-default-trust",
-    is_flag=True,
-    help="Use default trust for Registry TLS.",
-)
-@cloup.option("--registry-oauth-token-url", help="Replace Registry OAuth token endpoint.")
-@cloup.option("--registry-oauth-client-id", help="Replace Registry OAuth client identifier.")
-@cloup.option("--registry-oauth-scope", multiple=True, help="Replace Registry OAuth scopes.")
-@cloup.option(
-    "--clear-registry-oauth-scopes",
-    is_flag=True,
-    help="Remove all Registry OAuth scopes.",
-)
-@cloup.option(
-    "--registry-oauth-ca-file",
-    type=cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path),
-    callback=_read_ca_file,
-    metavar="PATH",
-    help="Replace Registry OAuth token-endpoint trust.",
-)
-@cloup.option(
-    "--registry-oauth-default-trust",
-    is_flag=True,
-    help="Use default trust for the Registry OAuth token endpoint.",
-)
-@cloup.option("--registry-oauth-logical-cluster", help="Replace OAuth logical cluster.")
-@cloup.option("--registry-oauth-identity-pool-id", help="Replace OAuth identity pool ID.")
-@cloup.option(
-    "--clear-registry-oauth-logical-cluster",
-    is_flag=True,
-    help="Remove the Registry OAuth logical cluster.",
-)
-@cloup.option(
-    "--clear-registry-oauth-identity-pool-id",
-    is_flag=True,
-    help="Remove the Registry OAuth identity pool ID.",
-)
-@cloup.option("--remove-registry", is_flag=True, help="Remove the complete Registry connection.")
+@edit_profile_options
 def edit_configured_profile(profile_name: str, **values: Any) -> None:
     """Edit explicit fields of an existing profile."""
     options = EditOptions(**values)
@@ -569,7 +258,7 @@ def remove_configured_profile(profile_name: str, force: bool) -> None:
     "--label",
     "labels",
     multiple=True,
-    callback=_parse_labels,
+    callback=parse_labels,
     metavar="KEY=VALUE",
     help="Require an exact label; repeat to combine filters with AND.",
 )
