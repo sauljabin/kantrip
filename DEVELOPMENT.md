@@ -312,6 +312,17 @@ separate environment, then set `KANTRIP_E2E_KANTRIP` to that environment's
 host endpoints, private file modes, and the native credential store before any
 product assertion.
 
+The preconditions require both `kcat` and its historical name `kafkacat`,
+because Kantrip supports both executables. Homebrew installs only `kcat`, so on
+macOS link the alias into a user-owned directory that is on `PATH`, such as
+`~/.local/bin`:
+
+```bash
+ln -s "$(brew --prefix)/bin/kcat" ~/.local/bin/kafkacat
+```
+
+`kafkacat -V` should then print the same version as `kcat -V`.
+
 Run the complete adapter, shell, authentication, authorization, and Registry
 renewal matrix against the already-running services:
 
