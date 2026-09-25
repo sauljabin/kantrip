@@ -374,7 +374,7 @@ class TestCli(unittest.TestCase):
             with (
                 patch("kantrip.profiles.load_secret_store", return_value=store),
                 patch(
-                    "kantrip.cli._secret_prompt",
+                    "kantrip.cli_inputs.secret_prompt",
                     side_effect=(
                         Secret("synthetic-password-one"),
                         Secret("synthetic-password-two"),
@@ -421,7 +421,7 @@ class TestCli(unittest.TestCase):
                 temporary_pki_files(ca=synthetic_pki().ca) as paths,
                 patch("kantrip.profiles.load_secret_store", return_value=store),
                 patch(
-                    "kantrip.cli._secret_prompt",
+                    "kantrip.cli_inputs.secret_prompt",
                     return_value=Secret("synthetic-registry-oauth-secret"),
                 ),
             ):
@@ -480,7 +480,7 @@ class TestCli(unittest.TestCase):
         self.assertNotIn("tls", after["registry"])
 
     def test_required_secret_without_controlling_terminal_fails_with_guidance(self) -> None:
-        with patch("kantrip.cli.os.open", side_effect=OSError("no tty")):
+        with patch("kantrip.cli_inputs.os.open", side_effect=OSError("no tty")):
             result = self.runner.invoke(
                 cli,
                 [
@@ -1222,7 +1222,7 @@ class TestEditRegistryAuthentication(unittest.TestCase):
         return _MemorySecretStore(), {"KANTRIP_DATABASE": str(Path(directory) / "profiles.db")}
 
     def _invoke(self, arguments: list[str], environment: dict[str, str]) -> Any:
-        with patch("kantrip.cli._secret_prompt", return_value=Secret("synthetic-secret")):
+        with patch("kantrip.cli_inputs.secret_prompt", return_value=Secret("synthetic-secret")):
             return self.runner.invoke(cli, arguments, env=environment)
 
 
