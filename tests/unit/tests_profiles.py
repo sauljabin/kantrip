@@ -15,25 +15,21 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-import kantrip.profiles as profiles_module
+import kantrip.profile_storage as storage_module
 from kantrip.migrations import MIGRATIONS, MigrationChain, SqlMigration
-from kantrip.profiles import (
+from kantrip.profile_auth import KafkaAuthInput, RegistryAuthInput
+from kantrip.profile_storage import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
     DATABASE_SCHEMA_VERSION,
-    KafkaAuthInput,
     ProfileStoreError,
-    RegistryAuthInput,
-    add_profile,
     database_maintenance_lock,
-    edit_profile,
     inspect_pending_secret_cleanup,
     load_profiles,
     reconcile_pending_secrets,
-    remove_profile,
     resolve_database_path,
-    resolve_profile_snapshot,
 )
+from kantrip.profiles import add_profile, edit_profile, remove_profile, resolve_profile_snapshot
 from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
 from kantrip.secret_store import SecretStoreError, secret_reference
 from kantrip.secret_value import Secret
@@ -82,7 +78,7 @@ class TestProfiles(unittest.TestCase):
 
             with (
                 patch(
-                    "kantrip.profiles._load_profile_collection",
+                    "kantrip.profile_storage.load_profile_collection",
                     side_effect=sqlite3.OperationalError("synthetic reload failure"),
                 ),
                 self.assertRaises(ProfileStoreError) as raised,
@@ -100,7 +96,7 @@ class TestProfiles(unittest.TestCase):
 
             with (
                 patch(
-                    "kantrip.profiles._load_profile_collection",
+                    "kantrip.profile_storage.load_profile_collection",
                     side_effect=sqlite3.OperationalError("synthetic reload failure"),
                 ),
                 self.assertRaises(ProfileStoreError) as raised,
@@ -120,7 +116,7 @@ class TestProfiles(unittest.TestCase):
 
             with (
                 patch(
-                    "kantrip.profiles._load_profile_collection",
+                    "kantrip.profile_storage.load_profile_collection",
                     side_effect=sqlite3.OperationalError("synthetic reload failure"),
                 ),
                 self.assertRaises(ProfileStoreError) as raised,
@@ -137,7 +133,7 @@ class TestProfiles(unittest.TestCase):
 
             with (
                 patch(
-                    "kantrip.profiles._harden_sqlite_files",
+                    "kantrip.profile_storage._harden_sqlite_files",
                     side_effect=OSError("synthetic chmod failure"),
                 ),
                 self.assertRaises(ProfileStoreError) as raised,
@@ -155,7 +151,7 @@ class TestProfiles(unittest.TestCase):
                 factory = _commit_fault_factory(durable)
 
                 with (
-                    patch("kantrip.profiles._connect", side_effect=factory),
+                    patch("kantrip.profile_storage.connect", side_effect=factory),
                     self.assertRaises(ProfileStoreError) as raised,
                 ):
                     add_profile("local", path)
@@ -172,7 +168,7 @@ class TestProfiles(unittest.TestCase):
             path = Path(directory) / "add.db"
             store = _RecordingSecretStore()
             with (
-                patch("kantrip.profiles._connect", side_effect=_commit_fault_factory(True)),
+                patch("kantrip.profile_storage.connect", side_effect=_commit_fault_factory(True)),
                 self.assertRaises(ProfileStoreError) as raised,
             ):
                 add_profile(
@@ -196,7 +192,7 @@ class TestProfiles(unittest.TestCase):
                 secret_store=store,
             )
             with (
-                patch("kantrip.profiles._connect", side_effect=_commit_fault_factory(True)),
+                patch("kantrip.profile_storage.connect", side_effect=_commit_fault_factory(True)),
                 self.assertRaises(ProfileStoreError) as raised,
             ):
                 edit_profile("local", path, auth=replacement, secret_store=store)
@@ -215,7 +211,7 @@ class TestProfiles(unittest.TestCase):
                 secret_store=store,
             )
             with (
-                patch("kantrip.profiles._connect", side_effect=_commit_fault_factory(True)),
+                patch("kantrip.profile_storage.connect", side_effect=_commit_fault_factory(True)),
                 self.assertRaises(ProfileStoreError) as raised,
             ):
                 remove_profile("local", path, secret_store=store)
@@ -318,7 +314,7 @@ class TestProfiles(unittest.TestCase):
                     MigrationChain(*MIGRATIONS, second),
                 ),
                 patch(
-                    "kantrip.profiles._backup_timestamp",
+                    "kantrip.profile_storage._backup_timestamp",
                     return_value="2026-09-14T01-02-03.000004Z",
                 ),
             ):
@@ -329,7 +325,7 @@ class TestProfiles(unittest.TestCase):
                     MigrationChain(*MIGRATIONS, second, third),
                 ),
                 patch(
-                    "kantrip.profiles._backup_timestamp",
+                    "kantrip.profile_storage._backup_timestamp",
                     return_value="2026-09-15T02-03-04.000005Z",
                 ),
             ):
@@ -528,7 +524,7 @@ class TestProfiles(unittest.TestCase):
 
             with (
                 database_maintenance_lock(path),
-                patch("kantrip.profiles.DATABASE_TIMEOUT_SECONDS", 0),
+                patch("kantrip.profile_storage.DATABASE_TIMEOUT_SECONDS", 0),
                 self.assertRaisesRegex(ProfileStoreError, "maintenance is busy"),
             ):
                 edit_profile("local", path, description="must-not-commit")
@@ -1500,7 +1496,7 @@ class _CommitFaultConnection:
 
 
 def _commit_fault_factory(durable: bool | None):
-    original = profiles_module._connect
+    original = storage_module.connect
     state = {"faulted": False}
 
     def connect(path: Path, *, writable: bool) -> sqlite3.Connection:

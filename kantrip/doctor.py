@@ -32,7 +32,7 @@ from kantrip.adapters import (
     require_adapter_capability,
 )
 from kantrip.kafka import KafkaProfileError, kafka_connection, resolve_kafka_connection
-from kantrip.profiles import (
+from kantrip.profile_storage import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
     ProfileCollection,

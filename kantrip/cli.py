@@ -35,6 +35,7 @@ from kantrip.kafka import (
 )
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, PingResult, ping_profile
+from kantrip.profile_auth import KafkaAuthInput, RegistryAuthInput
 from kantrip.profile_output import (
     OutputFormat,
     describe_observation,
@@ -42,16 +43,8 @@ from kantrip.profile_output import (
     filter_profiles,
     list_observation,
 )
-from kantrip.profiles import (
-    KafkaAuthInput,
-    ProfileStoreError,
-    RegistryAuthInput,
-    add_profile,
-    edit_profile,
-    load_profiles,
-    remove_profile,
-    resolve_profile_snapshot,
-)
+from kantrip.profile_storage import ProfileStoreError, load_profiles
+from kantrip.profiles import add_profile, edit_profile, remove_profile, resolve_profile_snapshot
 from kantrip.secret_value import Secret
 from kantrip.session import SessionError, ensure_session_available, run_profile_session
 

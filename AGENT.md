@@ -82,6 +82,10 @@
   Keep its directory mode `0700`, database and sidecar modes `0600`, WAL enabled,
   and writes bounded by `BEGIN IMMEDIATE` transactions. Reject symlinks, unsafe
   ownership or permissions, corrupt contents, and unsupported schema versions.
+- Keep the profile layer split as mapped in `ARCHITECTURE.md`: orchestration in
+  `profiles.py`, SQLite in `profile_storage.py`, pure planning in `profile_auth.py`
+  and `profile_documents.py`. Call storage functions through the module
+  (`storage.name(...)`) so tests can patch one seam.
 - Evolve the database through one bundled linear chain in
   `kantrip/migrations.py`. Keep one immutable `SqlMigration` subclass per change
   in the explicit `MigrationChain` registry; do not use filesystem or import

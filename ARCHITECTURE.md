@@ -236,6 +236,20 @@ The reusable cross-store transaction engine lives in
 commands build on this engine; they do not implement their own keyring or
 journal sequence.
 
+The profile layer is split by responsibility:
+
+| Module | Responsibility | I/O |
+| --- | --- | --- |
+| `profiles.py` | `add`, `edit`, `remove` orchestration and coherent snapshot resolution; owns lock and transaction sequencing | Through the modules below |
+| `profile_storage.py` | Database path, private file and lock checks, connections, migration access, schema validation, loading | SQLite and filesystem |
+| `profile_auth.py` | Typed authentication input, Kafka and Registry authentication plans, stored authentication documents | None |
+| `profile_documents.py` | New profile documents and requested edits applied to a copy | None |
+| `mutation_outcomes.py` | Commit evidence and lost-acknowledgement classification | Read-only SQLite reopen |
+| `credential_mutations.py` | Cross-store staging, commit, and exact retirement engine | SQLite and credential store |
+
+Other modules call storage functions through the module (`storage.connect(...)`)
+rather than importing them, so fault-injection tests replace a seam in one place.
+
 SQLite and the credential store cannot participate in one atomic transaction.
 Kantrip therefore stores non-secret exact-delete records in
 `credential_reconciliation` and uses immutable secret references to make

@@ -8,7 +8,8 @@ import os
 import sys
 from pathlib import Path
 
-from kantrip.profiles import KafkaAuthInput, add_profile, edit_profile
+from kantrip.profile_auth import KafkaAuthInput
+from kantrip.profiles import add_profile, edit_profile
 from kantrip.secret_store import SecretNotFoundError
 from kantrip.secret_value import Secret
 
@@ -112,13 +113,13 @@ def _run(scenario: str, database: Path, store_root: Path) -> None:
         )
         return
     if scenario == "after-profile-commit":
-        import kantrip.profiles as profiles_module
+        import kantrip.profile_storage as storage_module
 
         def stop_after_commit(path: Path, connection: object) -> object:
             del path, connection
             _barrier(scenario)
 
-        profiles_module._load_profile_collection = stop_after_commit
+        storage_module.load_profile_collection = stop_after_commit
         add_profile(
             "local",
             database,

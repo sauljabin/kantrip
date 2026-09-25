@@ -6,11 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.maintenance import run_repair
-from kantrip.profiles import (
-    add_profile,
-    inspect_pending_secret_cleanup,
-    inspect_profile_database,
-)
+from kantrip.profile_storage import inspect_pending_secret_cleanup, inspect_profile_database
+from kantrip.profiles import add_profile
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 from kantrip.secret_store import SecretStoreError, secret_reference

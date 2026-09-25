@@ -17,7 +17,8 @@ from kantrip.cli import cli
 from kantrip.console import create_console
 from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult, ping_profile
-from kantrip.profiles import ProfileStoreError, add_profile, load_profiles
+from kantrip.profile_storage import ProfileStoreError, load_profiles
+from kantrip.profiles import add_profile
 from kantrip.secret_store import SecretNotFoundError
 from kantrip.secret_value import Secret
 from tests.unit.pki import synthetic_pki, temporary_pki_files
@@ -977,6 +978,9 @@ class TestCli(unittest.TestCase):
             ("authentication", _http_error(401), "rejected Registry authentication"),
             ("authorization", _http_error(403), "denied Registry authorization"),
         )
+        for _, failure, _ in failures:
+            if isinstance(failure, HTTPError):
+                self.addCleanup(failure.close)
         for name, failure, message in failures:
             with self.subTest(name), self.runner.isolated_filesystem():
                 database_path = Path("profiles.db")
