@@ -34,7 +34,6 @@ from scripts.website import (
     render_index,
     render_transcript,
     screen_lines,
-    sort_topic_blocks,
 )
 
 PROMPT = [{"text": "❯ ", "style": "secondary"}]
@@ -241,11 +240,17 @@ CAPTURE_STEPS: list[dict[str, Any]] = [
         "output": [],
     },
     {"prompt": PROMPT, "command": "kantrip ping prod", "spinner": "Checking", "output": []},
-    {"prompt": PROMPT, "command": "kantrip exec prod -- kcat -L", "output": []},
+    {
+        "prompt": PROMPT,
+        "command": "kantrip exec prod -- kafka-topics --create --topic payments --partitions 1",
+        "output": [],
+    },
     {"prompt": PROMPT, "command": "kantrip exec prod", "output": []},
     {"prompt": PROMPT, "command": "kafka-topics --list", "output": []},
     {"prompt": PROMPT, "command": "exit", "output": []},
+    {"prompt": PROMPT, "command": "", "output": []},
 ]
+CAPTURE_TOPICS = ["kantrip-auth-site-demo-orders", "kantrip-auth-site-demo-payments"]
 
 
 class FakeLab:
@@ -281,19 +286,9 @@ class FakeLab:
                 f"\x1b[?25h{SUCCESS}✅ Kafka transport: verified TLS; "
                 f"authentication: SCRAM-SHA-512{RESET}\r\n"
             )
-        if "kcat" in arguments:
-            return 0, (
-                "% Reading configuration from file /var/folders/x/T/kantrip-501/sessions/"
-                "session-0a1b/kcat.conf\r\n"
-                "%3|1790364171.651|FAIL|rdkafka#producer-1| [thrd:sasl_ssl://localhost:9094/0]: "
-                "Connect to ipv6#[::1]:9094 failed: Connection refused\r\n"
-                "Metadata for all topics (from broker 0: sasl_ssl://localhost:9094/0):\r\n"
-                " 1 brokers:\r\n  broker 0 at localhost:9094 (controller)\r\n"
-                ' 2 topics:\r\n  topic "kantrip-auth-site-demo-payments" with 1 partitions:\r\n'
-                "    partition 0, leader 0, replicas: 0, isrs: 0\r\n"
-                '  topic "kantrip-auth-site-demo-orders" with 1 partitions:\r\n'
-                "    partition 0, leader 0, replicas: 0, isrs: 0\r\n"
-            )
+        if "--create" in arguments:
+            topic = arguments[arguments.index("--topic") + 1]
+            return 0, f"Created topic {topic}.\r\n"
         self.driver = Path(shlex.split(inputs[0])[1]).read_text(encoding="utf-8")
         prompt = f"{ACCENT}\U000f100f kantrip-site-demo {RESET}{SECONDARY}❯{RESET} "
         return 0, (
@@ -362,38 +357,42 @@ class TestDemoCapture(unittest.TestCase):
                 }
             ],
         )
+        create_arguments = lab.terminal_calls[2][0]
         self.assertEqual(
-            outputs[2][:2],
-            [
-                {
-                    "text": "% Reading configuration from file /run/user/1000/kantrip/"
-                    "sessions/session-5f0c2a9d4b7e41c8a3d6e9f1b2c4a7d0/kcat.conf"
-                },
-                {
-                    "text": "Metadata for all topics (from broker 0: sasl_ssl://kafka.example.com:9093/0):"
-                },
-            ],
+            create_arguments[1:6],
+            ["exec", "kantrip-site-demo", "--", "kafka-topics", "--create"],
         )
-        self.assertIn({"text": "  broker 0 at kafka.example.com:9093 (controller)"}, outputs[2])
-        self.assertEqual(outputs[2][-4]["text"], '  topic "orders" with 1 partitions:')
-        self.assertEqual(outputs[3:], [[], [{"text": "orders"}, {"text": "payments"}], []])
+        self.assertIn("kantrip-auth-site-demo-payments", create_arguments)
+        self.assertEqual(outputs[2], [{"text": "Created topic payments."}])
+        self.assertEqual(outputs[3:], [[], [{"text": "orders"}, {"text": "payments"}], [], []])
         session_prompt = [
             {"text": "\U000f100f prod ", "style": "accent"},
             {"text": "❯ ", "style": "secondary"},
         ]
         self.assertEqual(
-            [step["prompt"] for step in demo["steps"][3:]], [PROMPT] + [session_prompt] * 2
+            [step["prompt"] for step in demo["steps"][3:]],
+            [PROMPT, session_prompt, session_prompt, PROMPT],
         )
+        self.assertEqual(len(lab.terminal_calls), 4)
         self.assertEqual(demo["steps"][1]["spinner"], "Checking")
         self.assertIn("KANTRIP_PROFILE", demo["capture"])
         self.assertEqual(check_demo_content(demo), [])
-        self.assertEqual([command[5] for command in lab.commands[:2]], ["--create"] * 2)
+        # Only the listed topic exists beforehand; the demo creates the other one.
+        self.assertEqual(
+            [command[7] for command in lab.commands if "--create" in command],
+            ["kantrip-auth-site-demo-orders"],
+        )
+        self.assertEqual(self.deleted_topics(lab), CAPTURE_TOPICS)
         self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--yes"])
+
+    def deleted_topics(self, lab: FakeLab) -> list[str]:
+        return [command[7] for command in lab.commands if "--delete" in command]
 
     def test_failed_step_still_removes_the_profile(self) -> None:
         lab = FakeLab(self.target, fail="exec kantrip-site-demo")
         with self.assertRaisesRegex(CaptureError, "exited with 1"):
             self.capture(lab)
+        self.assertEqual(self.deleted_topics(lab), CAPTURE_TOPICS)
         self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--yes"])
 
     def test_password_in_output_is_never_written(self) -> None:
@@ -418,27 +417,6 @@ class TestDemoCapture(unittest.TestCase):
         self.assertEqual(
             screen_lines("\x1b[90mquiet\x1b[0m\r\n", self.target),
             [{"text": "quiet", "style": "muted"}],
-        )
-
-    def test_topic_blocks_are_sorted_by_name(self) -> None:
-        lines = [
-            {"text": " 2 topics:"},
-            {"text": '  topic "b" with 1 partitions:'},
-            {"text": "    partition 0"},
-            {"text": '  topic "a" with 1 partitions:'},
-            {"text": "    partition 0"},
-            {"text": "after"},
-        ]
-        self.assertEqual(
-            [line["text"] for line in sort_topic_blocks(lines)],
-            [
-                " 2 topics:",
-                '  topic "a" with 1 partitions:',
-                "    partition 0",
-                '  topic "b" with 1 partitions:',
-                "    partition 0",
-                "after",
-            ],
         )
 
     def test_capture_environment_uses_a_private_zsh_prompt(self) -> None:

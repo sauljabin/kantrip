@@ -387,6 +387,8 @@ CAPTURE_TOPICS = {
     "kantrip-auth-site-demo-orders": "orders",
     "kantrip-auth-site-demo-payments": "payments",
 }
+# Topics that exist before the demo starts; the demo creates the others itself.
+SETUP_TOPICS = ("kantrip-auth-site-demo-orders",)
 SANDBOX_BOOTSTRAP = "localhost:9094"
 SANDBOX_USERNAME = "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"
 SANDBOX_PASSWORD = "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"
@@ -451,6 +453,7 @@ class CaptureTarget:
             GENERIC_BOOTSTRAP: SANDBOX_BOOTSTRAP,
             GENERIC_CA_FILE: str(self.ca_file),
             GENERIC_USERNAME: self.username,
+            **{generic: topic for topic, generic in CAPTURE_TOPICS.items()},
         }
         tokens = shlex.split(command)
         return [values.get(token, token) if token != "--" else token for token in tokens]
@@ -549,19 +552,6 @@ def capture_environment(directory: Path) -> dict[str, str]:
     return environment
 
 
-def sort_topic_blocks(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order kcat's topic metadata by name; kcat prints topics in arbitrary order."""
-    starts = [index for index, line in enumerate(lines) if line["text"].startswith('  topic "')]
-    if not starts:
-        return lines
-    end = starts[-1] + 1
-    while end < len(lines) and lines[end]["text"].startswith("    "):
-        end += 1
-    blocks = [lines[start:stop] for start, stop in zip(starts, [*starts[1:], end], strict=True)]
-    blocks.sort(key=lambda block: block[0]["text"])
-    return [*lines[: starts[0]], *(line for block in blocks for line in block), *lines[end:]]
-
-
 def prompt_segments(screen: pyte.Screen, typed: str, target: CaptureTarget) -> list[dict[str, Any]]:
     """Return the styled prompt printed before the typed text on the screen.
 
@@ -646,10 +636,14 @@ class DemoCapture:
 
     def _run_steps(self, steps: Sequence[Mapping[str, Any]]) -> list[list[dict[str, Any]]]:
         outputs = [self._step(steps[0]["command"], secret=True)]
-        self._topics("--create", "--partitions", "1", "--if-not-exists")
+        self._topics(SETUP_TOPICS, "--create", "--partitions", "1", "--if-not-exists")
         index = 1
         while index < len(steps):
-            if _opens_session(steps[index]["command"]):
+            if not steps[index]["command"].strip():
+                # An idle prompt, such as the one shown after the session exits.
+                outputs.append([])
+                index += 1
+            elif _opens_session(steps[index]["command"]):
                 end = _session_range(steps, index)
                 prompt, session_outputs = self._session(steps[index : end + 1])
                 self.prompts.update({inner: prompt for inner in range(index + 1, end + 1)})
@@ -676,7 +670,7 @@ class DemoCapture:
         arguments = self.target.arguments(command)
         inputs = (self.target.password,) if secret else ()
         output = self._terminal(arguments, inputs, SECRET_PROMPT if secret else None)
-        return sort_topic_blocks(screen_lines(output, self.target))
+        return screen_lines(output, self.target)
 
     def _session(
         self, steps: Sequence[Mapping[str, Any]]
@@ -708,8 +702,8 @@ class DemoCapture:
         ]
         return prompt_segments(screen, typed, self.target), [[], *inner, []]
 
-    def _topics(self, action: str, *options: str) -> None:
-        for topic in CAPTURE_TOPICS:
+    def _topics(self, topics: Iterable[str], action: str, *options: str) -> None:
+        for topic in topics:
             arguments = [self.target.kantrip, "exec", CAPTURE_PROFILE, "--", "kafka-topics"]
             status, output = self.command(
                 [*arguments, action, "--topic", topic, *options], self.environment
@@ -721,7 +715,7 @@ class DemoCapture:
     def _cleanup(self) -> list[str]:
         errors: list[str] = []
         try:
-            self._topics("--delete", "--if-exists")
+            self._topics(CAPTURE_TOPICS, "--delete", "--if-exists")
         except CaptureError as error:
             errors.append(str(error))
         status, output = self.command(
@@ -743,9 +737,8 @@ def sandbox_target(state_dir: Path) -> Iterator[CaptureTarget]:
     kantrip = shutil.which("kantrip")
     if kantrip is None:
         raise CaptureError("kantrip is not on PATH; run through 'uv run --locked'")
-    for tool in ("kcat", "kafka-topics"):
-        if shutil.which(tool) is None:
-            raise CaptureError(f"{tool} is required on PATH for the demo capture")
+    if shutil.which("kafka-topics") is None:
+        raise CaptureError("kafka-topics is required on PATH for the demo capture")
     ca_file = state_dir / "ca.crt"
     if not ca_file.is_file():
         raise CaptureError(f"{ca_file} is missing; run 'python -m sandbox up' first")

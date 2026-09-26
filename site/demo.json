@@ -42,34 +42,10 @@
           "style": "secondary"
         }
       ],
-      "command": "kantrip exec prod -- kcat -L",
+      "command": "kantrip exec prod -- kafka-topics --create --topic payments --partitions 1 --replication-factor 1",
       "output": [
         {
-          "text": "% Reading configuration from file /run/user/1000/kantrip/sessions/session-5f0c2a9d4b7e41c8a3d6e9f1b2c4a7d0/kcat.conf"
-        },
-        {
-          "text": "Metadata for all topics (from broker 0: sasl_ssl://kafka.example.com:9093/0):"
-        },
-        {
-          "text": " 1 brokers:"
-        },
-        {
-          "text": "  broker 0 at kafka.example.com:9093 (controller)"
-        },
-        {
-          "text": " 2 topics:"
-        },
-        {
-          "text": "  topic \"orders\" with 1 partitions:"
-        },
-        {
-          "text": "    partition 0, leader 0, replicas: 0, isrs: 0"
-        },
-        {
-          "text": "  topic \"payments\" with 1 partitions:"
-        },
-        {
-          "text": "    partition 0, leader 0, replicas: 0, isrs: 0"
+          "text": "Created topic payments."
         }
       ]
     },
@@ -116,6 +92,16 @@
         }
       ],
       "command": "exit",
+      "output": []
+    },
+    {
+      "prompt": [
+        {
+          "text": "❯ ",
+          "style": "secondary"
+        }
+      ],
+      "command": "",
       "output": []
     }
   ]
