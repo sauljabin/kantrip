@@ -381,39 +381,22 @@ def current_profile() -> None:
     is_flag=True,
     help="Show every diagnostic, including resolved paths and profile IDs.",
 )
-@cloup.option(
-    "--sessions",
-    is_flag=True,
-    help="Show each captured session, for PROFILE or for every profile.",
-)
 @cloup.pass_context
 def doctor(
     context: cloup.Context,
     profile_name: str | None,
     repair: bool,
     verbose: bool,
-    sessions: bool,
 ) -> None:
     """Inspect Kantrip, optionally applying deterministic local repairs."""
-    _validate_doctor_options(profile_name, repair=repair, sessions=sessions)
-    console = console_from_context(context)
-    repair_healthy = _run_and_render_repair(console) if repair else True
-    report = run_doctor(profile_name=profile_name, include_sessions=sessions)
-    _render_doctor_report(console, report, verbose=verbose)
-    if not repair_healthy or not report.healthy:
-        raise click.exceptions.Exit(1)
-
-
-def _validate_doctor_options(
-    profile_name: str | None,
-    *,
-    repair: bool,
-    sessions: bool,
-) -> None:
     if repair and profile_name is not None:
         raise click.UsageError("PROFILE cannot be combined with --repair")
-    if repair and sessions:
-        raise click.UsageError("--sessions cannot be combined with --repair")
+    console = console_from_context(context)
+    repair_healthy = _run_and_render_repair(console) if repair else True
+    report = run_doctor(profile_name=profile_name)
+    _render_doctor_report(console, report, verbose=verbose, profile_name=profile_name)
+    if not repair_healthy or not report.healthy:
+        raise click.exceptions.Exit(1)
 
 
 def _run_and_render_repair(console: Console) -> bool:
@@ -431,8 +414,17 @@ def _run_and_render_repair(console: Console) -> bool:
     return repair_report.healthy
 
 
-def _render_doctor_report(console: Console, report: DoctorReport, *, verbose: bool) -> None:
-    console.print(Text("Kantrip Doctor", style="heading"))
+def _render_doctor_report(
+    console: Console,
+    report: DoctorReport,
+    *,
+    verbose: bool,
+    profile_name: str | None = None,
+) -> None:
+    title = (
+        "Kantrip Doctor" if profile_name is None else f"Kantrip Doctor: profile '{profile_name}'"
+    )
+    console.print(Text(title, style="heading"))
     for section, checks in report.sections(verbose=verbose):
         console.print()
         console.print(Text(section, style="heading"))

@@ -97,7 +97,7 @@ Terminal B (same `QA` variables):
 ```bash
 ps -ww -o pid,args -A | grep -E 'kantrip|sleep 300' | grep -v grep
 ls -la "$XDG_RUNTIME_DIR/kantrip/sessions/"*/
-kantrip doctor qa-mtls --sessions
+kantrip doctor qa-mtls
 ```
 
 Expect: no key material, password or token in any process argument; session
@@ -160,7 +160,7 @@ names the service, not a stack trace; `ping` prints one line per service.
 ## 8. Concurrent edits are safe
 
 Terminal A: `kantrip exec qa-scram -- sleep 120`. Terminal B:
-`kantrip edit qa-scram -d 'changed'` then `kantrip doctor qa-scram --sessions`.
+`kantrip edit qa-scram -d 'changed'` then `kantrip doctor qa-scram`.
 Expect: the edit succeeds; the running session is reported with the older
 revision; the running command keeps working.
 

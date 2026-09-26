@@ -9,7 +9,7 @@ from contextlib import ExitStack, contextmanager
 from email.message import Message
 from pathlib import Path
 from typing import Any, ClassVar
-from unittest.mock import patch
+from unittest.mock import call, patch
 from urllib.error import HTTPError, URLError
 
 import yaml
@@ -668,7 +668,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("[passed] Applied database migrations: 1", result.output)
         self.assertIn("[cleanup] Sessions: removed 2 stale", result.output)
         repair.assert_called_once_with()
-        run.assert_called_once_with(profile_name=None, include_sessions=False)
+        run.assert_called_once_with(profile_name=None)
 
     def test_doctor_repair_exits_nonzero_when_maintenance_fails(self) -> None:
         with (
@@ -1830,16 +1830,25 @@ class TestPingOutput(unittest.TestCase):
 class TestDoctorContract(unittest.TestCase):
     """`doctor` sessions for every profile and stored state for every secret (#52)."""
 
-    def test_sessions_without_profile_lists_every_profile(self) -> None:
+    def test_sessions_are_always_listed_so_there_is_no_sessions_option(self) -> None:
+        result = CliRunner().invoke(cli, ["doctor", "--sessions"])
+
+        self.assertEqual(2, result.exit_code, result.output)
+        self.assertIn("No such option '--sessions'", result.output)
+
+    def test_scoped_report_names_the_profile_in_its_title(self) -> None:
         runner = CliRunner()
         with patch("kantrip.cli.run_doctor") as run:
             from kantrip.doctor import DoctorReport
 
             run.return_value = DoctorReport(())
-            result = runner.invoke(cli, ["doctor", "--sessions", "-v"])
+            scoped = runner.invoke(cli, ["doctor", "prod", "-v", "--no-color"])
+            unscoped = runner.invoke(cli, ["doctor", "--no-color"])
 
-        self.assertEqual(0, result.exit_code, result.output)
-        run.assert_called_once_with(profile_name=None, include_sessions=True)
+        self.assertEqual(0, scoped.exit_code, scoped.output)
+        self.assertEqual("Kantrip Doctor: profile 'prod'", scoped.output.splitlines()[0])
+        self.assertEqual("Kantrip Doctor", unscoped.output.splitlines()[0])
+        self.assertEqual([call(profile_name="prod"), call(profile_name=None)], run.call_args_list)
 
 
 class TestDescribeCompleteness(unittest.TestCase):

@@ -116,7 +116,7 @@ schema. Proxies must allow the selected endpoint; no fallback probes
 `/users/me`, `/system/info`, `/schemas/types`, or artifact search. Kafka ping
 uses broker connection state and does not request topics, groups, schemas, or
 cluster descriptions. Neither probe proves write authorization. `doctor PROFILE` scopes profile checks and
-`doctor PROFILE --sessions` attributes sessions by UUID and revision. `kcl` and `kafkactl` have no automatic
+`doctor` attributes sessions by profile UUID and revision. `kcl` and `kafkactl` have no automatic
 adapter, even though an arbitrary executable can run as a supervised child.
 
 ## File formats

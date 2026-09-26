@@ -311,7 +311,11 @@ class TestDoctor(unittest.TestCase):
         visible = [check.message for _, checks in report.sections() for check in checks]
         verbose = [check.message for _, checks in report.sections(verbose=True) for check in checks]
         self.assertTrue(artifact_preserved)
-        self.assertTrue(any("Runtime stale: 1 session" in message for message in visible))
+        self.assertIn(
+            "Sessions on this machine: 0 active, 0 recent inactive, 1 stale; "
+            "run 'kantrip doctor --repair' to remove stale sessions",
+            visible,
+        )
         self.assertFalse(any(str(runtime_path.parent) in message for message in visible))
         self.assertTrue(any(str(runtime_path.parent) in message for message in verbose))
 
@@ -336,8 +340,10 @@ class TestDoctor(unittest.TestCase):
                 report = run_doctor(environment)
 
         self.assertFalse(report.healthy)
-        self.assertTrue(
-            any("Runtime invalid: 1 session" in check.message for check in report.checks)
+        self.assertIn(
+            f"Invalid session runtime entry: {runtime_root / 'unexpected'}; "
+            "inspect it and remove it manually",
+            [check.message for check in report.checks],
         )
 
     def test_pending_credential_cleanup_is_reported_without_modification(self) -> None:
@@ -489,7 +495,7 @@ class TestDoctorSecretsAndSessions(unittest.TestCase):
                     patch("kantrip.doctor.load_secret_store", return_value=_MemoryStore()),
                     patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
                 ):
-                    report = run_doctor(environment, include_sessions=True)
+                    report = run_doctor(environment)
             finally:
                 for runtime in runtimes:
                     runtime.close()
@@ -500,7 +506,53 @@ class TestDoctorSecretsAndSessions(unittest.TestCase):
             messages,
         )
         self.assertTrue(
-            any(m.startswith("Session active: removed profile, revision 1") for m in messages),
+            any(
+                m.startswith("Session active: profile not in this database, revision 1")
+                for m in messages
+            ),
+            messages,
+        )
+
+    def test_profile_scope_is_visible_and_keeps_machine_wide_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
+            add_profile("other", database_path)
+            profiles = load_profiles(database_path)
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+            runtimes = [
+                create_session_runtime(str(profiles.profile("other")["id"]), 1, environment),
+                create_session_runtime(str(profiles.profile("local")["id"]), 1, environment),
+            ]
+            invalid = runtimes[0].path.parent / "unexpected"
+            invalid.mkdir()
+            try:
+                with (
+                    patch("kantrip.doctor.load_secret_store", return_value=_MemoryStore()),
+                    patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+                ):
+                    report = run_doctor(environment, profile_name="other")
+            finally:
+                for runtime in runtimes:
+                    runtime.close()
+
+        messages = [check.message for _, checks in report.sections() for check in checks]
+        self.assertIn("Profile database is healthy (2 profiles, schema version 1)", messages)
+        self.assertIn("Profile 'other' has no Registry", messages)
+        self.assertIn("This shell is not inside a Kantrip session", messages)
+        self.assertIn(
+            "Sessions for profile 'other': 1 active, 0 recent inactive, 0 stale", messages
+        )
+        self.assertEqual(1, sum(m.startswith("Session active: revision 1") for m in messages))
+        self.assertIn(
+            f"Invalid session runtime entry: {invalid}; inspect it and remove it manually",
             messages,
         )
 

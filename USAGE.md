@@ -49,13 +49,19 @@ expiry. `doctor` is the only command that reads secret values to report this;
 `describe` only lists them as `configured`. Use `-v`/`--verbose` for paths,
 backend identity, and individual checks.
 
-Scope checks to one immutable profile identity, and list captured runtime
-sessions for that profile or, without PROFILE, for every profile:
+Doctor always lists the sessions on this machine: one line per session with
+its profile, revision, and age, plus the session ID, supervisor PID, and path
+with `-v`. The Session section also says whether the current shell is inside a
+Kantrip session. Stale sessions come with a `--repair` hint; an entry Kantrip
+cannot verify as its own is reported by path and must be inspected and removed
+manually, because `--repair` never deletes it.
+
+Scope checks and sessions to one immutable profile identity. The title names the
+profile, and the database line still counts every profile:
 
 ```bash
 kantrip doctor production
-kantrip doctor production --sessions
-kantrip doctor --sessions -v
+kantrip doctor production -v
 ```
 
 Missing optional clients or a first-run profile database produce warnings. An
