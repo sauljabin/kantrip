@@ -13,6 +13,10 @@ from pathlib import Path
 
 from kantrip.registry import CONFLUENT_PROVIDER, RegistryConnection
 
+KAF_EXECUTABLES = frozenset({"kaf"})
+# kaf saves `$HOME/.kaf/config` whatever `--config` names; under this home the save
+# fails before any file exists, so profile credentials can never reach it.
+KAF_HOME = "/dev/null"
 KASKADE_EXECUTABLES = frozenset({"kaskade"})
 KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
 KAFKA_CONSOLE_CONSUMER_EXECUTABLES = frozenset(
@@ -62,6 +66,7 @@ class ClientConfiguration:
     kaskade_registry_config: Path
     schema_registry_java_config: Path | None = None
     registry_oauth_ssl_cert_file: Path | None = None
+    kaf_config: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +154,12 @@ _KASKADE_CONNECTION_OPTIONS = (
     "--registry",
     "-b",
 )
+# kaf v0.2.14 (cmd/kaf): profile-owned persistent options, and the short options that
+# are booleans; every other short option takes a value, which ends a combined group.
+_KAF_CONNECTION_OPTIONS = ("--config", "--brokers", "--cluster", "--schema-registry")
+_KAF_CONNECTION_SHORT_OPTIONS = {"b": "--brokers", "c": "--cluster"}
+_KAF_BOOLEAN_SHORT_OPTIONS = frozenset("fhv")
+_KAF_BOOLEAN_LONG_OPTIONS = frozenset({"--follow", "--help", "--verbose", "--version"})
 _SAFE_RUNTIME_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
 _KAFKA_CLIENT_PROPERTY_OPTIONS = frozenset(
     {"--command-property", "--consumer-property", "--producer-property"}
@@ -186,6 +197,13 @@ def check_kaskade_arguments(executable: str, arguments: Sequence[str]) -> str | 
     """Reject Kaskade overrides in the arguments that follow `admin` or `consumer`."""
     del executable
     _reject_kaskade_overrides(arguments)
+    return None
+
+
+def check_kaf_arguments(executable: str, arguments: Sequence[str]) -> str | None:
+    """Reject kaf options and `config` commands that replace or persist the profile."""
+    del executable
+    _reject_kaf_overrides(arguments)
     return None
 
 
@@ -260,6 +278,19 @@ def prepare_kaskade_command(
         str(selected_config_path),
         *prepared[2:],
     ]
+
+
+def prepare_kaf_command(
+    prepared: list[str],
+    configuration: ClientConfiguration,
+    registry: RegistryConnection | None,
+) -> list[str]:
+    """Select the private kaf configuration, which holds the profile's only cluster."""
+    del registry
+    _reject_kaf_overrides(prepared[1:])
+    if configuration.kaf_config is None:
+        raise AdapterError("kaf requires a private configuration file")
+    return [prepared[0], "--config", str(configuration.kaf_config), *prepared[1:]]
 
 
 def require_registry_console_registry(
@@ -338,6 +369,50 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
                 raise AdapterError(
                     f"kaskade option '{option}' cannot override the selected Kantrip profile"
                 )
+
+
+def _reject_kaf_overrides(arguments: Sequence[str]) -> None:
+    command: str | None = None
+    takes_value = False
+    for argument in arguments:
+        if argument == "--":
+            break
+        if takes_value:
+            takes_value = False
+            # An option-like value is checked anyway: a rejection beats a bypass.
+            if not argument.startswith("-"):
+                continue
+        if argument.startswith("--"):
+            name = argument.partition("=")[0]
+            if name in _KAF_CONNECTION_OPTIONS:
+                raise AdapterError(
+                    f"kaf option '{name}' cannot override the selected Kantrip profile"
+                )
+            takes_value = "=" not in argument and name not in _KAF_BOOLEAN_LONG_OPTIONS
+            continue
+        if argument.startswith("-") and len(argument) > 1:
+            takes_value = _kaf_short_group_takes_value(argument[1:])
+            continue
+        if command is None:
+            command = argument
+    if command == "config":
+        raise AdapterError(
+            "kaf config commands cannot change or save the selected Kantrip profile; "
+            "Kantrip selects the cluster for this session"
+        )
+
+
+def _kaf_short_group_takes_value(group: str) -> bool:
+    for index, option in enumerate(group):
+        if option in _KAF_CONNECTION_SHORT_OPTIONS:
+            name = _KAF_CONNECTION_SHORT_OPTIONS[option]
+            raise AdapterError(
+                f"kaf option '-{option}/{name}' cannot override the selected Kantrip profile"
+            )
+        if option not in _KAF_BOOLEAN_SHORT_OPTIONS:
+            # A value option consumes the rest of the group, or the next argument.
+            return index == len(group) - 1
+    return False
 
 
 def _safe_runtime_kafka_property(value: str) -> bool:

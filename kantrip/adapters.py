@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from kantrip.adapter_policy import (
+    KAF_EXECUTABLES,
     KAFKA_ACLS_EXECUTABLES,
     KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
     KAFKA_CONFIGS_EXECUTABLES,
@@ -33,15 +34,18 @@ from kantrip.adapter_policy import (
     AdapterError,
     ClientConfiguration,
     check_java_arguments,
+    check_kaf_arguments,
     check_kaskade_arguments,
     check_kcat_arguments,
     prepare_java_command,
+    prepare_kaf_command,
     prepare_kaskade_command,
     prepare_kcat_command,
 )
 from kantrip.adapter_shims import (
     ShimInputs,
     render_java_shim,
+    render_kaf_shim,
     render_kaskade_shim,
     render_kcat_shim,
     write_executable,
@@ -103,6 +107,14 @@ def _missing_java_command(name: str) -> str:
     )
 
 
+def _missing_kaf(name: str) -> str:
+    del name
+    return (
+        "command 'kaf' was not found; install it with 'brew install kaf' on macOS or "
+        "from https://github.com/birdayz/kaf/releases on Linux"
+    )
+
+
 def _missing_kaskade(name: str) -> str:
     del name
     return "command 'kaskade' was not found; install it and ensure its executable is on PATH"
@@ -136,7 +148,19 @@ JAVA_CLI_ADAPTER = ClientAdapter(
     pem_version_gate=True,
     oauth_version_gate=True,
 )
-CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER)
+KAF_ADAPTER = ClientAdapter(
+    "kaf",
+    KAF_EXECUTABLES,
+    check_arguments=check_kaf_arguments,
+    prepare_command=prepare_kaf_command,
+    render_shim=render_kaf_shim,
+    missing_command=_missing_kaf,
+    # kaf's token client uses Go's default trust store and cannot take the
+    # profile's token-endpoint CA, so OAuth has no safe mapping.
+    kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
+    registry_providers=frozenset(),
+)
+CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER)
 _ADAPTERS_BY_EXECUTABLE = {
     executable: adapter for adapter in CLIENT_ADAPTERS for executable in adapter.executables
 }
@@ -178,6 +202,7 @@ def create_subshell_shims(
     kafka_auth_type: str = "none",
     schema_registry_java_config_path: Path | None = None,
     registry_oauth_ssl_cert_file: Path | None = None,
+    kaf_config_path: Path | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     configuration = ClientConfiguration(
@@ -188,6 +213,7 @@ def create_subshell_shims(
         kaskade_registry_config=kaskade_registry_config_path,
         schema_registry_java_config=schema_registry_java_config_path,
         registry_oauth_ssl_cert_file=registry_oauth_ssl_cert_file,
+        kaf_config=kaf_config_path,
     )
     installed = _installed_executables(environment.get("PATH", os.defpath))
     gates = _ShimCapabilityGates(environment, registry, require_java_pem, kafka_auth_type)
@@ -473,6 +499,7 @@ __all__ = [
     "KAFKA_CONSUMER_GROUPS_EXECUTABLES",
     "KAFKA_EXECUTABLES",
     "KAFKA_TOPICS_EXECUTABLES",
+    "KAF_EXECUTABLES",
     "KASKADE_EXECUTABLES",
     "KCAT_EXECUTABLES",
     "SCHEMA_REGISTRY_CONSUMER_EXECUTABLES",

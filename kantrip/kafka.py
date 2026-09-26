@@ -338,6 +338,66 @@ def librdkafka_properties(
     return properties
 
 
+def kaf_cluster(
+    connection: KafkaConnection,
+    *,
+    ca_location: Path | None = None,
+    client_certificate_location: Path | None = None,
+    private_key_location: Path | None = None,
+) -> dict[str, Any]:
+    """Render one kaf v0.2.14 cluster entry; kaf has no native mapping for OAuth.
+
+    kaf ignores a client certificate on `SASL_SSL`, so mTLS keeps its TLS block
+    without a security protocol, and verification stays on in every TLS case.
+    """
+    _validate_render_transport(connection)
+    cluster: dict[str, Any] = {"brokers": list(connection.bootstrap_servers)}
+    if connection.transport == "plaintext":
+        return cluster
+    tls: dict[str, Any] = {"insecure": False}
+    if connection.ca_certificates is not None:
+        if ca_location is None:
+            raise KafkaProfileError("Kafka CA bundle requires a private session file")
+        tls["cafile"] = str(ca_location)
+    cluster["TLS"] = tls
+    if connection.auth_type in {"plain", "scram-sha-256", "scram-sha-512"}:
+        if connection.username is None or connection.password is None:
+            raise KafkaProfileError("Kafka password credentials are not resolved")
+        cluster["security-protocol"] = "SASL_SSL"
+        cluster["SASL"] = {
+            "mechanism": connection.auth_type.upper(),
+            "username": connection.username,
+            "password": connection.password.reveal(),
+        }
+    elif connection.auth_type == "mtls":
+        if client_certificate_location is None or private_key_location is None:
+            raise KafkaProfileError("Kafka mTLS credentials require private session files")
+        tls["clientfile"] = str(client_certificate_location)
+        tls["clientkeyfile"] = str(private_key_location)
+    elif connection.auth_type == "oauth":
+        raise KafkaProfileError("kaf does not support Kantrip's Kafka OAuth mapping")
+    return cluster
+
+
+def unencrypted_private_key(connection: KafkaConnection) -> Secret:
+    """Return the mTLS key as unencrypted PKCS#8 PEM for clients that cannot decrypt it."""
+    if connection.private_key is None:
+        raise KafkaProfileError("Kafka mTLS credentials are not resolved")
+    if connection.private_key_password is None:
+        return connection.private_key
+    _, key = _load_private_key(
+        connection.private_key.reveal(),
+        password=connection.private_key_password.reveal(),
+    )
+    return Secret(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode("ascii")
+    )
+
+
 def _with_authentication(
     connection: KafkaConnection,
     profile: Mapping[str, Any],
@@ -680,12 +740,14 @@ __all__ = [
     "KafkaConnection",
     "KafkaProfileError",
     "java_properties",
+    "kaf_cluster",
     "kafka_connection",
     "librdkafka_properties",
     "read_ca_bundle",
     "read_client_certificate",
     "read_private_key",
     "resolve_kafka_connection",
+    "unencrypted_private_key",
     "validate_ca_bundle",
     "validate_client_certificate",
     "validate_client_identity",

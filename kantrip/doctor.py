@@ -18,6 +18,7 @@ from kantrip import APP_VERSION
 from kantrip.adapters import (
     ADAPTER_EXECUTABLES,
     CLIENT_ADAPTERS,
+    KAF_EXECUTABLES,
     KAFKA_ACLS_EXECUTABLES,
     KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
     KAFKA_CONFIGS_EXECUTABLES,
@@ -685,6 +686,8 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
         ),
         _check_command_group("Kaskade", (KASKADE_EXECUTABLES,), search_path),
         *_check_command_paths("Kaskade", (("executable", KASKADE_EXECUTABLES),), search_path),
+        _check_command_group("kaf", (KAF_EXECUTABLES,), search_path),
+        *_check_command_paths("kaf", (("executable", KAF_EXECUTABLES),), search_path),
     ]
 
 

@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <title>Kantrip: switch Kafka profiles like magic</title>
-<meta name="description" content="Kantrip securely manages Kafka profiles for kcat, the official Kafka CLIs, Kaskade, and compatible applications, keeping secrets in the OS credential store.">
+<meta name="description" content="Kantrip securely manages Kafka profiles for kcat, the official Kafka CLIs, Kaskade, kaf, and compatible applications, keeping secrets in the OS credential store.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kantrip">
 <meta property="og:title" content="Kantrip: switch Kafka profiles like magic">
@@ -58,7 +58,7 @@
 <span class="t-accent">╰──────────────────────────────────────────╯</span></pre>
     </div>
     <p class="lede">Kantrip securely manages plaintext, TLS, SASL, mTLS, and OAuth Kafka profiles
-      for kcat, the official Kafka CLIs, Kaskade, and compatible applications. Save a
+      for kcat, the official Kafka CLIs, Kaskade, kaf, and compatible applications. Save a
       profile once, keep its secrets in your operating system's credential store, and run
       your usual clients inside a scoped, supervised session.</p>
     <div class="install">
@@ -120,8 +120,8 @@
       </li>
       <li class="card">
         <h3>One profile for every client</h3>
-        <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's schema console clients, and
-          Kaskade each receive private configuration generated from the same profile, with
+        <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's schema console clients,
+          Kaskade, and kaf each receive private configuration generated from the same profile, with
           connection overrides blocked.</p>
         <p class="card-command" aria-hidden="true">kantrip exec prod -- kcat -L</p>
       </li>
@@ -155,6 +155,11 @@
         <dt>Kaskade</dt>
         <dd><code>admin</code> and <code>consumer</code>, with Confluent and native Apicurio
           decoding.</dd>
+      </div>
+      <div>
+        <dt><code>kaf</code></dt>
+        <dd>Topics, consumer groups, produce, and consume, with a private one-cluster
+          configuration.</dd>
       </div>
     </dl>
     <p>Kafka connections use plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256,

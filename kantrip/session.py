@@ -11,8 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from kantrip._files import write_exclusive_text
+from kantrip.adapter_policy import KAF_HOME
 from kantrip.adapters import (
+    KAF_EXECUTABLES,
     KCAT_EXECUTABLES,
     AdapterError,
     ClientConfiguration,
@@ -29,9 +33,11 @@ from kantrip.kafka import (
     KafkaConnection,
     KafkaProfileError,
     java_properties,
+    kaf_cluster,
     kafka_connection,
     librdkafka_properties,
     resolve_kafka_connection,
+    unencrypted_private_key,
 )
 from kantrip.registry import (
     APICURIO_PROVIDER,
@@ -58,6 +64,9 @@ from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_stor
 from kantrip.shells import ShellError, prepare_interactive_shell, resolve_interactive_shell
 from kantrip.supervisor import SupervisorError, run_supervised_process
 
+KAF_CLUSTER_NAME = "kantrip"
+KAF_CONFIG_FILENAME = "kaf.yaml"
+KAF_CLIENT_KEY_FILENAME = "kaf-client.key"
 _SCRUBBED_PREFIXES = ("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KANTRIP_SANDBOX_")
 _SCRUBBED_JAVA_VARIABLES = frozenset(
     {"KAFKA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
@@ -226,6 +235,8 @@ def _run_in_runtime(
         registry,
         registry_material.oauth_ca,
     )
+    if has_command and Path(arguments[0]).name in KAF_EXECUTABLES:
+        execution_environment["HOME"] = KAF_HOME
     result = _run_child(
         arguments,
         env=execution_environment,
@@ -313,6 +324,7 @@ def _write_client_files(
     except KafkaProfileError as error:
         raise SessionError(str(error)) from error
     schema_registry_java_config_path = directory / "schema-registry-kafka.properties"
+    kaf_config = _write_kaf_config(directory, kafka, kafka_material)
     configuration = ClientConfiguration(
         bootstrap_servers=kcat_properties["bootstrap.servers"],
         java_config=directory / "kafka.properties",
@@ -321,6 +333,7 @@ def _write_client_files(
         kaskade_registry_config=directory / "kaskade-registry.ini",
         schema_registry_java_config=schema_registry_java_config_path,
         registry_oauth_ssl_cert_file=registry_material.oauth_ca,
+        kaf_config=kaf_config,
     )
     registry_config_path = directory / "registry.properties"
     rendered_kafka = _render_properties(kcat_properties)
@@ -346,6 +359,36 @@ def _write_client_files(
             _render_java_properties(java_config | console_registry),
         )
     return _ClientFiles(configuration, kcat_properties, registry_config_path)
+
+
+def _write_kaf_config(
+    directory: Path, kafka: KafkaConnection, material: _KafkaMaterial
+) -> Path | None:
+    """Write kaf's one-cluster config; OAuth has no kaf mapping, so it gets none."""
+    if kafka.auth_type == "oauth":
+        return None
+    private_key = material.private_key
+    if kafka.auth_type == "mtls" and kafka.private_key_password is not None:
+        # kaf cannot decrypt a key; kcat's files already hold this key and its password.
+        private_key = _write_private(
+            directory / KAF_CLIENT_KEY_FILENAME, unencrypted_private_key(kafka).reveal()
+        )
+    try:
+        cluster = kaf_cluster(
+            kafka,
+            ca_location=material.ca,
+            client_certificate_location=material.certificate,
+            private_key_location=private_key,
+        )
+    except KafkaProfileError as error:
+        raise SessionError(str(error)) from error
+    document = {
+        "current-cluster": KAF_CLUSTER_NAME,
+        "clusters": [{"name": KAF_CLUSTER_NAME, **cluster}],
+    }
+    return _write_private(
+        directory / KAF_CONFIG_FILENAME, yaml.safe_dump(document, sort_keys=False)
+    )
 
 
 def _registry_properties(
@@ -380,15 +423,16 @@ def _prepare_command(
     kafka: KafkaConnection,
     registry: RegistryConnection | None,
 ) -> list[str]:
-    prepared = prepare_command(arguments, configuration, registry=registry)
+    # The capability decision comes first, as in the shims, so an unsupported
+    # mechanism is reported before any argument or configuration problem.
     require_adapter_capability(
-        prepared[0],
+        arguments[0],
         auth_type=kafka.auth_type,
         custom_pem=_uses_custom_pem(kafka),
         environment=environment,
         registry=registry,
     )
-    return prepared
+    return prepare_command(arguments, configuration, registry=registry)
 
 
 def _profile_registry(
@@ -494,6 +538,7 @@ def _prepare_subshell(
         kcat_config_path=configuration.kcat_config,
         kaskade_config_path=configuration.kaskade_config,
         kaskade_registry_config_path=configuration.kaskade_registry_config,
+        kaf_config_path=configuration.kaf_config,
         environment=environment,
         registry=registry,
         registry_oauth_ssl_cert_file=configuration.registry_oauth_ssl_cert_file,

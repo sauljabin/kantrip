@@ -750,6 +750,36 @@ registry URL. Native Apicurio OAuth profiles with scopes require Kaskade 5.0.1
 or newer; profiles without scopes retain compatibility with earlier releases.
 Kantrip sets no Kaskade-specific environment variable.
 
+### kaf
+
+Kantrip gives [kaf](https://github.com/birdayz/kaf) a private configuration with
+one cluster, `kantrip`, built from the profile, and selects it with `--config`:
+
+```bash
+kantrip exec local -- kaf topics
+kantrip exec local -- kaf consume orders --offset oldest
+echo hello | kantrip exec local -- kaf produce orders
+kantrip exec local -- kaf groups
+```
+
+The first command becomes:
+
+```bash
+kaf --config /tmp/kantrip-SESSION/kaf.yaml topics
+```
+
+kaf supports plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
+and mTLS profiles. OAuth profiles fail before launch: kaf's token client can't
+use the profile's token-endpoint CA. An encrypted mTLS key is decrypted into a
+private session file, because kaf can't read encrypted keys.
+
+Kantrip rejects `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and
+`--schema-registry`, and every `kaf config` command: kaf saves its cluster list
+to `~/.kaf/config` whatever `--config` names, which would copy the profile's
+credentials there. As a second guard, kaf runs with `HOME=/dev/null`, so any
+save fails before a file exists. Your own `~/.kaf/config` is never read or
+changed. Registry decoding isn't configured for kaf yet.
+
 ## Profile storage
 
 Kantrip stores profiles in a private local database. Use `add`, `edit`, and

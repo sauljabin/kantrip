@@ -218,10 +218,8 @@ def _discover_clients(
         _require_command(f"Kafka {adapter} CLI", bool(executables))
     kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
     _require_command("kcat", "kcat" in kcat_executables)
-    _require_command(
-        "kaskade",
-        shutil.which("kaskade", path=environment.get("PATH")) is not None,
-    )
+    for client in ("kaskade", "kaf"):
+        _require_command(client, shutil.which(client, path=environment.get("PATH")) is not None)
     return installed, kcat_executables
 
 
@@ -245,6 +243,7 @@ def _exercise_clients(
     _show_section(console, "Additional clients")
     _check_kcat_operations(console, profile, topic, kcat_executables, environment)
     _check_kaskade_operations(console, profile, topic, environment)
+    _check_kaf_operations(console, profile, topic, environment)
     _check_shells(
         console,
         profile=profile,
@@ -415,6 +414,46 @@ def _check_kcat_operations(
         _require_topic(marker, output, executable)
 
 
+def _check_kaf_operations(
+    console: Console,
+    profile: str,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    user_config = kaf_user_config_state(environment)
+    output = _check(console, "kaf: list topics", _kantrip(profile, "kaf", "topics"), environment)
+    _require_topic(topic, output, "kaf")
+    marker = "kantrip smoke record from kaf"
+    _check(
+        console,
+        "kaf: produce record",
+        _kantrip(profile, "kaf", "produce", topic),
+        environment,
+        input_text=f"{marker}\n",
+    )
+    output = _check(
+        console,
+        "kaf: consume records",
+        _kantrip(profile, "kaf", "consume", topic, "--offset", "oldest"),
+        environment,
+    )
+    _require_topic(marker, output, "kaf")
+    if kaf_user_config_state(environment) != user_config:
+        raise SmokeFailure("kaf changed the user's ~/.kaf/config")
+
+
+def kaf_user_config_state(environment: Mapping[str, str]) -> tuple[int, int] | None:
+    """Return the user's kaf config identity and change time, which sessions never touch."""
+    home = environment.get("HOME")
+    if not home:
+        return None
+    try:
+        metadata = (Path(home) / ".kaf" / "config").stat()
+    except FileNotFoundError:
+        return None
+    return metadata.st_ino, metadata.st_mtime_ns
+
+
 def _check_shells(
     console: Console,
     *,
@@ -575,6 +614,7 @@ def _shell_commands(
     commands.extend(
         f"{executable} -X broker.address.family=v4 -L" for executable in kcat_executables
     )
+    commands.append("kaf topics")
     return commands
 
 

@@ -24,7 +24,7 @@ from pathlib import Path
 name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
 config_path = os.environ.get("KCAT_CONFIG") if name in {kcat_executables} else None
-for option in ("--consumer.config", "--producer.config", "--command-config", "--config-file"):
+for option in ("--consumer.config", "--producer.config", "--command-config", "--config-file", "--config"):
     if option in arguments:
         config_path = arguments[arguments.index(option) + 1]
         break
@@ -36,6 +36,7 @@ record = {{
     "config_contents": config.read_text(encoding="utf-8") if config and config.is_file() else None,
     "config_mode": stat.S_IMODE(config.stat().st_mode) if config and config.is_file() else None,
     "config_in_session": bool(config and session_directory and config.is_relative_to(session_directory)),
+    "home": os.environ.get("HOME"),
     "name": name,
     "profile": os.environ.get("KANTRIP_PROFILE"),
     "session_directory": session_directory,
@@ -139,6 +140,8 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     "kaskade admin --config-file other.ini >/dev/null 2>&1 "
                     "|| echo __KASKADE_OVERRIDE_OK__"
                 ),
+                "kaf -b other.invalid:9092 topics >/dev/null 2>&1 || echo __KAF_OVERRIDE_OK__",
+                "kaf config use-cluster other >/dev/null 2>&1 || echo __KAF_CONFIG_BLOCKED__",
                 (
                     "kafka-avro-console-producer --property "
                     "schema.registry.url=http://other.invalid:8081 >/dev/null 2>&1 "
@@ -167,6 +170,8 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__JAVA_CONFIG_BLOCKED__", output)
             self.assertIn("__KASKADE_OVERRIDE_OK__", output)
             self.assertIn("__SCHEMA_OVERRIDE_OK__", output)
+            self.assertIn("__KAF_OVERRIDE_OK__", output)
+            self.assertIn("__KAF_CONFIG_BLOCKED__", output)
             self.assertIn("contract\r\n", output)
             self.assertIn("a Kantrip session is already active", output)
             self.assertNotIn("__BYPASS__", output)
@@ -201,6 +206,11 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
                 if record["name"] in KCAT_EXECUTABLES and "-Csvalue=avro" in record["argv"]:
                     self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
+                if record["name"] == "kaf":
+                    # kaf saves $HOME/.kaf/config whatever --config names.
+                    self.assertEqual("/dev/null", record["home"])
+                    self.assertIn("current-cluster: kantrip\n", record["config_contents"])
+                    self.assertEqual("topics", record["argv"][-1])
                 if record["name"] == "kaskade" and "registry" in record["argv"]:
                     self.assertIn(
                         "\n[registry]\nprovider=confluent\nurl=http://registry.invalid:8081\n",
@@ -359,6 +369,7 @@ def _adapter_commands() -> list[str]:
             "kaskade admin",
             "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
             "kaskade consumer -v registry",
+            "kaf topics",
         )
     )
     return commands
