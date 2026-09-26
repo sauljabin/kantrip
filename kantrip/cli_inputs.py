@@ -33,7 +33,34 @@ _REGISTRY_SECRET_FIELDS = frozenset(
         "registry/oauth/client-secret",
     }
 )
-# `edit` options whose presence requests a Kafka or Registry authentication change.
+# `--replace-secret FIELD`: the public dotted name → the internal credential field,
+# which is also the suffix of the secret's keychain reference.
+SECRET_FIELDS = {
+    "kafka.auth.password": "kafka/password",
+    "kafka.auth.private-key": "kafka/tls/private-key",
+    "kafka.auth.private-key-password": "kafka/tls/private-key-password",
+    "kafka.auth.oauth.client-secret": "kafka/oauth/client-secret",
+    "registry.auth.password": "registry/password",
+    "registry.auth.token": "registry/token",
+    "registry.auth.private-key": "registry/tls/private-key",
+    "registry.auth.private-key-password": "registry/tls/private-key-password",
+    "registry.auth.oauth.client-secret": "registry/oauth/client-secret",
+}
+# `--unset FIELD`: optional fields `edit` can make absent, plus `labels.KEY`.
+UNSET_FIELDS = (
+    "description",
+    "kafka.tls.ca",
+    "kafka.auth.oauth.scopes",
+    "kafka.auth.oauth.ca",
+    "registry",
+    "registry.tls.ca",
+    "registry.auth.oauth.scopes",
+    "registry.auth.oauth.ca",
+    "registry.auth.oauth.logical-cluster",
+    "registry.auth.oauth.identity-pool-id",
+)
+LABEL_FIELD_PREFIX = "labels."
+# `edit` options (and unset fields) whose presence requests an authentication change.
 _KAFKA_AUTH_OPTIONS = (
     "auth_type",
     "username",
@@ -42,21 +69,22 @@ _KAFKA_AUTH_OPTIONS = (
     "oauth_token_url",
     "oauth_client_id",
     "oauth_scope",
-    "clear_oauth_scopes",
     "oauth_ca_file",
-    "oauth_default_trust",
 )
+_KAFKA_AUTH_UNSETS = ("kafka.auth.oauth.scopes", "kafka.auth.oauth.ca")
 _REGISTRY_OAUTH_OPTIONS = (
     "registry_oauth_token_url",
     "registry_oauth_client_id",
     "registry_oauth_scope",
-    "clear_registry_oauth_scopes",
     "registry_oauth_ca_file",
-    "registry_oauth_default_trust",
     "registry_oauth_logical_cluster",
     "registry_oauth_identity_pool_id",
-    "clear_registry_oauth_logical_cluster",
-    "clear_registry_oauth_identity_pool_id",
+)
+_REGISTRY_OAUTH_UNSETS = (
+    "registry.auth.oauth.scopes",
+    "registry.auth.oauth.ca",
+    "registry.auth.oauth.logical-cluster",
+    "registry.auth.oauth.identity-pool-id",
 )
 _REGISTRY_AUTH_OPTIONS = (
     "registry_auth",
@@ -64,18 +92,20 @@ _REGISTRY_AUTH_OPTIONS = (
     "registry_client_certificate_file",
     "registry_client_key_file",
     "registry_ca_file",
-    "registry_default_trust",
     *_REGISTRY_OAUTH_OPTIONS,
 )
-# Mutually exclusive `edit` options, reported in this order.
+_REGISTRY_AUTH_UNSETS = ("registry.tls.ca", *_REGISTRY_OAUTH_UNSETS)
+# An unset field and the `edit` option that sets the same field.
 _EDIT_CONFLICTS = (
-    ("clear_oauth_scopes", "oauth_scope"),
-    ("oauth_ca_file", "oauth_default_trust"),
-    ("registry_ca_file", "registry_default_trust"),
-    ("registry_oauth_ca_file", "registry_oauth_default_trust"),
-    ("clear_registry_oauth_scopes", "registry_oauth_scope"),
-    ("clear_registry_oauth_logical_cluster", "registry_oauth_logical_cluster"),
-    ("clear_registry_oauth_identity_pool_id", "registry_oauth_identity_pool_id"),
+    ("description", "description"),
+    ("kafka.tls.ca", "ca_file"),
+    ("kafka.auth.oauth.scopes", "oauth_scope"),
+    ("kafka.auth.oauth.ca", "oauth_ca_file"),
+    ("registry.tls.ca", "registry_ca_file"),
+    ("registry.auth.oauth.ca", "registry_oauth_ca_file"),
+    ("registry.auth.oauth.scopes", "registry_oauth_scope"),
+    ("registry.auth.oauth.logical-cluster", "registry_oauth_logical_cluster"),
+    ("registry.auth.oauth.identity-pool-id", "registry_oauth_identity_pool_id"),
 )
 
 
@@ -117,12 +147,10 @@ class EditOptions:
 
     bootstrap_servers: tuple[str, ...] | None
     description: str | None
-    clear_description: bool
     labels: dict[str, str]
-    remove_labels: tuple[str, ...]
+    unset_fields: tuple[str, ...]
     transport: str | None
     ca_file: str | None
-    default_trust: bool
     auth_type: str | None
     username: str | None
     client_certificate_file: Path | None
@@ -130,9 +158,7 @@ class EditOptions:
     oauth_token_url: str | None
     oauth_client_id: str | None
     oauth_scope: tuple[str, ...]
-    clear_oauth_scopes: bool
     oauth_ca_file: str | None
-    oauth_default_trust: bool
     replace_secrets: tuple[str, ...]
     registry_provider: str | None
     registry_url: str | None
@@ -141,32 +167,74 @@ class EditOptions:
     registry_client_certificate_file: Path | None
     registry_client_key_file: Path | None
     registry_ca_file: str | None
-    registry_default_trust: bool
     registry_oauth_token_url: str | None
     registry_oauth_client_id: str | None
     registry_oauth_scope: tuple[str, ...]
-    clear_registry_oauth_scopes: bool
     registry_oauth_ca_file: str | None
-    registry_oauth_default_trust: bool
     registry_oauth_logical_cluster: str | None
     registry_oauth_identity_pool_id: str | None
-    clear_registry_oauth_logical_cluster: bool
-    clear_registry_oauth_identity_pool_id: bool
-    remove_registry: bool
 
     @property
     def has_changes(self) -> bool:
         """Return whether any option was supplied."""
         return any(_provided(getattr(self, option.name)) for option in fields(self))
 
-    def any_supplied(self, names: tuple[str, ...]) -> bool:
-        """Return whether any of the named options was supplied."""
-        return any(_provided(getattr(self, name)) for name in names)
+    def any_supplied(self, names: tuple[str, ...], unsets: tuple[str, ...] = ()) -> bool:
+        """Return whether any of the named options or unset fields was supplied."""
+        return any(_provided(getattr(self, name)) for name in names) or any(
+            self.unsets(field) for field in unsets
+        )
+
+    def unsets(self, field: str) -> bool:
+        """Return whether `--unset FIELD` was supplied."""
+        return field in self.unset_fields
+
+    @property
+    def removed_labels(self) -> tuple[str, ...]:
+        """Return the label keys named by `--unset labels.KEY`."""
+        return tuple(
+            field.removeprefix(LABEL_FIELD_PREFIX)
+            for field in self.unset_fields
+            if field.startswith(LABEL_FIELD_PREFIX)
+        )
 
 
 def _provided(value: object) -> bool:
     """Return whether an option was supplied; unset flags and empty repeats were not."""
     return value is not None and value is not False and value != () and value != {}
+
+
+def parse_unset_fields(
+    context: click.Context,
+    parameter: click.Parameter,
+    values: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate `--unset FIELD` names against the closed table."""
+    del context, parameter
+    if len(set(values)) != len(values):
+        raise click.BadParameter("each field may be named only once")
+    for value in values:
+        label = value.removeprefix(LABEL_FIELD_PREFIX)
+        if value not in UNSET_FIELDS and not (value.startswith(LABEL_FIELD_PREFIX) and label):
+            valid = ", ".join((*UNSET_FIELDS, f"{LABEL_FIELD_PREFIX}KEY"))
+            raise click.BadParameter(f"unknown field '{value}'; valid fields: {valid}")
+    return values
+
+
+def parse_secret_fields(
+    context: click.Context,
+    parameter: click.Parameter,
+    values: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Map `--replace-secret FIELD` names to internal credential fields."""
+    del context, parameter
+    if len(set(values)) != len(values):
+        raise click.BadParameter("each field may be named only once")
+    for value in values:
+        if value not in SECRET_FIELDS:
+            valid = ", ".join(SECRET_FIELDS)
+            raise click.BadParameter(f"unknown field '{value}'; valid fields: {valid}")
+    return tuple(SECRET_FIELDS[value] for value in values)
 
 
 def add_authentication(options: AddOptions) -> tuple[KafkaAuthInput, RegistryAuthInput | None]:
@@ -206,19 +274,19 @@ def add_authentication(options: AddOptions) -> tuple[KafkaAuthInput, RegistryAut
 
 def validate_edit_options(options: EditOptions) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Reject conflicting `edit` options and split secret replacements by service."""
-    for first, second in _EDIT_CONFLICTS:
-        if _provided(getattr(options, first)) and _provided(getattr(options, second)):
+    for field, option in _EDIT_CONFLICTS:
+        if options.unsets(field) and _provided(getattr(options, option)):
             raise click.UsageError(
-                f"--{first.replace('_', '-')} cannot be combined with --{second.replace('_', '-')}"
+                f"--unset {field} cannot be combined with --{option.replace('_', '-')}"
             )
+    removed = set(options.removed_labels).intersection(options.labels)
+    if removed:
+        raise click.UsageError(
+            f"--unset labels.{min(removed)} cannot be combined with --label {min(removed)}=VALUE"
+        )
     replace = options.replace_secrets
-    if len(set(replace)) != len(replace):
-        raise click.UsageError("--replace-secret fields must be unique")
     kafka = tuple(field for field in replace if field.startswith("kafka/"))
     registry = tuple(field for field in replace if field.startswith("registry/"))
-    unknown = set(replace) - set(kafka) - set(registry)
-    if unknown:
-        raise click.UsageError(f"unsupported credential field: {min(unknown)}")
     return kafka, registry
 
 
@@ -228,11 +296,11 @@ def edit_kafka_authentication(
     replace_fields: tuple[str, ...],
 ) -> KafkaAuthInput | None:
     """Build a Kafka authentication change for `edit`, or ``None`` when none was requested."""
-    if not options.any_supplied(_KAFKA_AUTH_OPTIONS) and not replace_fields:
+    if not options.any_supplied(_KAFKA_AUTH_OPTIONS, _KAFKA_AUTH_UNSETS) and not replace_fields:
         return None
     current_type = current_auth.get("type")
     selected = options.auth_type or str(current_auth["type"])
-    if options.clear_oauth_scopes:
+    if options.unsets("kafka.auth.oauth.scopes"):
         scopes: tuple[str, ...] | None = ()
     else:
         scopes = options.oauth_scope or None
@@ -249,7 +317,7 @@ def edit_kafka_authentication(
         oauth_client_id=options.oauth_client_id,
         oauth_scopes=scopes,
         oauth_ca_certificates=options.oauth_ca_file,
-        oauth_default_trust=options.oauth_default_trust,
+        oauth_default_trust=options.unsets("kafka.auth.oauth.ca"),
         oauth_secret_required=selected == "oauth" and current_type != "oauth",
     )
 
@@ -260,14 +328,19 @@ def edit_registry_authentication(
     replace_fields: tuple[str, ...],
 ) -> RegistryAuthInput | None:
     """Build a Registry authentication change for `edit`, or ``None`` when none was requested."""
-    if not options.any_supplied(_REGISTRY_AUTH_OPTIONS) and not replace_fields:
+    if (
+        not options.any_supplied(_REGISTRY_AUTH_OPTIONS, _REGISTRY_AUTH_UNSETS)
+        and not replace_fields
+    ):
         return None
     stored_url, current_auth, current_tls = _stored_registry(current_registry)
     selected = options.registry_auth or str(current_auth.get("type", "none"))
     # Stored fields of the current type carry over only when the type is unchanged.
     same_type = selected == current_auth.get("type")
     stored_auth: Mapping[str, Any] = current_auth if same_type else {}
-    if selected != "oauth" and options.any_supplied(_REGISTRY_OAUTH_OPTIONS):
+    if selected != "oauth" and options.any_supplied(
+        _REGISTRY_OAUTH_OPTIONS, _REGISTRY_OAUTH_UNSETS
+    ):
         raise click.UsageError("Registry OAuth options require final --registry-auth oauth")
     certificate, key, key_password = _registry_identity(
         options.registry_client_certificate_file,
@@ -280,7 +353,7 @@ def edit_registry_authentication(
         registry_url=options.registry_url or stored_url,
         ca_certificates=_replaced(
             options.registry_ca_file,
-            options.registry_default_trust,
+            options.unsets("registry.tls.ca"),
             current_tls.get("caCertificates"),
         ),
         client_certificate=certificate,
@@ -291,16 +364,16 @@ def edit_registry_authentication(
         oauth_scopes=_edited_scopes(options, stored_auth),
         oauth_ca_certificates=_replaced(
             options.registry_oauth_ca_file,
-            options.registry_oauth_default_trust,
+            options.unsets("registry.auth.oauth.ca"),
             stored_auth.get("caCertificates"),
         ),
         oauth_logical_cluster=_cleared(
-            options.clear_registry_oauth_logical_cluster,
+            options.unsets("registry.auth.oauth.logical-cluster"),
             options.registry_oauth_logical_cluster,
             stored_auth.get("logicalCluster"),
         ),
         oauth_identity_pool_id=_cleared(
-            options.clear_registry_oauth_identity_pool_id,
+            options.unsets("registry.auth.oauth.identity-pool-id"),
             options.registry_oauth_identity_pool_id,
             stored_auth.get("identityPoolId"),
         ),
@@ -338,7 +411,7 @@ def _cleared(clear: bool, value: str | None, stored: object) -> Any:
 
 
 def _edited_scopes(options: EditOptions, stored_auth: Mapping[str, Any]) -> tuple[str, ...]:
-    if options.clear_registry_oauth_scopes:
+    if options.unsets("registry.auth.oauth.scopes"):
         return ()
     return options.registry_oauth_scope or tuple(stored_auth.get("scopes", ()))
 
@@ -730,13 +803,18 @@ def secret_prompt(label: str) -> Secret:
 
 
 __all__ = [
+    "LABEL_FIELD_PREFIX",
     "PASSWORD_AUTH_TYPES",
+    "SECRET_FIELDS",
+    "UNSET_FIELDS",
     "AddOptions",
     "EditOptions",
     "add_authentication",
     "edit_kafka_authentication",
     "edit_registry_authentication",
     "kafka_auth_input",
+    "parse_secret_fields",
+    "parse_unset_fields",
     "read_client_identity",
     "registry_auth_input",
     "required_secret_prompt",

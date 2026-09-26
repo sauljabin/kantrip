@@ -640,7 +640,7 @@ def _add_profile(
     command = _kantrip_cli(
         "add",
         profile,
-        "--bootstrap-servers",
+        "--bootstrap-server",
         ",".join(bootstrap_servers),
     )
     command.extend(("--registry-provider", registry_provider, "--registry-url", registry_url))

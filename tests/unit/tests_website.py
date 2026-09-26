@@ -79,10 +79,10 @@ class TestDemoCommands(unittest.TestCase):
 
     def test_unknown_option_fails(self) -> None:
         demo = copy.deepcopy(DEMO)
-        demo["steps"][0]["command"] += " --bootstrap-server kafka.example.com:9093"
+        demo["steps"][0]["command"] += " --bootstrap-servers kafka.example.com:9093"
         self.assertEqual(
             check_demo_commands(demo, cli_help),
-            ["site/demo.json: 'kantrip add' has no option --bootstrap-server"],
+            ["site/demo.json: 'kantrip add' has no option --bootstrap-servers"],
         )
 
     def test_unknown_command_fails(self) -> None:
@@ -383,7 +383,7 @@ class TestDemoCapture(unittest.TestCase):
             ["kantrip-auth-site-demo-orders"],
         )
         self.assertEqual(self.deleted_topics(lab), CAPTURE_TOPICS)
-        self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--force"])
+        self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--yes"])
 
     def deleted_topics(self, lab: FakeLab) -> list[str]:
         return [command[7] for command in lab.commands if "--delete" in command]
@@ -393,14 +393,14 @@ class TestDemoCapture(unittest.TestCase):
         with self.assertRaisesRegex(CaptureError, "exited with 1"):
             self.capture(lab)
         self.assertEqual(self.deleted_topics(lab), CAPTURE_TOPICS)
-        self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--force"])
+        self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--yes"])
 
     def test_password_in_output_is_never_written(self) -> None:
         lab = FakeLab(self.target, leak=PASSWORD)
         with self.assertRaises(CaptureError) as raised:
             self.capture(lab)
         self.assertNotIn(PASSWORD, str(raised.exception))
-        self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--force"])
+        self.assertEqual(lab.commands[-1][1:], ["remove", "kantrip-site-demo", "--yes"])
 
     def test_first_step_must_add_the_profile(self) -> None:
         lab = FakeLab(self.target)
