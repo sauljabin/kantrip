@@ -32,6 +32,7 @@ from kantrip.adapters import (
     require_adapter_capability,
 )
 from kantrip.kafka import KafkaProfileError, kafka_connection, resolve_kafka_connection
+from kantrip.profile_output import credential_references
 from kantrip.profile_storage import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
@@ -135,10 +136,15 @@ def run_doctor(
     credential_checks, store = _check_credentials(env)
     profile_credential_checks = _check_profile_credentials(profiles, store)
     profile_id = None
-    profile_revision = None
-    if profiles is not None and profile_name in profiles.profiles:
-        profile_id = str(profiles.profiles[profile_name]["id"])
-        profile_revision = profiles.revision(profile_name)
+    # Profile ID → (name, current revision), to label sessions of every profile.
+    known_profiles: dict[str, tuple[str, int]] = {}
+    if profiles is not None:
+        known_profiles = {
+            str(profile["id"]): (name, profiles.revision(name))
+            for name, profile in profiles.profiles.items()
+        }
+        if profile_name in profiles.profiles:
+            profile_id = str(profiles.profiles[profile_name]["id"])
     checks = [
         *_assign_section("System", system_checks),
         *_assign_section("Profiles", profile_checks),
@@ -150,7 +156,7 @@ def run_doctor(
                 *_check_runtime_sessions(
                     env,
                     profile_id=profile_id,
-                    current_revision=profile_revision,
+                    known_profiles=known_profiles,
                     include_details=include_sessions,
                 ),
             ],
@@ -216,48 +222,43 @@ def _check_profile_credentials(
             checks.append(DoctorCheck("error", f"Kafka profile '{name}' is not executable"))
             continue
         checks.extend(_check_certificate_validity(name, profile))
-        if not connection.requires_secrets:
+        references = credential_references(profile)
+        if not references:
             checks.append(DoctorCheck("success", f"Profile '{name}' requires no credentials"))
             continue
         if store is None:
             checks.append(DoctorCheck("error", f"Profile '{name}' credentials are unavailable"))
             continue
-        checks.extend(_check_exact_references(name, profile, store))
+        checks.extend(_check_exact_references(name, references, store))
+        if not connection.requires_secrets:
+            continue
         try:
             resolve_kafka_connection(connection, store)
         except KafkaProfileError:
-            checks.append(DoctorCheck("error", f"Profile '{name}' credential identity is invalid"))
+            checks.append(
+                DoctorCheck("error", f"Profile '{name}' Kafka credential identity is invalid")
+            )
         else:
-            checks.append(DoctorCheck("success", f"Profile '{name}' credentials are usable"))
+            checks.append(DoctorCheck("success", f"Profile '{name}' Kafka credentials are usable"))
     return checks
 
 
 def _check_exact_references(
     name: str,
-    profile: Mapping[str, object],
+    references: Mapping[str, str],
     store: SecretStore,
 ) -> list[DoctorCheck]:
-    kafka = profile.get("kafka")
-    auth = kafka.get("auth") if isinstance(kafka, Mapping) else None
-    if not isinstance(auth, Mapping):
-        return [DoctorCheck("error", f"Profile '{name}' authentication is invalid")]
+    """Report stored, missing, or unavailable for every referenced secret field."""
     checks: list[DoctorCheck] = []
-    for property_name, label in (
-        ("passwordRef", "password"),
-        ("privateKeyRef", "private key"),
-        ("privateKeyPasswordRef", "private-key password"),
-    ):
-        reference = auth.get(property_name)
-        if not isinstance(reference, str):
-            continue
+    for field, reference in references.items():
         try:
             store.get(reference)
         except SecretNotFoundError:
-            checks.append(DoctorCheck("error", f"Profile '{name}' {label} is missing"))
+            checks.append(DoctorCheck("error", f"Profile '{name}' {field} is missing"))
         except SecretStoreError:
-            checks.append(DoctorCheck("error", f"Profile '{name}' {label} is unavailable"))
+            checks.append(DoctorCheck("error", f"Profile '{name}' {field} is unavailable"))
         else:
-            checks.append(DoctorCheck("success", f"Profile '{name}' {label} is stored"))
+            checks.append(DoctorCheck("success", f"Profile '{name}' {field} is stored"))
     return checks
 
 
@@ -540,7 +541,7 @@ def _check_runtime_sessions(
     environment: Mapping[str, str],
     *,
     profile_id: str | None,
-    current_revision: int | None,
+    known_profiles: Mapping[str, tuple[str, int]],
     include_details: bool,
 ) -> list[DoctorCheck]:
     root = resolve_runtime_root(environment)
@@ -575,14 +576,18 @@ def _check_runtime_sessions(
         now = int(time.time())
         for observation in observations:
             age = max(0, now - observation.created_at)
+            known = known_profiles.get(observation.profile_id)
             revision_note = ""
-            if current_revision is not None and observation.profile_revision < current_revision:
-                revision_note = f", older than current revision {current_revision}"
+            if known is not None and observation.profile_revision < known[1]:
+                revision_note = f", older than current revision {known[1]}"
+            profile_note = ""
+            if profile_id is None:
+                profile_note = f"profile '{known[0]}', " if known else "removed profile, "
             checks.append(
                 DoctorCheck(
                     "warning" if observation.state != "active" else "success",
-                    f"Session {observation.state}: revision {observation.profile_revision}, "
-                    f"age {age}s{revision_note}",
+                    f"Session {observation.state}: {profile_note}"
+                    f"revision {observation.profile_revision}, age {age}s{revision_note}",
                 )
             )
             checks.extend(

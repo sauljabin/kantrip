@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from typing import Any, TypeVar, cast
 
@@ -37,7 +37,7 @@ from kantrip.console import (
 )
 from kantrip.doctor import DoctorReport, run_doctor
 from kantrip.maintenance import run_repair
-from kantrip.ping import PingError, PingResult, ping_profile
+from kantrip.ping import PingError, PingResult, ping_observation, ping_profile
 from kantrip.profile_output import (
     OutputFormat,
     describe_observation,
@@ -174,9 +174,11 @@ def _print_structured_observation(
 ) -> None:
     selected_format = cast(OutputFormat, output_format)
     contents = dump_observation(value, selected_format)
+    # Soft wrap: never insert line breaks, which would corrupt long JSON or YAML values.
     console_from_context(context).print(
         create_structured_syntax(contents, selected_format),
         end="",
+        soft_wrap=True,
     )
 
 
@@ -367,13 +369,14 @@ def current_profile() -> None:
 
 @cli.command("doctor")
 @local_no_color
-@cloup.argument("profile_name", metavar="PROFILE", required=False)
+@cloup.argument("profile_name", metavar="[PROFILE]", required=False)
 @cloup.option(
     "--repair",
     is_flag=True,
     help="Apply migrations, reconcile credentials, and remove stale sessions.",
 )
 @cloup.option(
+    "-v",
     "--verbose",
     is_flag=True,
     help="Show every diagnostic, including resolved paths and profile IDs.",
@@ -381,7 +384,7 @@ def current_profile() -> None:
 @cloup.option(
     "--sessions",
     is_flag=True,
-    help="Show validated sessions captured for PROFILE.",
+    help="Show each captured session, for PROFILE or for every profile.",
 )
 @cloup.pass_context
 def doctor(
@@ -395,11 +398,7 @@ def doctor(
     _validate_doctor_options(profile_name, repair=repair, sessions=sessions)
     console = console_from_context(context)
     repair_healthy = _run_and_render_repair(console) if repair else True
-    report = (
-        run_doctor(profile_name=profile_name, include_sessions=sessions)
-        if profile_name is not None or sessions
-        else run_doctor()
-    )
+    report = run_doctor(profile_name=profile_name, include_sessions=sessions)
     _render_doctor_report(console, report, verbose=verbose)
     if not repair_healthy or not report.healthy:
         raise click.exceptions.Exit(1)
@@ -411,8 +410,6 @@ def _validate_doctor_options(
     repair: bool,
     sessions: bool,
 ) -> None:
-    if sessions and profile_name is None:
-        raise click.UsageError("--sessions requires PROFILE")
     if repair and profile_name is not None:
         raise click.UsageError("PROFILE cannot be combined with --repair")
     if repair and sessions:
@@ -489,9 +486,26 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
     help="Maximum time in seconds for the connectivity check.",
 )
 @cloup.option("-q", "--quiet", is_flag=True, help="Return only the connectivity exit status.")
+@cloup.option(
+    "-o",
+    "--output",
+    "output_format",
+    type=cloup.Choice(OUTPUT_FORMATS),
+    default="human",
+    show_default=True,
+    help="Output representation.",
+)
 @cloup.pass_context
-def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool) -> None:
-    """Check PROFILE's Kafka and configured registry connections."""
+def ping(
+    context: cloup.Context, profile_name: str, timeout: float, quiet: bool, output_format: str
+) -> None:
+    """Check PROFILE's Kafka and configured Registry connections.
+
+    Each service is reported as ok, failed, or skipped (not attempted). The exit
+    status is 0 only when every attempted check is ok.
+    """
+    if quiet and output_format != "human":
+        raise click.UsageError("--quiet cannot be combined with --output json or yaml")
     console = console_from_context(context)
     error_console = error_console_from_context(context)
     try:
@@ -500,10 +514,15 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
         if not quiet:
             error_console.print(create_status_text(error_console, "error", str(error)))
         raise click.exceptions.Exit(1) from error
+    show_status = output_format == "human" and not quiet
+    progress = (
+        show_progress(console, f"Checking profile '{profile_name}'")
+        if show_status
+        else nullcontext()
+    )
+    result: PingResult | None = None
+    kafka_error: PingError | None = None
     try:
-        progress = (
-            nullcontext() if quiet else show_progress(console, f"Checking profile '{profile_name}'")
-        )
         with progress:
             result = ping_profile(
                 snapshot.document,
@@ -512,64 +531,74 @@ def ping(context: cloup.Context, profile_name: str, timeout: float, quiet: bool)
                 resolved_registry=snapshot.registry,
             )
     except PingError as error:
-        if not quiet:
-            _print_ping_failure(
-                error_console, f"Could not connect for profile '{profile_name}'", error
-            )
-            if snapshot.registry is not None:
-                error_console.print(
-                    create_status_text(
-                        error_console,
-                        "warning",
-                        f"{snapshot.registry.display_name} check skipped: Kafka check failed",
-                    )
-                )
-        raise click.exceptions.Exit(1) from error
-    if not quiet:
-        _print_ping_result(console, error_console, profile_name, result)
-    if not result.healthy:
+        kafka_error = error
+    observation = ping_observation(
+        profile_name,
+        result,
+        kafka_error=kafka_error,
+        registry_provider=snapshot.registry.provider if snapshot.registry else None,
+    )
+    if output_format != "human":
+        _print_structured_observation(context, observation, output_format)
+    elif not quiet:
+        _print_ping_observation(console, error_console, observation)
+    if not observation["healthy"]:
         raise click.exceptions.Exit(1)
 
 
-def _print_ping_result(
-    console: Console,
-    error_console: Console,
-    profile_name: str,
-    result: PingResult,
+def _print_ping_observation(
+    console: Console, error_console: Console, observation: Mapping[str, Any]
 ) -> None:
-    console.print(
-        create_status_text(
-            console,
-            "success",
-            f"Kafka transport: {result.kafka_transport}; "
-            f"authentication: {result.kafka_authentication}",
-        )
-    )
-    if result.registry is not None:
-        product = (
-            "Apicurio Registry"
-            if result.registry.provider == "apicurio"
-            else "Confluent Schema Registry"
-        )
+    profile_name = observation["profile"]
+    kafka = observation["kafka"]
+    if kafka["status"] == "ok":
         console.print(
             create_status_text(
                 console,
                 "success",
-                f"{product} transport: {result.registry.transport}; "
-                f"proof: {result.registry.proof}",
+                f"Kafka transport: {kafka['transport']}; "
+                f"authentication: {kafka['authentication']}",
             )
         )
-    if result.registry_error is not None:
+    else:
+        _print_ping_failure(error_console, f"Could not connect for profile '{profile_name}'", kafka)
+    registry = observation["registry"]
+    if registry is None:
+        return
+    product = _registry_product(registry.get("provider"))
+    if registry["status"] == "ok":
+        console.print(
+            create_status_text(
+                console,
+                "success",
+                f"{product} transport: {registry['transport']}; proof: {registry['proof']}",
+            )
+        )
+        if registry["warning"]:
+            error_console.print(
+                create_status_text(error_console, "warning", f"Warning: {registry['warning']}")
+            )
+    elif registry["status"] == "failed":
         _print_ping_failure(
-            error_console,
-            f"Registry check failed for profile '{profile_name}'",
-            result.registry_error,
+            error_console, f"Registry check failed for profile '{profile_name}'", registry
+        )
+    else:
+        error_console.print(
+            create_status_text(
+                error_console, "warning", f"{product} check skipped: {registry['reason']}"
+            )
         )
 
 
-def _print_ping_failure(error_console: Console, prefix: str, error: PingError) -> None:
-    detail = f"\nCause: {error.detail}" if error.detail else ""
-    error_console.print(create_status_text(error_console, "error", f"{prefix}: {error}{detail}"))
+def _registry_product(provider: object) -> str:
+    return "Apicurio Registry" if provider == "apicurio" else "Confluent Schema Registry"
+
+
+def _print_ping_failure(error_console: Console, prefix: str, failure: Mapping[str, Any]) -> None:
+    detail = f"\nCause: {failure['cause']}" if failure.get("cause") else ""
+    error_console.print(
+        create_status_text(error_console, "error", f"{prefix}: {failure['error']}{detail}")
+    )
 
 
 @cli.command(

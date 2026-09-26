@@ -668,7 +668,7 @@ class TestCli(unittest.TestCase):
         self.assertIn("[passed] Applied database migrations: 1", result.output)
         self.assertIn("[cleanup] Sessions: removed 2 stale", result.output)
         repair.assert_called_once_with()
-        run.assert_called_once_with()
+        run.assert_called_once_with(profile_name=None, include_sessions=False)
 
     def test_doctor_repair_exits_nonzero_when_maintenance_fails(self) -> None:
         with (
@@ -684,13 +684,16 @@ class TestCli(unittest.TestCase):
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] migration failed", result.output)
 
-    def test_doctor_help_lists_only_long_maintenance_options(self) -> None:
+    def test_doctor_help_shows_optional_profile_and_short_verbose(self) -> None:
         result = self.runner.invoke(cli, ["doctor", "--help"])
 
         self.assertEqual(0, result.exit_code, result.output)
-        for option in ("--repair", "--verbose"):
-            line = next(line for line in result.output.splitlines() if option in line)
-            self.assertTrue(line.lstrip().startswith(f"{option} "))
+        self.assertIn("Usage: cli doctor [OPTIONS] [PROFILE]", result.output)
+        lines = result.output.splitlines()
+        repair = next(line for line in lines if "--repair" in line)
+        verbose = next(line for line in lines if "--verbose" in line)
+        self.assertTrue(repair.lstrip().startswith("--repair "))
+        self.assertTrue(verbose.lstrip().startswith("-v, --verbose "))
 
     def test_doctor_exits_nonzero_for_failed_checks(self) -> None:
         with patch("kantrip.cli.run_doctor") as run:
@@ -1703,6 +1706,140 @@ class TestValidationBeforePrompts(unittest.TestCase):
                 result = self.invoke(*arguments, prompts=True)
 
                 self.assertEqual(0, result.exit_code, result.output)
+
+
+class TestStructuredOutputIsNeverWrapped(unittest.TestCase):
+    def test_long_values_stay_on_one_line(self) -> None:
+        runner = CliRunner()
+        description = "long " * 60
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "profiles.db"
+            add_profile("local", database, description=description)
+            environment = {"KANTRIP_DATABASE": str(database), "COLUMNS": "40"}
+            for command in (("list",), ("describe", "local")):
+                for output_format in ("json", "yaml"):
+                    with self.subTest(command=command, output_format=output_format):
+                        result = runner.invoke(
+                            cli, [*command, "-o", output_format], env=environment
+                        )
+                        parsed = (
+                            json.loads(result.stdout)
+                            if output_format == "json"
+                            else yaml.safe_load(result.stdout)
+                        )
+                        observation = parsed[0] if isinstance(parsed, list) else parsed
+
+                        self.assertEqual(0, result.exit_code, result.output)
+                        self.assertEqual(description, observation["description"])
+
+
+class TestPingOutput(unittest.TestCase):
+    """`ping` reports each service as ok, failed, or skipped, in every format (#52)."""
+
+    KAFKA = ("verified TLS", "scram-sha-512 authenticated", "sasl")
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        database = Path(directory.name) / "profiles.db"
+        _add_test_profile(database, registry=True)
+        self.environment = {"KANTRIP_DATABASE": str(database)}
+
+    def ping(self, outcome: Any, *arguments: str) -> Any:
+        settings = (
+            {"side_effect": outcome}
+            if isinstance(outcome, Exception)
+            else {"return_value": outcome}
+        )
+        with patch("kantrip.cli.ping_profile", **settings):
+            return self.runner.invoke(
+                cli, ["--no-color", "ping", "local", *arguments], env=self.environment
+            )
+
+    def test_json_reports_every_service(self) -> None:
+        registry = RegistryPingResult("confluent", "plaintext reachable", "read query validated")
+        cases = {
+            "ok": (PingResult(*self.KAFKA, registry), 0, "ok", "ok"),
+            "registry failed": (
+                PingResult(*self.KAFKA, registry_error=PingError("HTTP 401", detail="denied")),
+                1,
+                "ok",
+                "failed",
+            ),
+            "kafka failed": (
+                PingError("broker unreachable", detail="timeout"),
+                1,
+                "failed",
+                "skipped",
+            ),
+        }
+        for name, (outcome, exit_code, kafka, registry_status) in cases.items():
+            with self.subTest(name):
+                result = self.ping(outcome, "-o", "json")
+                observation = json.loads(result.stdout)
+
+                self.assertEqual(exit_code, result.exit_code, result.output)
+                self.assertEqual("local", observation["profile"])
+                self.assertEqual(exit_code == 0, observation["healthy"])
+                self.assertEqual(kafka, observation["kafka"]["status"])
+                self.assertEqual(registry_status, observation["registry"]["status"])
+                self.assertEqual("confluent", observation["registry"]["provider"])
+                self.assertEqual("", result.stderr)
+
+        failed = json.loads(self.ping(cases["kafka failed"][0], "-o", "json").stdout)
+        self.assertEqual(
+            {"status": "failed", "error": "broker unreachable", "cause": "timeout"},
+            failed["kafka"],
+        )
+        self.assertEqual("Kafka check failed", failed["registry"]["reason"])
+
+    def test_yaml_matches_json(self) -> None:
+        outcome = PingResult(*self.KAFKA)
+        as_json = json.loads(self.ping(outcome, "-o", "json").stdout)
+        as_yaml = yaml.safe_load(self.ping(outcome, "-o", "yaml").stdout)
+
+        self.assertEqual(as_json, as_yaml)
+
+    def test_public_registry_is_ok_with_a_warning(self) -> None:
+        registry = RegistryPingResult(
+            "confluent",
+            "verified TLS",
+            "reachable; endpoint also allows anonymous reads, credentials not proven",
+            warning="the Confluent Schema Registry accepts anonymous reads, so the "
+            "configured basic credentials were not proven",
+        )
+        human = self.ping(PingResult(*self.KAFKA, registry))
+        structured = json.loads(self.ping(PingResult(*self.KAFKA, registry), "-o", "json").stdout)
+
+        self.assertEqual(0, human.exit_code, human.output)
+        self.assertIn("credentials not proven", human.stdout)
+        self.assertIn(
+            "Warning: the Confluent Schema Registry accepts anonymous reads", human.stderr
+        )
+        self.assertEqual("ok", structured["registry"]["status"])
+        self.assertIn("accepts anonymous reads", structured["registry"]["warning"])
+
+    def test_quiet_cannot_be_combined_with_structured_output(self) -> None:
+        result = self.ping(PingResult(*self.KAFKA), "-q", "-o", "json")
+
+        self.assertEqual(2, result.exit_code, result.output)
+        self.assertIn("--quiet cannot be combined with --output json or yaml", result.output)
+
+
+class TestDoctorContract(unittest.TestCase):
+    """`doctor` sessions for every profile and stored state for every secret (#52)."""
+
+    def test_sessions_without_profile_lists_every_profile(self) -> None:
+        runner = CliRunner()
+        with patch("kantrip.cli.run_doctor") as run:
+            from kantrip.doctor import DoctorReport
+
+            run.return_value = DoctorReport(())
+            result = runner.invoke(cli, ["doctor", "--sessions", "-v"])
+
+        self.assertEqual(0, result.exit_code, result.output)
+        run.assert_called_once_with(profile_name=None, include_sessions=True)
 
 
 class TestDescribeCompleteness(unittest.TestCase):

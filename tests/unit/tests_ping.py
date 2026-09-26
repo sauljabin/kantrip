@@ -307,7 +307,7 @@ else:
 
         self.assertEqual("read query validated", result.registry.proof)
 
-    def test_authenticated_registry_rejects_a_public_probe_endpoint(self) -> None:
+    def test_authenticated_registry_on_a_public_endpoint_is_ok_but_unproven(self) -> None:
         profile_id = "018f8f13-7c21-7cee-8000-000000000010"
         reference = secret_reference(profile_id, "registry/password")
         profile = self._registry_profile("confluent")
@@ -338,7 +338,15 @@ else:
                 secret_store=_Store({reference: "synthetic-password"}),
             )
 
-        self.assertRegex(str(_registry_failure(result)), "endpoint is public")
+        assert result.registry is not None
+        self.assertIsNone(result.registry_error)
+        self.assertTrue(result.healthy)
+        self.assertEqual(
+            "reachable; endpoint also allows anonymous reads, credentials not proven",
+            result.registry.proof,
+        )
+        self.assertIn("accepts anonymous reads", result.registry.warning or "")
+        self.assertIn("basic credentials were not proven", result.registry.warning or "")
 
         request = open_registry.call_args_list[0].args[0]
         self.assertTrue(request.get_header("Authorization").startswith("Basic "))

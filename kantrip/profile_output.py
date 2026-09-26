@@ -71,6 +71,22 @@ def describe_observation(
     return observation
 
 
+def credential_references(profile: Mapping[str, Any]) -> dict[str, str]:
+    """Map each secret field the profile references, by public name, to its reference."""
+    references: dict[str, str] = {}
+    registry = profile.get("registry")
+    for scope, section in (
+        ("kafka", _mapping(profile.get("kafka"))),
+        ("registry", _mapping(registry)),
+    ):
+        auth = _mapping(section.get("auth"))
+        for property_name, field in _SECRET_FIELDS:
+            reference = auth.get(property_name)
+            if isinstance(reference, str):
+                references[f"{scope}.auth.{field}"] = reference
+    return references
+
+
 def dump_observation(value: Any, output_format: OutputFormat) -> str:
     """Serialize an observation without terminal styling."""
     if output_format == "json":
@@ -199,6 +215,7 @@ def _certificate_observation(pem: str) -> dict[str, str | None]:
 
 __all__ = [
     "OutputFormat",
+    "credential_references",
     "describe_observation",
     "dump_observation",
     "filter_profiles",
