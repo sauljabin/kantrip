@@ -20,6 +20,36 @@ function setUpCopyButtons() {
   }
 }
 
+// The newest stable release, or the newest pre-release while none is stable.
+// The API lists releases newest first and hides drafts from anonymous requests.
+function currentRelease(releases) {
+  const published = releases.filter((release) => !release.draft && release.tag_name);
+  return published.find((release) => !release.prerelease) ?? published[0];
+}
+
+async function loadRelease() {
+  const line = document.querySelector("[data-release]");
+  if (!line) return;
+  try {
+    const response = await fetch(
+      "https://api.github.com/repos/sauljabin/kantrip/releases?per_page=100",
+      { headers: { Accept: "application/vnd.github+json" } },
+    );
+    if (!response.ok) return;
+    const release = currentRelease(await response.json());
+    if (!release) return;
+    const link = line.querySelector("a");
+    link.textContent = release.tag_name;
+    link.href = `${link.href}/tag/${encodeURIComponent(release.tag_name)}`;
+    line.querySelector(".release-label").textContent = release.prerelease
+      ? "latest pre-release"
+      : "latest release";
+    line.dataset.state = release.prerelease ? "pre" : "stable";
+  } catch {
+    // Offline or rate limited: keep the link to the Releases page.
+  }
+}
+
 // The animated layer is aria-hidden and rebuilt from the static transcript,
 // which stays in the accessibility tree while the replay types over it.
 function setUpDemo() {
@@ -187,3 +217,4 @@ function setUpDemo() {
 
 setUpCopyButtons();
 setUpDemo();
+loadRelease();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <title>Kantrip: switch Kafka profiles like magic</title>
@@ -71,6 +71,8 @@
       </div>
       <p class="copy-status" role="status" aria-live="polite"></p>
     </div>
+    <p class="release" data-release><span class="release-label">latest release</span>
+      <a href="https://github.com/sauljabin/kantrip/releases">on GitHub</a></p>
     <p class="note">Pre-release for macOS and Linux: commands, output, and stored profiles may
       change before v0.1.0. See <a href="https://github.com/sauljabin/kantrip/releases">Releases</a>.</p>
   </section>
@@ -212,7 +214,8 @@
       </ul>
     </nav>
     <p>Kantrip is <a href="https://github.com/sauljabin/kantrip/blob/main/LICENSE">MIT licensed</a>
-      pre-release software. This site sets no cookies and loads nothing from third parties.</p>
+      pre-release software. This site sets no cookies and loads nothing from third parties; it
+      only asks the GitHub API for the latest release.</p>
   </div>
 </footer>
 </body>

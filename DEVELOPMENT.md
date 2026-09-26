@@ -408,8 +408,12 @@ fallback only bootstraps empty or exported checkouts.
 
 The project site at `https://sauljabin.github.io/kantrip/` is plain HTML, CSS,
 and vanilla JavaScript in `site/`, with no framework, build step, web fonts,
-analytics, cookies, or third-party requests. Deployment uploads the directory
-as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
+analytics, or cookies. Its only third-party request is `site/site.js` asking the
+GitHub API for the release shown in the hero: the newest stable release, or the
+newest pre-release while none is stable. The Content-Security-Policy allows
+`connect-src` to `https://api.github.com` only. Without JavaScript, or when the
+request fails or hits the anonymous rate limit, the line links to the Releases
+page. Deployment uploads the directory as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
 the same transcript as static text between the `demo-transcript` markers, so the
 page works without JavaScript, for screen readers, and with reduced motion.
 `site/site.js` replays that static transcript; it has no separate copy of the

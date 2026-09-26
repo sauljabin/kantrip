@@ -420,6 +420,36 @@ pre {
   text-align: center;
 }
 
+/* site.js fills in the version; without it, the line links to Releases. */
+.release {
+  margin: 1.25rem 0 0;
+  color: var(--muted);
+  font: 0.9rem var(--mono);
+  text-align: center;
+}
+
+.release::before {
+  content: "● ";
+  content: "● " / "";
+  color: var(--release-state, var(--muted));
+}
+
+.release[data-state="pre"] {
+  --release-state: var(--warning);
+}
+
+.release[data-state="stable"] {
+  --release-state: var(--success);
+}
+
+.release a {
+  font-weight: 700;
+}
+
+.release + .note {
+  margin-top: 0.25rem;
+}
+
 .note {
   max-width: 44rem;
   margin: 1rem auto 0;
