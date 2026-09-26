@@ -968,6 +968,40 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         self.assertEqual(("child-command", "--no-color"), run.call_args.args[2])
 
+    def test_exec_passes_everything_after_the_command_through(self) -> None:
+        with self.runner.isolated_filesystem():
+            database_path = Path("profiles.db")
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+            for arguments, command in (
+                (["local", "kafka-topics", "--help"], ("kafka-topics", "--help")),
+                (["local", "tool", "--no-color", "-x"], ("tool", "--no-color", "-x")),
+                (["local", "--", "tool", "--help"], ("tool", "--help")),
+                (["local", "tool", "--", "--help"], ("tool", "--", "--help")),
+                (["--no-color", "local", "tool"], ("tool",)),
+            ):
+                with (
+                    self.subTest(arguments),
+                    patch("kantrip.cli.run_profile_session", return_value=0) as run,
+                ):
+                    result = self.runner.invoke(cli, ["exec", *arguments], env=environment)
+
+                    self.assertEqual(0, result.exit_code, result.output)
+                    self.assertEqual(command, run.call_args.args[2])
+
+    def test_exec_rejects_an_option_where_the_command_belongs(self) -> None:
+        for arguments in (["local", "--help"], ["local", "--no-color", "tool"]):
+            with (
+                self.subTest(arguments),
+                patch("kantrip.cli.run_profile_session") as run,
+            ):
+                result = self.runner.invoke(cli, ["exec", *arguments])
+
+                self.assertEqual(2, result.exit_code, result.output)
+                self.assertIn(f"'{arguments[1]}' is not a command", result.output)
+                self.assertIn("put Kantrip options before PROFILE", result.output)
+                run.assert_not_called()
+
     def test_exec_rejects_a_nested_session(self) -> None:
         result = self.runner.invoke(
             cli,
@@ -1141,7 +1175,7 @@ class TestEditRegistryAuthentication(unittest.TestCase):
                 )
                 profiles = load_profiles(Path(environment["KANTRIP_DATABASE"]))
 
-        self.assertEqual(1, result.exit_code, result.output)
+        self.assertEqual(2, result.exit_code, result.output)
         self.assertIn("does not support the current 'token' authentication", result.output)
         self.assertIn("--registry-auth", result.output)
         self.assertEqual("confluent", profiles.profile("p")["registry"]["provider"])
@@ -1507,6 +1541,91 @@ class TestCliResults(unittest.TestCase):
         self.assertEqual(hint, empty_terminal.stderr)
         self.assertEqual("", empty_pipe.stdout + empty_pipe.stderr)
         self.assertEqual("", no_match.stdout + no_match.stderr)
+
+
+class TestInputErrors(unittest.TestCase):
+    """Invalid input exits 2 with an actionable message and changes nothing (#52)."""
+
+    CASES: ClassVar[tuple[tuple[tuple[str, ...], tuple[str, ...], str], ...]] = (
+        ((), ("add", "a", "-b", "kafka"), "broker 'kafka' must be host:port"),
+        ((), ("add", "a", "-b", "kafka:70000"), "port outside 1-65535"),
+        ((), ("add", "a", "-l", "bad key=v"), "label key 'bad key' may contain only"),
+        ((), ("add", "a", "--registry-url", "ftp://x"), "must use http:// or https://"),
+        (
+            (),
+            ("add", "a", "--registry-url", "http://x:8081", "--registry-auth", "token"),
+            "Registry authentication requires an https:// URL",
+        ),
+        (
+            (),
+            (
+                "add",
+                "a",
+                "--registry-provider",
+                "apicurio",
+                "--registry-url",
+                "https://x/apis/registry/v3",
+                "--registry-auth",
+                "token",
+            ),
+            "Apicurio does not support fixed bearer tokens",
+        ),
+        (
+            (),
+            ("add", "a", "--auth", "oauth", "--oauth-client-id", "c")
+            + ("--oauth-token-url", "http://idp/token"),
+            "token URL must use https://",
+        ),
+        (
+            (),
+            ("add", "a", "--auth", "oauth", "--oauth-client-id", "c")
+            + ("--oauth-token-url", "https://idp/token", "--oauth-scope", "a b"),
+            "scope 'a b' must be one token without spaces",
+        ),
+        (
+            (),
+            ("add", "a", "--auth", "scram-sha-512", "--username", "u\nv"),
+            "must be a single line",
+        ),
+        (
+            (),
+            ("add", "a", "--transport", "plaintext", "--auth", "scram-sha-512", "--username", "u"),
+            "Kafka authentication requires --transport tls",
+        ),
+        (
+            ("add", "a", "--auth", "scram-sha-512", "--username", "u"),
+            ("edit", "a", "--transport", "plaintext"),
+            "authenticated profiles require TLS; add --auth none",
+        ),
+        (
+            ("add", "a", "--registry-url", "https://x", "--registry-auth", "token"),
+            ("edit", "a", "--registry-url", "http://x:8081"),
+            "Registry authentication requires an https:// URL",
+        ),
+    )
+
+    def test_invalid_input_exits_2_without_schema_paths_or_changes(self) -> None:
+        runner = CliRunner()
+        for setup, arguments, message in self.CASES:
+            with (
+                self.subTest(arguments),
+                tempfile.TemporaryDirectory() as directory,
+                patch("kantrip.profiles.load_secret_store", return_value=_MemorySecretStore()),
+                patch("kantrip.cli_inputs.secret_prompt", return_value=Secret("synthetic")),
+            ):
+                database = Path(directory) / "profiles.db"
+                environment = {"KANTRIP_DATABASE": str(database)}
+                if setup:
+                    prepared = runner.invoke(cli, list(setup), env=environment)
+                    self.assertEqual(0, prepared.exit_code, prepared.output)
+                before = load_profiles(database).profiles if database.exists() else {}
+                result = runner.invoke(cli, list(arguments), env=environment)
+                after = load_profiles(database).profiles if database.exists() else {}
+
+                self.assertEqual(2, result.exit_code, result.output)
+                self.assertIn(message, result.output)
+                self.assertNotIn("schema", result.output)
+                self.assertEqual(before, after)
 
 
 class TestDescribeCompleteness(unittest.TestCase):

@@ -56,6 +56,10 @@ class _ProfileClickException(click.ClickException):
     """Render a safe profile error with its public mutation exit status."""
 
 
+class _InvalidProfileClickException(_ProfileClickException):
+    exit_code = 2
+
+
 class _CommittedProfileClickException(_ProfileClickException):
     exit_code = 3
 
@@ -66,6 +70,7 @@ class _UnknownProfileClickException(_ProfileClickException):
 
 def _profile_click_exception(error: ProfileStoreError) -> _ProfileClickException:
     exception_type = {
+        2: _InvalidProfileClickException,
         3: _CommittedProfileClickException,
         4: _UnknownProfileClickException,
     }.get(error.exit_code, _ProfileClickException)
@@ -559,12 +564,27 @@ def _print_ping_failure(error_console: Console, prefix: str, error: PingError) -
     error_console.print(create_status_text(error_console, "error", f"{prefix}: {error}{detail}"))
 
 
-@cli.command("exec", context_settings={"ignore_unknown_options": True})
+@cli.command(
+    "exec",
+    context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
+)
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.argument("command", nargs=-1, type=click.UNPROCESSED)
 def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:
-    """Run a command or interactive subshell with PROFILE."""
+    """Run COMMAND, or an interactive subshell, with PROFILE.
+
+    Everything after COMMAND is passed to it unchanged, so
+    `kantrip exec PROFILE kafka-topics --help` shows the tool's help. Kantrip's
+    own options go before PROFILE; `--` before COMMAND is optional.
+    """
+    if command[:1] == ("--",):
+        command = command[1:]
+    if command and command[0].startswith("-"):
+        raise click.UsageError(
+            f"'{command[0]}' is not a command; put Kantrip options before PROFILE: "
+            "kantrip exec [OPTIONS] PROFILE [COMMAND]..."
+        )
     try:
         ensure_session_available()
         snapshot = resolve_profile_snapshot(profile_name)
