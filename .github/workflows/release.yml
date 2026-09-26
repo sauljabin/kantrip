@@ -74,7 +74,7 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" dist/*.whl
           "$RUNNER_TEMP/release-venv/bin/kantrip" --version | grep -F "$RELEASE_VERSION"
       - name: Generate release notes
-        uses: orhun/git-cliff-action@v4.9.0
+        uses: orhun/git-cliff-action@v4.9.1
         with:
           version: v2.14.1
           config: cliff.toml

@@ -39,7 +39,7 @@ jobs:
           uv-version: ${{ env.UV_VERSION }}
           python-version: "3.13"
       - name: Set up Kind
-        uses: helm/kind-action@v1.14.0
+        uses: helm/kind-action@v1.15.0
         with:
           install_only: true
           version: v0.31.0
@@ -104,7 +104,7 @@ jobs:
           docker system df > "$RUNNER_TEMP/e2e-diagnostics/docker-disk.txt" 2>&1 || true
       - name: Upload E2E diagnostics
         if: always()
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-diagnostics
           path: ${{ runner.temp }}/e2e-diagnostics
