@@ -28,6 +28,33 @@ SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth client credentials. Kafka
 authentication always requires verified TLS. OAuth token endpoints have
 independent identity, scopes, secret, and optional CA trust.
 
+## Shell alias
+
+Kantrip doesn't install an alias, but if you want a shorter command, the
+suggested one is `knt`. It takes the first three consonants of the name
+(**K**a**NT**rip), the same rule as `ksk` for
+[Kaskade](https://github.com/sauljabin/kaskade). Shorter names clash with other
+tools: `k` is commonly `kubectl`, and `kt` is the
+[kt](https://github.com/fgeller/kt) Kafka CLI.
+
+For zsh (the macOS default), add it to `~/.zshrc`; for bash (common on Linux),
+to `~/.bashrc`:
+
+```bash
+alias knt='kantrip'
+```
+
+For fish, add it to `~/.config/fish/config.fish`:
+
+```fish
+alias knt kantrip
+```
+
+Open a new shell, or `source` the file, to use it. Session shells started by
+`knt exec PROFILE` load the same startup file, so the alias works inside them
+too. Aliases exist only in interactive shells: scripts and CI should call
+`kantrip`. The rest of this guide uses `kantrip`.
+
 ## Local diagnostics
 
 Run `kantrip doctor` to inspect the installation without opening a Kafka
