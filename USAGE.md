@@ -31,11 +31,7 @@ independent identity, scopes, secret, and optional CA trust.
 ## Shell alias
 
 Kantrip doesn't install an alias, but if you want a shorter command, the
-suggested one is `knt`. It takes the first three consonants of the name
-(**K**a**NT**rip), the same rule as `ksk` for
-[Kaskade](https://github.com/sauljabin/kaskade). Shorter names clash with other
-tools: `k` is commonly `kubectl`, and `kt` is the
-[kt](https://github.com/fgeller/kt) Kafka CLI.
+suggested one is `knt`.
 
 For zsh (the macOS default), add it to `~/.zshrc`; for bash (common on Linux),
 to `~/.bashrc`:
