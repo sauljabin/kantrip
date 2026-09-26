@@ -72,11 +72,11 @@ kantrip add qa-scram -b localhost:9094 --transport tls \
 3. `sqlite3 "$KANTRIP_DATABASE" .dump | grep -c 'THE_PASSWORD'` prints `0`.
 4. `kantrip ping qa-scram` succeeds.
 5. Rotate with a wrong value, then the right one:
-   `kantrip edit qa-scram --replace-secret kafka/password` (twice, with ping
+   `kantrip edit qa-scram --replace-secret kafka.auth.password` (twice, with ping
    after each). Expect an authentication failure, then success, and exactly
    one keychain item after each rotation.
 6. `kantrip remove qa-scram` → decline → nothing changes; again with
-   `--force` → the keychain item is gone.
+   `--yes` → the keychain item is gone.
 7. macOS only: the first access may show a Keychain permission dialog; record
    the wording and which executable it names (pipx venv Python).
 
@@ -173,7 +173,7 @@ chmod 644 "$KANTRIP_DATABASE"      # expect: unsafe permissions error with the f
 chmod 600 "$KANTRIP_DATABASE"
 # delete the qa-scram keychain item in Keychain Access / Seahorse
 kantrip doctor                     # expect: missing credential named by profile and field
-kantrip edit qa-scram --replace-secret kafka/password   # expect: recovers
+kantrip edit qa-scram --replace-secret kafka.auth.password   # expect: recovers
 ```
 
 Expect every message to name the problem and the next command to run.

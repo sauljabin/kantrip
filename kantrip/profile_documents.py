@@ -108,19 +108,21 @@ def validate_edit_request(
     if not has_change:
         raise ProfileStoreError("no profile changes were requested")
     if description is not None and clear_description:
-        raise ProfileStoreError("--description cannot be combined with --clear-description")
+        raise ProfileStoreError("--description cannot be combined with --unset description")
     if remove_registry and (
         registry_provider is not None or registry_url is not None or registry_auth is not None
     ):
-        raise ProfileStoreError("--remove-registry cannot be combined with Registry update options")
+        raise ProfileStoreError("--unset registry cannot be combined with Registry update options")
     if labels and set(labels).intersection(remove_labels):
         raise ProfileStoreError("a label cannot be set and removed in the same edit")
     if ca_certificates is not None and transport == "plaintext":
         raise ProfileStoreError("--ca-file cannot be combined with --transport plaintext")
     if ca_certificates is not None and default_trust:
-        raise ProfileStoreError("--ca-file cannot be combined with --default-trust")
+        raise ProfileStoreError("--ca-file cannot be combined with --unset kafka.tls.ca")
     if default_trust and transport == "plaintext":
-        raise ProfileStoreError("--default-trust cannot be combined with --transport plaintext")
+        raise ProfileStoreError(
+            "--unset kafka.tls.ca cannot be combined with --transport plaintext"
+        )
 
 
 def apply_profile_edits(
@@ -168,7 +170,7 @@ def _apply_kafka_transport_edits(
         if not default_trust:
             return
         if kafka["transport"] != "tls":
-            raise ProfileStoreError("--default-trust requires Kafka TLS transport")
+            raise ProfileStoreError("--unset kafka.tls.ca requires Kafka TLS transport")
         kafka.pop("tls", None)
         return
     if kafka["transport"] != "tls":

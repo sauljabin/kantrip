@@ -139,7 +139,7 @@ is issued by a trusted public CA:
 
 ```bash
 kantrip add production \
-  --bootstrap-servers kafka.example.com:9093 \
+  --bootstrap-server kafka.example.com:9093 \
   --transport tls
 ```
 
@@ -149,7 +149,7 @@ only in the private session directory:
 
 ```bash
 kantrip add production-private-ca \
-  --bootstrap-servers kafka.internal.example:9093 \
+  --bootstrap-server kafka.internal.example:9093 \
   --transport tls \
   --ca-file ./cluster-ca.pem
 ```
@@ -168,7 +168,7 @@ profile document or command arguments:
 
 ```bash
 kantrip add production-scram \
-  --bootstrap-servers kafka.example.com:9093 \
+  --bootstrap-server kafka.example.com:9093 \
   --transport tls \
   --auth scram-sha-512 \
   --username application
@@ -176,10 +176,10 @@ kantrip add production-scram \
 
 The same workflow supports `plain`, `scram-sha-256`, and `scram-sha-512`.
 Required passwords are prompted only when creating the credential or when
-explicitly replacing `kafka/password`:
+explicitly replacing `kafka.auth.password`:
 
 ```bash
-kantrip edit production-scram --replace-secret kafka/password
+kantrip edit production-scram --replace-secret kafka.auth.password
 ```
 
 For mTLS, Kantrip copies the public certificate chain into the profile and
@@ -188,7 +188,7 @@ credential store:
 
 ```bash
 kantrip add production-mtls \
-  --bootstrap-servers kafka.example.com:9093 \
+  --bootstrap-server kafka.example.com:9093 \
   --transport tls \
   --auth mtls \
   --client-certificate-file ./client.crt \
@@ -203,7 +203,7 @@ trust independent:
 
 ```bash
 kantrip add production-oauth \
-  --bootstrap-servers kafka.example.com:9093 \
+  --bootstrap-server kafka.example.com:9093 \
   --transport tls \
   --ca-file ./kafka-ca.pem \
   --auth oauth \
@@ -214,14 +214,16 @@ kantrip add production-oauth \
 ```
 
 The client secret is collected by a no-echo prompt. Repeat `--oauth-scope` to
-preserve scope order. `edit` keeps omitted OAuth fields; the explicit
-`--clear-oauth-scopes` and `--oauth-default-trust` flags remove them.
+preserve scope order. `edit` keeps omitted OAuth fields;
+`--unset kafka.auth.oauth.scopes` and `--unset kafka.auth.oauth.ca` remove them.
 
-Choose one or more broker addresses when needed:
+Choose one or more broker addresses when needed. Repeat `-b/--bootstrap-server`
+or separate addresses with commas; both keep their order and reject duplicates:
 
 ```bash
 kantrip add development \
-  --bootstrap-servers kafka-1.example.com:9092,kafka-2.example.com:9092 \
+  -b kafka-1.example.com:9092 \
+  -b kafka-2.example.com:9092 \
   --description 'Development cluster' \
   --label environment=development \
   --label owner=platform \
@@ -233,7 +235,7 @@ explicitly and pass its Core Registry API v3 endpoint:
 
 ```bash
 kantrip add development-apicurio \
-  --bootstrap-servers kafka-1.example.com:9092,kafka-2.example.com:9092 \
+  --bootstrap-server kafka-1.example.com:9092,kafka-2.example.com:9092 \
   --registry-provider apicurio \
   --registry-url http://registry.example.com:8080/apis/registry/v3
 ```
@@ -256,9 +258,10 @@ kantrip add registry-oauth \
 
 Registry Basic, fixed Confluent bearer tokens, mTLS, and OAuth use no-echo
 prompts or bounded private-key files. Kafka and Registry secrets and CA bundles
-are never inherited from one another. Use `--registry-default-trust`,
-`--registry-oauth-default-trust`, or the corresponding `--clear-*` flags only
-for an explicit removal. Changing provider requires a new Registry URL and keeps
+are never inherited from one another. `--unset registry.tls.ca`,
+`--unset registry.auth.oauth.ca`, `--unset registry.auth.oauth.scopes`,
+`--unset registry.auth.oauth.logical-cluster`, and
+`--unset registry.auth.oauth.identity-pool-id` remove the matching field. Changing provider requires a new Registry URL and keeps
 the current authentication only when the new provider supports it.
 
 `add` creates the database when needed and never overwrites a profile. `-l` is
@@ -267,7 +270,7 @@ changing the profile identity:
 
 ```bash
 kantrip edit development \
-  --bootstrap-servers kafka-3.example.com:9092,kafka-4.example.com:9092 \
+  --bootstrap-server kafka-3.example.com:9092,kafka-4.example.com:9092 \
   --description 'Shared development cluster' \
   --label environment=development \
   --registry-url http://registry.example.com:8081
@@ -277,15 +280,16 @@ kantrip edit development \
 `edit --ca-file PATH`
 replaces the custom CA for an existing TLS profile; combine it with
 `--transport tls` when upgrading a plaintext profile. Switching back to default
-trust is an explicit `edit --default-trust` operation and does not disable TLS.
-Switching to `--transport plaintext` removes the stored TLS configuration.
-`--default-trust` and `--ca-file` are mutually exclusive.
+trust is an explicit `edit --unset kafka.tls.ca` operation and does not disable
+TLS. Switching to `--transport plaintext` removes the stored TLS configuration.
+`--unset kafka.tls.ca` and `--ca-file` are mutually exclusive.
 
 `edit` adds or updates labels and can add a Registry to a profile that has none.
 When only `--registry-url` is supplied, the new Registry defaults to Confluent.
-Use `--clear-description`, repeatable `--remove-label KEY`, or
-`--remove-registry` for explicit removal. Omitting an option preserves its
-current value. `edit` needs at least one option; `edit PROFILE` alone prints
+Repeatable `--unset FIELD` makes an optional field absent: `description`,
+`labels.KEY`, `registry`, `kafka.tls.ca`, and the Kafka and Registry trust and
+OAuth fields above. An unknown or required field fails and lists the valid
+names. Omitting an option preserves its current value. `edit` needs at least one option; `edit PROFILE` alone prints
 usage and exits with status 2.
 
 Changing the Registry authentication type (for example `--registry-auth none`
@@ -301,7 +305,8 @@ kantrip remove development
 ```
 
 Removal asks for confirmation bound to the captured profile UUID and revision.
-Use `--force` only for an intentional noninteractive removal.
+Pass `-y/--yes` to skip the confirmation. Without a terminal, `remove` fails
+unless `--yes` is given.
 
 Profile mutations return status 0 when the change and cleanup completed, 1 when
 the requested change definitely did not commit, 2 for usage errors, 3 when the
@@ -732,7 +737,7 @@ Confluent-compatible API with Confluent console clients, kcat Avro, or Kaskade:
 
 ```bash
 kantrip add compatible \
-  --bootstrap-servers kafka.example.com:9092 \
+  --bootstrap-server kafka.example.com:9092 \
   --registry-provider confluent \
   --registry-url http://registry.example.com:8080/apis/ccompat/v7
 ```

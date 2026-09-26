@@ -727,7 +727,7 @@ class DemoCapture:
         except CaptureError as error:
             errors.append(str(error))
         status, output = self.command(
-            [self.target.kantrip, "remove", CAPTURE_PROFILE, "--force"], self.environment
+            [self.target.kantrip, "remove", CAPTURE_PROFILE, "--yes"], self.environment
         )
         if status:
             errors.append(

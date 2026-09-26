@@ -239,7 +239,7 @@ def main() -> None:
             )
         finally:
             for profile in reversed(profiles):
-                _run((*_cli(), "remove", profile, "--force"), environment, accepted=(0, 1, 3))
+                _run((*_cli(), "remove", profile, "--yes"), environment, accepted=(0, 1, 3))
     print("Authenticated Kafka and Registry sandbox smoke checks passed")
 
 
@@ -267,7 +267,7 @@ def exercise_registry_oauth() -> None:
             raise AuthSmokeFailure(str(error)) from error
         finally:
             for profile in reversed(profiles):
-                _run((*_cli(), "remove", profile, "--force"), environment, accepted=(0, 1, 3))
+                _run((*_cli(), "remove", profile, "--yes"), environment, accepted=(0, 1, 3))
 
 
 def _add_registry_profile(
@@ -284,7 +284,7 @@ def _add_registry_profile(
         *_cli(),
         "add",
         profile,
-        "--bootstrap-servers",
+        "--bootstrap-server",
         "localhost:9092",
         "--registry-provider",
         case.provider,
@@ -355,7 +355,7 @@ def _add_profile(
         *_cli(),
         "add",
         profile,
-        "--bootstrap-servers",
+        "--bootstrap-server",
         f"{host}:{case.port}",
         "--transport",
         "tls",
@@ -766,7 +766,7 @@ def _exercise_invalid_mtls(
             *_cli(),
             "add",
             profile,
-            "--bootstrap-servers",
+            "--bootstrap-server",
             "localhost:9095",
             "--transport",
             "tls",
@@ -816,7 +816,7 @@ def _exercise_unavailable_broker(
 ) -> None:
     profile = "unavailable-broker"
     _run(
-        (*_cli(), "add", profile, "--bootstrap-servers", "localhost:9199"),
+        (*_cli(), "add", profile, "--bootstrap-server", "localhost:9199"),
         environment,
         accepted=(0, 3),
     )
@@ -830,7 +830,7 @@ def _exercise_unauthenticated_listeners(
 ) -> None:
     for name, port, tls in (("plaintext", 9092, False), ("tls", 9093, True)):
         profile = f"anonymous-{name}"
-        arguments = [*_cli(), "add", profile, "--bootstrap-servers", f"localhost:{port}"]
+        arguments = [*_cli(), "add", profile, "--bootstrap-server", f"localhost:{port}"]
         if tls:
             arguments.extend(("--transport", "tls", "--ca-file", str(CA_FILE)))
         _run(arguments, environment, accepted=(0, 3))
