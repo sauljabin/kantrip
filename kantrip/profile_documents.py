@@ -15,7 +15,7 @@ from kantrip.profile_auth import (
     registry_auth_references,
     validated_ca_bundle,
 )
-from kantrip.profile_storage import ProfileStoreError
+from kantrip.profile_storage import ProfileInputError, ProfileStoreError
 from kantrip.registry import CONFLUENT_PROVIDER, RegistryProfileError, registry_connection
 
 DEFAULT_BOOTSTRAP_SERVER = "localhost:9092"
@@ -65,7 +65,7 @@ def _validate_retained_registry_auth(
     except (ProfileStoreError, RegistryProfileError) as error:
         auth = after.get("auth")
         auth_type = auth.get("type") if isinstance(auth, Mapping) else "none"
-        raise ProfileStoreError(
+        raise ProfileInputError(
             f"Registry provider '{after.get('provider')}' does not support the current "
             f"'{auth_type}' authentication; pass --registry-auth to choose a supported "
             "method or none"
@@ -106,21 +106,21 @@ def validate_edit_request(
         )
     )
     if not has_change:
-        raise ProfileStoreError("no profile changes were requested")
+        raise ProfileInputError("no profile changes were requested")
     if description is not None and clear_description:
-        raise ProfileStoreError("--description cannot be combined with --unset description")
+        raise ProfileInputError("--description cannot be combined with --unset description")
     if remove_registry and (
         registry_provider is not None or registry_url is not None or registry_auth is not None
     ):
-        raise ProfileStoreError("--unset registry cannot be combined with Registry update options")
+        raise ProfileInputError("--unset registry cannot be combined with Registry update options")
     if labels and set(labels).intersection(remove_labels):
-        raise ProfileStoreError("a label cannot be set and removed in the same edit")
+        raise ProfileInputError("a label cannot be set and removed in the same edit")
     if ca_certificates is not None and transport == "plaintext":
-        raise ProfileStoreError("--ca-file cannot be combined with --transport plaintext")
+        raise ProfileInputError("--ca-file cannot be combined with --transport plaintext")
     if ca_certificates is not None and default_trust:
-        raise ProfileStoreError("--ca-file cannot be combined with --unset kafka.tls.ca")
+        raise ProfileInputError("--ca-file cannot be combined with --unset kafka.tls.ca")
     if default_trust and transport == "plaintext":
-        raise ProfileStoreError(
+        raise ProfileInputError(
             "--unset kafka.tls.ca cannot be combined with --transport plaintext"
         )
 
@@ -170,11 +170,11 @@ def _apply_kafka_transport_edits(
         if not default_trust:
             return
         if kafka["transport"] != "tls":
-            raise ProfileStoreError("--unset kafka.tls.ca requires Kafka TLS transport")
+            raise ProfileInputError("--unset kafka.tls.ca requires Kafka TLS transport")
         kafka.pop("tls", None)
         return
     if kafka["transport"] != "tls":
-        raise ProfileStoreError("--ca-file requires Kafka TLS transport")
+        raise ProfileInputError("--ca-file requires Kafka TLS transport")
     kafka.setdefault("tls", {})["caCertificates"] = validated_ca_bundle(ca_certificates)
 
 
@@ -206,14 +206,14 @@ def _apply_registry_edits(
         return
     existing = profile.get("registry")
     if not isinstance(existing, Mapping) and url is None:
-        raise ProfileStoreError("--registry-provider requires --registry-url for a new Registry")
+        raise ProfileInputError("--registry-provider requires --registry-url for a new Registry")
     if (
         isinstance(existing, Mapping)
         and provider is not None
         and provider != existing.get("provider")
         and url is None
     ):
-        raise ProfileStoreError("changing Registry provider requires --registry-url")
+        raise ProfileInputError("changing Registry provider requires --registry-url")
     selected_provider = provider or (
         str(existing["provider"]) if isinstance(existing, Mapping) else CONFLUENT_PROVIDER
     )
@@ -269,14 +269,14 @@ def new_profile(
     }
     if ca_certificates is not None:
         if transport != "tls":
-            raise ProfileStoreError("--ca-file requires --transport tls")
+            raise ProfileInputError("--ca-file requires --transport tls")
         profile["kafka"]["tls"] = {"caCertificates": validated_ca_bundle(ca_certificates)}
     if description is not None:
         profile["description"] = description
     if labels:
         profile["labels"] = dict(labels)
     if registry_provider is not None and registry_url is None:
-        raise ProfileStoreError("--registry-provider requires --registry-url")
+        raise ProfileInputError("--registry-provider requires --registry-url")
     if registry_url is not None:
         provider = registry_provider or CONFLUENT_PROVIDER
         property_name = "apicurio.registry.url" if provider == "apicurio" else "schema.registry.url"
@@ -288,7 +288,7 @@ def new_profile(
         try:
             registry_connection(profile)
         except RegistryProfileError as error:
-            raise ProfileStoreError(str(error)) from error
+            raise ProfileInputError(str(error)) from error
     return profile
 
 

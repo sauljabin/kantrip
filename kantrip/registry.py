@@ -632,7 +632,8 @@ def _validate_url(url: str, *, secure: bool) -> None:
         or (port is not None and not 1 <= port <= 65535)
     ):
         raise RegistryProfileError(
-            "Registry URL must not contain credentials, a query, or a fragment"
+            "Registry URL must use http:// or https:// without credentials, a query, "
+            "or a fragment"
         )
     if secure and parsed.scheme != "https":
         raise RegistryProfileError(

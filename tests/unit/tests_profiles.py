@@ -22,12 +22,15 @@ from kantrip.profile_storage import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
     DATABASE_SCHEMA_VERSION,
+    ISSUES_URL,
+    ProfileInputError,
     ProfileStoreError,
     database_maintenance_lock,
     inspect_pending_secret_cleanup,
     load_profiles,
     reconcile_pending_secrets,
     resolve_database_path,
+    validate_profile,
 )
 from kantrip.profiles import add_profile, edit_profile, remove_profile, resolve_profile_snapshot
 from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
@@ -1293,7 +1296,7 @@ class TestProfiles(unittest.TestCase):
             cases = (
                 (
                     {"registry_url": "http://user:secret@registry.example.com"},
-                    "must not contain credentials",
+                    "without credentials",
                 ),
                 ({"registry_provider": "apicurio"}, "requires --registry-url"),
             )
@@ -1552,6 +1555,48 @@ def _client_identity(password: str) -> tuple[str, str]:
         serialization.BestAvailableEncryption(password.encode("utf-8")),
     ).decode("utf-8")
     return certificate_pem, key_pem
+
+
+class TestProfileValidationMessages(unittest.TestCase):
+    """New profiles get actionable or internal-error messages; stored ones name the profile."""
+
+    @staticmethod
+    def profile(**kafka: object) -> dict[str, object]:
+        return {
+            "id": "018f8f13-7c21-7cee-8000-000000000010",
+            "kafka": {
+                "bootstrapServers": ["localhost:9092"],
+                "transport": "plaintext",
+                "auth": {"type": "none"},
+                **kafka,
+            },
+        }
+
+    def test_broken_combination_is_an_input_error(self) -> None:
+        profile = self.profile(auth={"type": "scram-sha-512", "username": "u"})
+
+        with self.assertRaisesRegex(
+            ProfileInputError, "authenticated profiles require TLS"
+        ) as raised:
+            validate_profile(profile)
+        self.assertEqual(2, raised.exception.exit_code)
+        with self.assertRaisesRegex(
+            ProfileStoreError, "stored profile 'p' is invalid: authenticated profiles require TLS"
+        ):
+            validate_profile(profile, name="p")
+
+    def test_schema_failure_on_a_new_profile_is_an_internal_error(self) -> None:
+        profile = self.profile(unexpected=True)
+
+        with self.assertRaises(ProfileStoreError) as raised:
+            validate_profile(profile)
+        message = str(raised.exception)
+        self.assertNotIsInstance(raised.exception, ProfileInputError)
+        self.assertTrue(message.startswith("internal error:"), message)
+        self.assertIn("nothing was changed", message)
+        self.assertIn(ISSUES_URL, message)
+        with self.assertRaisesRegex(ProfileStoreError, "stored profile 'p' does not match schema"):
+            validate_profile(profile, name="p")
 
 
 if __name__ == "__main__":

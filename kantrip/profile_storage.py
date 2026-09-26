@@ -58,6 +58,7 @@ DATABASE_MAINTENANCE_SUFFIX = ".maintenance.lock"
 
 
 SCHEMA_FILENAME = "profile.schema.json"
+ISSUES_URL = "https://github.com/sauljabin/kantrip/issues"
 
 
 _PROFILE_NAME_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
@@ -78,6 +79,13 @@ class ProfileStoreError(ValueError):
     def __init__(self, message: str, *, exit_code: int = 1) -> None:
         super().__init__(message)
         self.exit_code = exit_code
+
+
+class ProfileInputError(ProfileStoreError):
+    """Raised when requested profile values are invalid; nothing was changed (exit 2)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, exit_code=2)
 
 
 @dataclass(frozen=True)
@@ -420,29 +428,74 @@ def encode_profile(profile: Mapping[str, Any]) -> str:
 
 def validate_profile_name(name: str) -> None:
     if not _PROFILE_NAME_PATTERN.fullmatch(name):
-        raise ProfileStoreError(
+        raise ProfileInputError(
             "profile name must contain 1 to 128 safe characters: "
             "letters, digits, dots, underscores, or hyphens"
         )
 
 
 def validate_profile(profile: dict[str, Any], *, name: str | None = None) -> None:
+    """Validate a profile; `name` marks a stored one, otherwise it was built from input.
+
+    Cross-field rules are checked first with actionable messages. Every input
+    is validated before a document is built, so a schema failure on a new or
+    edited profile is an internal error rather than a user mistake.
+    """
+    violation = _combination_violation(profile)
+    if violation is not None:
+        if name is None:
+            raise ProfileInputError(violation)
+        raise ProfileStoreError(f"stored profile '{name}' is invalid: {violation}")
     validator = Draft202012Validator(_load_schema(), format_checker=FormatChecker())
     errors = sorted(
         validator.iter_errors(profile),
         key=lambda item: tuple(str(part) for part in item.absolute_path),
     )
-    prefix = f"stored profile '{name}'" if name is not None else "profile"
     if errors:
         validation_error = errors[0]
         location = ".".join(str(part) for part in validation_error.absolute_path) or "document root"
+        if name is None:
+            raise ProfileStoreError(
+                f"internal error: the profile failed its final check at {location}; nothing "
+                f"was changed. Please report this at {ISSUES_URL}"
+            )
         detail = _validation_detail(validation_error)
         suffix = f": {detail}" if detail else ""
-        raise ProfileStoreError(f"{prefix} does not match schema at {location}{suffix}")
+        raise ProfileStoreError(
+            f"stored profile '{name}' does not match schema at {location}{suffix}"
+        )
     try:
         kafka_connection(profile)
     except KafkaProfileError as error:
-        raise ProfileStoreError(f"{prefix} has invalid Kafka configuration: {error}") from error
+        if name is None:
+            raise ProfileInputError(str(error)) from error
+        raise ProfileStoreError(
+            f"stored profile '{name}' has invalid Kafka configuration: {error}"
+        ) from error
+
+
+def _combination_violation(profile: Mapping[str, Any]) -> str | None:
+    """Explain a cross-field rule that the schema also enforces, if one is broken."""
+    kafka = profile.get("kafka")
+    if isinstance(kafka, Mapping):
+        auth = kafka.get("auth")
+        auth_type = auth.get("type") if isinstance(auth, Mapping) else None
+        if auth_type not in (None, "none") and kafka.get("transport") != "tls":
+            return "authenticated profiles require TLS; add --auth none to switch to plaintext"
+    registry = profile.get("registry")
+    if not isinstance(registry, Mapping):
+        return None
+    auth = registry.get("auth")
+    auth_type = auth.get("type", "none") if isinstance(auth, Mapping) else "none"
+    if registry.get("provider") == "apicurio" and auth_type == "token":
+        return "Apicurio does not support fixed bearer tokens; use --registry-auth basic|mtls|oauth"
+    url = registry.get("schema.registry.url", registry.get("apicurio.registry.url"))
+    if isinstance(url, str) and url.lower().startswith("http://"):
+        if auth_type != "none":
+            return "Registry authentication requires an https:// URL"
+        if "tls" in registry:
+            return "Registry TLS options require an https:// URL"
+    return None
 
 
 def _validation_detail(error: ValidationError) -> str | None:
@@ -664,6 +717,7 @@ __all__ = [
     "DATABASE_TIMEOUT_SECONDS",
     "SCHEMA_FILENAME",
     "ProfileCollection",
+    "ProfileInputError",
     "ProfileStoreError",
     "connect",
     "database_maintenance_lock",
