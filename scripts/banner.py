@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+from rich.box import Box
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.terminal_theme import TerminalTheme
@@ -21,6 +22,15 @@ BANNER_WIDTH = 44
 BANNER_FONT_ASPECT_RATIO = 0.61
 BANNER_SLOGAN = " -* switch kafka profiles like |_| magic"
 WAND_HANDLE_COLOR = "#A16207"
+# Rich's SVG export metrics: 20px glyphs, 1.22 line height, 1.5px line offset.
+SVG_CHAR_HEIGHT = 20
+SVG_LINE_HEIGHT = SVG_CHAR_HEIGHT * 1.22
+SVG_LINE_OFFSET = 1.5
+SVG_FRAME_STROKE = 2
+# Box-drawing glyphs fall back to fonts of other widths and heights on Linux
+# and Android, so the panel keeps blank border cells and the frame is drawn
+# as an SVG rectangle through their centers instead.
+BLANK_BOX = Box("    \n" * 8)
 
 ARCANA_TERMINAL_THEME = TerminalTheme(
     background=(7, 20, 38),
@@ -72,18 +82,35 @@ def render_banner_svg() -> str:
     console.print(
         Panel(
             Group(title, slogan),
-            border_style="accent",
+            box=BLANK_BOX,
             padding=(0, 0),
             width=BANNER_WIDTH,
         )
     )
+    line_count = len(console.export_text(clear=False).splitlines())
     svg = console.export_svg(
         title="Kantrip",
         theme=ARCANA_TERMINAL_THEME,
         font_aspect_ratio=BANNER_FONT_ASPECT_RATIO,
         unique_id="kantrip-banner",
     )
-    return normalize_svg(svg)
+    return normalize_svg(_add_frame(svg, line_count))
+
+
+def _add_frame(svg: str, line_count: int) -> str:
+    """Draw the panel border through the centers of its blank border cells."""
+    char_width = SVG_CHAR_HEIGHT * BANNER_FONT_ASPECT_RATIO
+    frame = (
+        f'<rect fill="none" stroke="{ARCANA_COLORS["accent"]}" '
+        f'stroke-width="{SVG_FRAME_STROKE}" '
+        f'x="{char_width / 2:g}" '
+        f'y="{SVG_LINE_OFFSET + SVG_LINE_HEIGHT / 2:g}" '
+        f'width="{char_width * (BANNER_WIDTH - 1):g}" '
+        f'height="{SVG_LINE_HEIGHT * (line_count - 1):g}" '
+        f'rx="{char_width / 2:g}"/>\n    '
+    )
+    matrix = '<g class="kantrip-banner-matrix">'
+    return svg.replace(matrix, frame + matrix, 1)
 
 
 def generate_banner(path: Path = BANNER_PATH) -> Path:

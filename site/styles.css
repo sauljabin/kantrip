@@ -371,6 +371,17 @@ pre {
   line-height: 1.25;
 }
 
+/* The frame is a border, not box-drawing glyphs: fallback fonts on Android and
+   Linux give those glyphs other widths and heights than the monospace cells.
+   It still takes one cell on each side, through the middle of that cell. */
+.banner-frame {
+  display: block;
+  margin: 0.625em 0.5ch;
+  padding: calc(0.625em - 2px) calc(0.5ch - 2px);
+  border: 2px solid var(--accent);
+  border-radius: 0.5ch;
+}
+
 .lede {
   max-width: 44rem;
   margin: 1.5rem auto;
