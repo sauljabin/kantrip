@@ -26,6 +26,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from sandbox.__main__ import CA_FILE, STATE_FILE, load_credentials
 from scripts import TerminalTimeout, run_terminal
+from tests.e2e.adapters import kaf_user_config_state
 from tests.e2e.registry_oauth import RegistryOAuthFailure, exercise_registry_oauth_renewal
 from tests.e2e.shell_environment import isolated_zsh_environment
 
@@ -189,6 +190,7 @@ def main() -> None:
             "kafka-console-producer",
             "kafka-avro-console-consumer",
             "kafka-topics",
+            "kaf",
             "kcat",
             "kubectl",
             "zsh",
@@ -464,25 +466,60 @@ def _exercise_profile(
             ),
             environment,
         )
+        _exercise_kaf(profile, case, topic, environment)
         for shell_name in ("bash", "zsh", "fish"):
-            _exercise_shell(profile, shell_name, environment)
+            _exercise_shell(profile, shell_name, environment, kaf=case.auth_type != "oauth")
         if case.auth_type == "oauth":
             _exercise_oauth_refresh(profile, topic, environment)
     finally:
         _delete_topic(profile, topic, environment)
 
 
+def _exercise_kaf(
+    profile: str,
+    case: AuthCase,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    """List, produce, and consume with kaf; OAuth has no kaf mapping and fails first."""
+    user_config = kaf_user_config_state(environment)
+    if case.auth_type == "oauth":
+        output = _run((*_cli(), "exec", profile, "--", "kaf", "topics"), environment, accepted=(1,))
+        if "kaf does not support Kafka authentication 'oauth'" not in output:
+            raise AuthSmokeFailure(f"{profile} kaf did not fail before launch for OAuth")
+        return
+    if topic not in _run((*_cli(), "exec", profile, "--", "kaf", "topics"), environment):
+        raise AuthSmokeFailure(f"{profile} kaf did not list its smoke topic")
+    marker = f"kantrip kaf record for {case.name}"
+    _run(
+        (*_cli(), "exec", profile, "--", "kaf", "produce", topic),
+        environment,
+        input_text=f"{marker}\n",
+    )
+    output = _run(
+        (*_cli(), "exec", profile, "--", "kaf", "consume", topic, "--offset", "oldest"),
+        environment,
+    )
+    if marker not in output:
+        raise AuthSmokeFailure(f"{profile} kaf did not consume its smoke record")
+    if kaf_user_config_state(environment) != user_config:
+        raise AuthSmokeFailure(f"{profile} kaf changed the user's ~/.kaf/config")
+
+
 def _exercise_shell(
     profile: str,
     shell_name: str,
     environment: Mapping[str, str],
+    *,
+    kaf: bool,
 ) -> None:
     shell = shutil.which(shell_name, path=environment.get("PATH"))
     assert shell is not None
     shell_environment = dict(environment)
     shell_environment["SHELL"] = shell
     kcat_command = "kcat -X broker.address.family=v4 -L >/dev/null && exit"
-    shell_command = f"kafka-topics --list && {kcat_command}"
+    kaf_command = "kaf topics >/dev/null && " if kaf else ""
+    shell_command = f"kafka-topics --list && {kaf_command}{kcat_command}"
     try:
         status, output = run_terminal(
             (*_cli(), "exec", profile),

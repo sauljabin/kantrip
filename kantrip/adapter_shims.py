@@ -11,6 +11,7 @@ from pathlib import Path
 from kantrip._files import write_exclusive_text
 from kantrip.adapter_policy import (
     JAVA_COMMANDS,
+    KAF_HOME,
     KCAT_SCHEMA_REGISTRY_SIGNAL,
     AdapterError,
     ClientConfiguration,
@@ -122,6 +123,20 @@ esac
 """
 
 
+def render_kaf_shim(name: str, executable: str, inputs: ShimInputs) -> str:
+    """Render a shim that selects kaf's private config under an unwritable home."""
+    kaf_config = inputs.configuration.kaf_config
+    guard = ""
+    if inputs.capability_error is not None:
+        guard = _failure(inputs.capability_error)
+    elif kaf_config is None:
+        guard = _failure("kaf requires a private configuration file")
+    return f"""#!/bin/sh
+{guard}{_adapter_guard_command(name)}
+HOME={KAF_HOME} exec {shlex.quote(executable)} --config {shlex.quote(str(kaf_config))} "$@"
+"""
+
+
 def render_kcat_shim(name: str, executable: str, inputs: ShimInputs) -> str:
     """Render a shim that exports `KCAT_CONFIG` and adds `-r` for Avro decoding."""
     registry = inputs.registry
@@ -178,6 +193,7 @@ def _adapter_guard_invocation(name: str) -> str:
 __all__ = [
     "ShimInputs",
     "render_java_shim",
+    "render_kaf_shim",
     "render_kaskade_shim",
     "render_kcat_shim",
     "write_executable",

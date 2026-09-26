@@ -47,6 +47,7 @@ outside the supported lifecycle.
 | `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kcat` / `kafkacat` | kcat | kcat 1.7+; librdkafka 2.6.1+ for SCRAM against Kafka 4, 2.11.0+ for OAuth with custom HTTPS CA | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
+| `kaf` | kaf | kaf 0.2.14 | Topics, groups, produce, and consume | No | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. No OAuth. |
 | `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed; other Kafka, config-file, and registry connection overrides are rejected. |
 
 “Profile-aware” means Kantrip maps the selected profile into the command. The
@@ -56,7 +57,8 @@ Apicurio `/apis/registry/v3` profiles work only with Kaskade registry
 deserializers and use Apicurio's default `contentId` framing.
 
 Every listed Kafka adapter supports plaintext, verified TLS, SASL/PLAIN,
-SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Authentication always requires verified
+SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; kaf receives an encrypted mTLS key
+decrypted into a private session file. Authentication always requires verified
 TLS. TLS uses each client's default trust store
 unless a validated custom PEM CA is copied from the profile into each private
 session. The
@@ -67,7 +69,8 @@ or Confluent Platform 6.1+, where native PEM trust stores became available;
 Kantrip checks the installed client version and fails before the Kafka operation
 when support cannot be verified. Kafka 2.6 and Confluent Platform 6.0 remain
 supported with default client trust. Native OAuth requires Apache Kafka 4.0+
-for Java commands and an OIDC-capable librdkafka client. Unsupported
+for Java commands and an OIDC-capable librdkafka client; kaf has no OAuth mapping
+because its token client can't use the profile's token-endpoint CA. Unsupported
 authentication is rejected before the requested operation.
 
 Registry connections may use unauthenticated HTTP, or verified HTTPS with
@@ -145,6 +148,7 @@ put its `bin` directory on `PATH` before running `kantrip exec`.
 | The seven Apache `*.sh` commands in the compatibility table | Install an Apache Kafka binary archive from [Apache Kafka downloads](https://kafka.apache.org/downloads), then add its `bin` directory to `PATH`. Homebrew's `brew install kafka` is also suitable. | Install an Apache Kafka binary archive from [Apache Kafka downloads](https://kafka.apache.org/downloads), then add its `bin` directory to `PATH`. |
 | The seven equivalent unsuffixed Kafka commands and all six unsuffixed `kafka-{avro,json-schema,protobuf}-console-{producer,consumer}` commands | Download and extract a Confluent Platform or Confluent Community ZIP/TAR package, set `CONFLUENT_HOME`, and add `$CONFLUENT_HOME/bin` to `PATH`. | Use the same ZIP/TAR method, or install Confluent's `confluent-community`/`confluent-platform` packages and add their `bin` directory to `PATH`. See [Confluent Platform installation](https://docs.confluent.io/platform/current/installation/overview.html). |
 | `kcat`, `kafkacat` | `brew install kcat` | Debian/Ubuntu: `apt install kafkacat`; other distributions can use their package manager or follow the [kcat build instructions](https://github.com/edenhill/kcat#install). The installed legacy executable may be named `kafkacat`. Check the linked library with `kcat -V`: Ubuntu 24.04's `librdkafka` 2.3.0 is too old for SCRAM against Kafka 4. Use 2.6.1+ for that case and 2.11.0+ when OAuth token HTTPS uses a custom CA. |
+| `kaf` | `brew install kaf` | Download the release archive from [kaf releases](https://github.com/birdayz/kaf/releases) and put `kaf` on `PATH`. |
 | `kaskade` | `brew install kaskade` or `pipx install kaskade` | `pipx install kaskade`; see the [Kaskade installation guide](https://github.com/sauljabin/kaskade#installation). |
 
 The Confluent archive contains both its unsuffixed Kafka scripts and the Schema
