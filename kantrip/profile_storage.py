@@ -477,23 +477,52 @@ def validate_profile(profile: dict[str, Any], *, name: str | None = None) -> Non
 def _combination_violation(profile: Mapping[str, Any]) -> str | None:
     """Explain a cross-field rule that the schema also enforces, if one is broken."""
     kafka = profile.get("kafka")
-    if isinstance(kafka, Mapping):
-        auth = kafka.get("auth")
-        auth_type = auth.get("type") if isinstance(auth, Mapping) else None
-        if auth_type not in (None, "none") and kafka.get("transport") != "tls":
-            return "authenticated profiles require TLS; add --auth none to switch to plaintext"
+    kafka = kafka if isinstance(kafka, Mapping) else {}
+    kafka_auth = kafka.get("auth")
     registry = profile.get("registry")
     if not isinstance(registry, Mapping):
+        registry = None
+    registry_auth = registry.get("auth") if registry is not None else None
+    return connection_rule_violation(
+        transport=kafka.get("transport"),
+        kafka_auth=kafka_auth.get("type") if isinstance(kafka_auth, Mapping) else None,
+        registry_provider=registry.get("provider") if registry is not None else None,
+        registry_url=(
+            registry.get("schema.registry.url", registry.get("apicurio.registry.url"))
+            if registry is not None
+            else None
+        ),
+        registry_auth=(
+            registry_auth.get("type", "none") if isinstance(registry_auth, Mapping) else "none"
+        ),
+        registry_tls=registry is not None and "tls" in registry,
+    )
+
+
+def connection_rule_violation(
+    *,
+    transport: object,
+    kafka_auth: object,
+    registry_provider: object = None,
+    registry_url: object = None,
+    registry_auth: object = "none",
+    registry_tls: bool = False,
+) -> str | None:
+    """Explain a broken cross-field connection rule; shared by the CLI and the profile layer.
+
+    The CLI checks requested values before prompting for secrets; the profile
+    layer checks every built document.
+    """
+    if kafka_auth not in (None, "none") and transport != "tls":
+        return "Kafka authentication requires TLS; use --transport tls or --auth none"
+    if registry_url is None:
         return None
-    auth = registry.get("auth")
-    auth_type = auth.get("type", "none") if isinstance(auth, Mapping) else "none"
-    if registry.get("provider") == "apicurio" and auth_type == "token":
+    if registry_provider == "apicurio" and registry_auth == "token":
         return "Apicurio does not support fixed bearer tokens; use --registry-auth basic|mtls|oauth"
-    url = registry.get("schema.registry.url", registry.get("apicurio.registry.url"))
-    if isinstance(url, str) and url.lower().startswith("http://"):
-        if auth_type != "none":
+    if isinstance(registry_url, str) and registry_url.lower().startswith("http://"):
+        if registry_auth != "none":
             return "Registry authentication requires an https:// URL"
-        if "tls" in registry:
+        if registry_tls:
             return "Registry TLS options require an https:// URL"
     return None
 
@@ -720,6 +749,7 @@ __all__ = [
     "ProfileInputError",
     "ProfileStoreError",
     "connect",
+    "connection_rule_violation",
     "database_maintenance_lock",
     "encode_profile",
     "inspect_migration_state",

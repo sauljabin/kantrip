@@ -19,8 +19,10 @@ from kantrip.cli_inputs import (
     AddOptions,
     EditOptions,
     add_authentication,
+    add_rule_violation,
     edit_kafka_authentication,
     edit_registry_authentication,
+    edit_rule_violation,
     validate_edit_options,
 )
 from kantrip.cli_options import add_profile_options, edit_profile_options, parse_labels
@@ -185,6 +187,9 @@ def _print_structured_observation(
 def add_configured_profile(profile_name: str, **values: Any) -> None:
     """Add a profile."""
     options = AddOptions(**values)
+    violation = add_rule_violation(options)
+    if violation is not None:
+        raise _InvalidProfileClickException(violation)
     try:
         auth, registry_auth = add_authentication(options)
         profiles = add_profile(
@@ -219,6 +224,9 @@ def edit_configured_profile(profile_name: str, **values: Any) -> None:
         current = load_profiles(missing_ok=True)
         current_profile = current.profile(profile_name)
         expected_revision = current.revision(profile_name)
+        violation = edit_rule_violation(options, current_profile)
+        if violation is not None:
+            raise _InvalidProfileClickException(violation)
         auth = edit_kafka_authentication(options, current_profile["kafka"]["auth"], kafka_replace)
         registry_auth = edit_registry_authentication(
             options, current_profile.get("registry"), registry_replace

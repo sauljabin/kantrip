@@ -1176,7 +1176,7 @@ class TestEditRegistryAuthentication(unittest.TestCase):
                 profiles = load_profiles(Path(environment["KANTRIP_DATABASE"]))
 
         self.assertEqual(2, result.exit_code, result.output)
-        self.assertIn("does not support the current 'token' authentication", result.output)
+        self.assertIn("Apicurio does not support fixed bearer tokens", result.output)
         self.assertIn("--registry-auth", result.output)
         self.assertEqual("confluent", profiles.profile("p")["registry"]["provider"])
         self.assertEqual(1, profiles.revision("p"))
@@ -1524,7 +1524,7 @@ class TestCliResults(unittest.TestCase):
         )
 
         self.assertNotEqual(0, result.exit_code, result.output)
-        self.assertIn("requires --transport tls", result.output)
+        self.assertIn("Kafka authentication requires TLS; use --transport tls", result.output)
         self.assertFalse(self.database.exists() and "p" in load_profiles(self.database).profiles)
 
     def test_empty_list_hints_only_on_a_terminal(self) -> None:
@@ -1590,12 +1590,12 @@ class TestInputErrors(unittest.TestCase):
         (
             (),
             ("add", "a", "--transport", "plaintext", "--auth", "scram-sha-512", "--username", "u"),
-            "Kafka authentication requires --transport tls",
+            "Kafka authentication requires TLS; use --transport tls or --auth none",
         ),
         (
             ("add", "a", "--auth", "scram-sha-512", "--username", "u"),
             ("edit", "a", "--transport", "plaintext"),
-            "authenticated profiles require TLS; add --auth none",
+            "Kafka authentication requires TLS; use --transport tls or --auth none",
         ),
         (
             ("add", "a", "--registry-url", "https://x", "--registry-auth", "token"),
@@ -1626,6 +1626,83 @@ class TestInputErrors(unittest.TestCase):
                 self.assertIn(message, result.output)
                 self.assertNotIn("schema", result.output)
                 self.assertEqual(before, after)
+
+
+class TestValidationBeforePrompts(unittest.TestCase):
+    """Cross-field rules fail before any secret prompt; valid edits still prompt (#52)."""
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.environment = {"KANTRIP_DATABASE": str(Path(directory.name) / "profiles.db")}
+        patcher = patch("kantrip.profiles.load_secret_store", return_value=_MemorySecretStore())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def invoke(self, *arguments: str, prompts: bool) -> Any:
+        def prompt(label: str) -> Secret:
+            if not prompts:
+                raise AssertionError(f"prompted for {label} before validation")
+            return Secret("synthetic-secret")
+
+        with patch("kantrip.cli_inputs.secret_prompt", side_effect=prompt):
+            return self.runner.invoke(cli, list(arguments), env=self.environment)
+
+    def test_broken_combinations_fail_before_prompting(self) -> None:
+        self.invoke("add", "plain", prompts=False)
+        self.invoke("add", "http", "--registry-url", "http://x:8081", prompts=False)
+        for arguments, message in (
+            (
+                (
+                    "add",
+                    "a",
+                    "--transport",
+                    "plaintext",
+                    "--auth",
+                    "scram-sha-512",
+                    "--username",
+                    "u",
+                ),
+                "Kafka authentication requires TLS",
+            ),
+            (
+                ("add", "a", "--registry-url", "http://x:8081", "--registry-auth", "token"),
+                "Registry authentication requires an https:// URL",
+            ),
+            (
+                ("add", "a", "--registry-provider", "apicurio")
+                + ("--registry-url", "https://x/apis/registry/v3", "--registry-auth", "token"),
+                "Apicurio does not support fixed bearer tokens",
+            ),
+            (
+                ("edit", "plain", "--auth", "scram-sha-512", "--username", "u"),
+                "Kafka authentication requires TLS",
+            ),
+            (
+                ("edit", "http", "--registry-auth", "basic", "--registry-username", "u"),
+                "Registry authentication requires an https:// URL",
+            ),
+        ):
+            with self.subTest(arguments):
+                result = self.invoke(*arguments, prompts=False)
+
+                self.assertEqual(2, result.exit_code, result.output)
+                self.assertIn(message, result.output)
+
+    def test_valid_edits_are_not_rejected_early(self) -> None:
+        self.invoke("add", "p", "--auth", "scram-sha-512", "--username", "u", prompts=True)
+        self.invoke("add", "r", "--registry-url", "http://x:8081", prompts=True)
+        for arguments in (
+            ("edit", "p", "--transport", "plaintext", "--auth", "none"),
+            ("edit", "p", "--transport", "tls", "--auth", "scram-sha-256", "--username", "v"),
+            ("edit", "r", "--registry-url", "https://x", "--registry-auth", "token"),
+            ("edit", "r", "--registry-url", "http://y:8081", "--registry-auth", "none"),
+        ):
+            with self.subTest(arguments):
+                result = self.invoke(*arguments, prompts=True)
+
+                self.assertEqual(0, result.exit_code, result.output)
 
 
 class TestDescribeCompleteness(unittest.TestCase):
