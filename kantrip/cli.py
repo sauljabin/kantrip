@@ -82,6 +82,18 @@ def _echo_committed_mutation(message: str) -> None:
         ) from error
 
 
+def _connection_summary(profile: object) -> str:
+    """Summarize a committed profile's Kafka connection for the success line."""
+    kafka = profile.get("kafka") if isinstance(profile, dict) else None
+    if not isinstance(kafka, dict):
+        return "connection unknown"
+    auth = kafka.get("auth")
+    auth_type = auth.get("type") if isinstance(auth, dict) else None
+    servers = ",".join(str(server) for server in kafka.get("bootstrapServers", ()))
+    authentication = "no authentication" if auth_type in (None, "none") else auth_type
+    return f"{servers}, {kafka.get('transport')}, {authentication}"
+
+
 def _configure_consoles(context: click.Context, *, no_color: bool) -> None:
     """Configure result and diagnostic consoles on the root context."""
     root_context = context.find_root()
@@ -175,7 +187,7 @@ def add_configured_profile(profile_name: str, **values: Any) -> None:
             bootstrap_servers=options.bootstrap_servers,
             description=options.description,
             labels=options.labels,
-            transport=options.transport,
+            transport=options.resolved_transport,
             ca_certificates=options.ca_file,
             auth=auth,
             registry_provider=options.registry_provider,
@@ -184,7 +196,8 @@ def add_configured_profile(profile_name: str, **values: Any) -> None:
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
-    _echo_committed_mutation(f"Added profile '{profile_name}' to {profiles.path}")
+    summary = _connection_summary(profiles.profiles.get(profile_name))
+    _echo_committed_mutation(f"Added profile '{profile_name}': {summary}")
 
 
 @cli.command("edit")
@@ -225,7 +238,8 @@ def edit_configured_profile(profile_name: str, **values: Any) -> None:
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
-    _echo_committed_mutation(f"Updated profile '{profile_name}' in {profiles.path}")
+    summary = _connection_summary(profiles.profiles.get(profile_name))
+    _echo_committed_mutation(f"Updated profile '{profile_name}': {summary}")
 
 
 @cli.command("remove")
@@ -243,18 +257,22 @@ def remove_configured_profile(profile_name: str, yes: bool) -> None:
         if not yes and not click.confirm(f"Remove profile '{profile_name}'?", default=False):
             click.echo("Removal canceled; profile was not changed.")
             return
-        profiles = remove_profile(
+        remove_profile(
             profile_name,
             expected_profile_id=str(profile["id"]),
             expected_revision=revision,
         )
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
-    _echo_committed_mutation(f"Removed profile '{profile_name}' from {profiles.path}")
+    _echo_committed_mutation(f"Removed profile '{profile_name}'")
 
 
 def _stdin_is_terminal() -> bool:
     return bool(sys.stdin and sys.stdin.isatty())
+
+
+def _stdout_is_terminal() -> bool:
+    return bool(sys.stdout and sys.stdout.isatty())
 
 
 @cli.command("list")
@@ -288,6 +306,8 @@ def list_profiles(context: cloup.Context, labels: dict[str, str], output_format:
     if output_format == "human":
         if selected:
             console_from_context(context).print(create_profile_table(selected))
+        elif not profiles and _stdout_is_terminal():
+            click.echo("No profiles yet. Add one with: kantrip add NAME", err=True)
         return
     _print_structured_observation(context, list_observation(selected), output_format)
 

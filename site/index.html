@@ -87,9 +87,9 @@
     <figure class="window demo" data-demo aria-label="Terminal demo">
       <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">kantrip demo</span></div>
       <div class="demo-stage">
-        <pre class="transcript" id="demo-transcript"><code><!-- demo-transcript:start --><span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip add prod -b kafka.example.com:9093 --transport tls --ca-file ./ca.pem --auth scram-sha-512 --username app</span>
+        <pre class="transcript" id="demo-transcript"><code><!-- demo-transcript:start --><span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip add prod -b kafka.example.com:9093 --ca-file ./ca.pem --auth scram-sha-512 --username app</span>
 <span class="ln out" data-wait="1400">Kafka password: </span>
-<span class="ln out">Added profile &#x27;prod&#x27; to /home/demo/.local/share/kantrip/profiles.db</span>
+<span class="ln out">Added profile &#x27;prod&#x27;: kafka.example.com:9093, tls, scram-sha-512</span>
 <span class="ln cmd" data-spinner="Checking profile &#x27;prod&#x27;"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip ping prod</span>
 <span class="ln out t-success">✅ Kafka transport: verified TLS; authentication: scram-sha-512 authenticated</span>
 <span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip exec prod -- kafka-topics --create --topic payments --partitions 1 --replication-factor 1</span>

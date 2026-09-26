@@ -135,125 +135,176 @@ def _text(flag: str, help: str, *, multiple: bool = False) -> OptionDecorator[An
 
 
 add_profile_options = _options(
-    _bootstrap_servers(
-        "Kafka broker; repeat or separate with commas for several.",
-        default=("localhost:9092",),
-        show_default=True,
+    cloup.option_group(
+        "Kafka connection",
+        _bootstrap_servers(
+            "Kafka broker; repeat or separate with commas for several.",
+            default=("localhost:9092",),
+            show_default=True,
+        ),
+        _choice(
+            "--transport",
+            _KAFKA_TRANSPORTS,
+            "Kafka transport security; defaults to tls when --ca-file, --auth, or a "
+            "client certificate is given, otherwise plaintext.",
+        ),
+        _ca_file("--ca-file", "Copy a PEM CA bundle for Kafka TLS verification."),
     ),
-    cloup.option("-d", "--description", help="Optional profile description."),
-    _labels("Add a label; repeat for multiple labels."),
-    _choice(
-        "--transport",
-        _KAFKA_TRANSPORTS,
-        "Kafka transport security.",
-        default="plaintext",
-        show_default=True,
+    cloup.option_group(
+        "Kafka authentication",
+        _choice(
+            "--auth",
+            _KAFKA_AUTH_TYPES,
+            "Kafka authentication mechanism.",
+            "auth_type",
+            default="none",
+            show_default=True,
+        ),
+        _text("--username", "Kafka SASL username."),
+        _pem_file("--client-certificate-file", "Copy a public PEM Kafka client certificate chain."),
+        _pem_file(
+            "--client-key-file", "Read a PEM Kafka client private key into the credential store."
+        ),
     ),
-    _ca_file("--ca-file", "Copy a PEM CA bundle for Kafka TLS verification."),
-    _choice(
-        "--auth",
-        _KAFKA_AUTH_TYPES,
-        "Kafka authentication mechanism.",
-        "auth_type",
-        default="none",
-        show_default=True,
+    cloup.option_group(
+        "Kafka OAuth",
+        _text("--oauth-token-url", "HTTPS Kafka OAuth token endpoint."),
+        _text("--oauth-client-id", "Kafka OAuth client identifier."),
+        _text("--oauth-scope", "Kafka OAuth scope; repeat as needed.", multiple=True),
+        _ca_file("--oauth-ca-file", "Copy a PEM CA bundle for the Kafka OAuth token endpoint."),
     ),
-    _text("--username", "Kafka SASL username."),
-    _pem_file("--client-certificate-file", "Copy a public PEM Kafka client certificate chain."),
-    _pem_file(
-        "--client-key-file", "Read a PEM Kafka client private key into the credential store."
+    cloup.option_group(
+        "Registry",
+        _choice(
+            "--registry-provider",
+            _REGISTRY_PROVIDERS,
+            "Registry provider; defaults to confluent when --registry-url is supplied.",
+        ),
+        _text("--registry-url", "Optional Registry URL without embedded credentials."),
+        _ca_file("--registry-ca-file", "Copy a PEM CA bundle for Registry TLS verification."),
     ),
-    _text("--oauth-token-url", "HTTPS Kafka OAuth token endpoint."),
-    _text("--oauth-client-id", "Kafka OAuth client identifier."),
-    _text("--oauth-scope", "Kafka OAuth scope; repeat as needed.", multiple=True),
-    _ca_file("--oauth-ca-file", "Copy a PEM CA bundle for the Kafka OAuth token endpoint."),
-    _choice(
-        "--registry-provider",
-        _REGISTRY_PROVIDERS,
-        "Registry provider; defaults to confluent when --registry-url is supplied.",
+    cloup.option_group(
+        "Registry authentication",
+        _choice(
+            "--registry-auth",
+            _REGISTRY_AUTH_TYPES,
+            "Registry authentication mechanism.",
+            default="none",
+            show_default=True,
+        ),
+        _text("--registry-username", "Registry Basic authentication username."),
+        _pem_file(
+            "--registry-client-certificate-file",
+            "Copy a public PEM Registry client certificate chain.",
+        ),
+        _pem_file(
+            "--registry-client-key-file",
+            "Read a PEM Registry client private key into the credential store.",
+        ),
     ),
-    _text("--registry-url", "Optional Registry URL without embedded credentials."),
-    _choice(
-        "--registry-auth",
-        _REGISTRY_AUTH_TYPES,
-        "Registry authentication mechanism.",
-        default="none",
-        show_default=True,
+    cloup.option_group(
+        "Registry OAuth",
+        _text("--registry-oauth-token-url", "HTTPS Registry OAuth token endpoint."),
+        _text("--registry-oauth-client-id", "Registry OAuth client identifier."),
+        _text("--registry-oauth-scope", "Registry OAuth scope; repeat as needed.", multiple=True),
+        _ca_file(
+            "--registry-oauth-ca-file",
+            "Copy a PEM CA bundle for the Registry OAuth token endpoint.",
+        ),
+        _text("--registry-oauth-logical-cluster", "Confluent OAuth logical cluster."),
+        _text("--registry-oauth-identity-pool-id", "Confluent OAuth identity pool ID."),
     ),
-    _text("--registry-username", "Registry Basic authentication username."),
-    _pem_file(
-        "--registry-client-certificate-file",
-        "Copy a public PEM Registry client certificate chain.",
+    cloup.option_group(
+        "Profile metadata",
+        cloup.option("-d", "--description", help="Optional profile description."),
+        _labels("Add a label; repeat for multiple labels."),
     ),
-    _pem_file(
-        "--registry-client-key-file",
-        "Read a PEM Registry client private key into the credential store.",
-    ),
-    _ca_file("--registry-ca-file", "Copy a PEM CA bundle for Registry TLS verification."),
-    _text("--registry-oauth-token-url", "HTTPS Registry OAuth token endpoint."),
-    _text("--registry-oauth-client-id", "Registry OAuth client identifier."),
-    _text("--registry-oauth-scope", "Registry OAuth scope; repeat as needed.", multiple=True),
-    _ca_file(
-        "--registry-oauth-ca-file", "Copy a PEM CA bundle for the Registry OAuth token endpoint."
-    ),
-    _text("--registry-oauth-logical-cluster", "Confluent OAuth logical cluster."),
-    _text("--registry-oauth-identity-pool-id", "Confluent OAuth identity pool ID."),
 )
 
 edit_profile_options = _options(
-    _bootstrap_servers("Replace the Kafka brokers; repeat or separate with commas."),
-    cloup.option("-d", "--description", help="Replace the profile description."),
-    _labels("Add or replace a label; repeat for multiple labels."),
-    cloup.option(
-        "--unset",
-        "unset_fields",
-        multiple=True,
-        metavar="FIELD",
-        callback=parse_unset_fields,
-        help=(
-            "Make an optional field absent, such as description, labels.KEY, "
-            "kafka.tls.ca or registry; repeat as needed."
+    cloup.option_group(
+        "Kafka connection",
+        _bootstrap_servers("Replace the Kafka brokers; repeat or separate with commas."),
+        _choice("--transport", _KAFKA_TRANSPORTS, "Replace Kafka transport security."),
+        _ca_file("--ca-file", "Replace the PEM CA bundle used for Kafka TLS verification."),
+    ),
+    cloup.option_group(
+        "Kafka authentication",
+        _choice(
+            "--auth", _KAFKA_AUTH_TYPES, "Replace the Kafka authentication mechanism.", "auth_type"
+        ),
+        _text("--username", "Replace the Kafka SASL username."),
+        _pem_file(
+            "--client-certificate-file", "Replace the public PEM Kafka client certificate chain."
+        ),
+        _pem_file(
+            "--client-key-file",
+            "Replace the PEM Kafka client private key in the credential store.",
         ),
     ),
-    _choice("--transport", _KAFKA_TRANSPORTS, "Replace Kafka transport security."),
-    _ca_file("--ca-file", "Replace the PEM CA bundle used for Kafka TLS verification."),
-    _choice(
-        "--auth", _KAFKA_AUTH_TYPES, "Replace the Kafka authentication mechanism.", "auth_type"
+    cloup.option_group(
+        "Kafka OAuth",
+        _text("--oauth-token-url", "Replace the Kafka OAuth token endpoint."),
+        _text("--oauth-client-id", "Replace the Kafka OAuth client identifier."),
+        _text("--oauth-scope", "Replace Kafka OAuth scopes.", multiple=True),
+        _ca_file(
+            "--oauth-ca-file", "Replace Kafka OAuth token-endpoint trust with a PEM CA bundle."
+        ),
     ),
-    _text("--username", "Replace the Kafka SASL username."),
-    _pem_file(
-        "--client-certificate-file", "Replace the public PEM Kafka client certificate chain."
+    cloup.option_group(
+        "Registry",
+        _choice("--registry-provider", _REGISTRY_PROVIDERS, "Replace the Registry provider."),
+        _text("--registry-url", "Add or replace the Registry URL."),
+        _ca_file("--registry-ca-file", "Replace Registry TLS trust with a PEM CA bundle."),
     ),
-    _pem_file(
-        "--client-key-file", "Replace the PEM Kafka client private key in the credential store."
+    cloup.option_group(
+        "Registry authentication",
+        _choice("--registry-auth", _REGISTRY_AUTH_TYPES, "Replace Registry authentication."),
+        _text("--registry-username", "Replace Registry Basic username."),
+        _pem_file(
+            "--registry-client-certificate-file", "Replace the Registry client certificate chain."
+        ),
+        _pem_file("--registry-client-key-file", "Replace the Registry client private key."),
     ),
-    _text("--oauth-token-url", "Replace the Kafka OAuth token endpoint."),
-    _text("--oauth-client-id", "Replace the Kafka OAuth client identifier."),
-    _text("--oauth-scope", "Replace Kafka OAuth scopes.", multiple=True),
-    _ca_file("--oauth-ca-file", "Replace Kafka OAuth token-endpoint trust with a PEM CA bundle."),
-    cloup.option(
-        "--replace-secret",
-        "replace_secrets",
-        multiple=True,
-        metavar="FIELD",
-        callback=parse_secret_fields,
-        help="Prompt again for one stored secret, such as kafka.auth.password; repeat as needed.",
+    cloup.option_group(
+        "Registry OAuth",
+        _text("--registry-oauth-token-url", "Replace Registry OAuth token endpoint."),
+        _text("--registry-oauth-client-id", "Replace Registry OAuth client identifier."),
+        _text("--registry-oauth-scope", "Replace Registry OAuth scopes.", multiple=True),
+        _ca_file("--registry-oauth-ca-file", "Replace Registry OAuth token-endpoint trust."),
+        _text("--registry-oauth-logical-cluster", "Replace OAuth logical cluster."),
+        _text("--registry-oauth-identity-pool-id", "Replace OAuth identity pool ID."),
     ),
-    _choice("--registry-provider", _REGISTRY_PROVIDERS, "Replace the Registry provider."),
-    _text("--registry-url", "Add or replace the Registry URL."),
-    _choice("--registry-auth", _REGISTRY_AUTH_TYPES, "Replace Registry authentication."),
-    _text("--registry-username", "Replace Registry Basic username."),
-    _pem_file(
-        "--registry-client-certificate-file", "Replace the Registry client certificate chain."
+    cloup.option_group(
+        "Profile metadata",
+        cloup.option("-d", "--description", help="Replace the profile description."),
+        _labels("Add or replace a label; repeat for multiple labels."),
     ),
-    _pem_file("--registry-client-key-file", "Replace the Registry client private key."),
-    _ca_file("--registry-ca-file", "Replace Registry TLS trust with a PEM CA bundle."),
-    _text("--registry-oauth-token-url", "Replace Registry OAuth token endpoint."),
-    _text("--registry-oauth-client-id", "Replace Registry OAuth client identifier."),
-    _text("--registry-oauth-scope", "Replace Registry OAuth scopes.", multiple=True),
-    _ca_file("--registry-oauth-ca-file", "Replace Registry OAuth token-endpoint trust."),
-    _text("--registry-oauth-logical-cluster", "Replace OAuth logical cluster."),
-    _text("--registry-oauth-identity-pool-id", "Replace OAuth identity pool ID."),
+    cloup.option_group(
+        "Removal and rotation",
+        cloup.option(
+            "--unset",
+            "unset_fields",
+            multiple=True,
+            metavar="FIELD",
+            callback=parse_unset_fields,
+            help=(
+                "Make an optional field absent, such as description, labels.KEY, "
+                "kafka.tls.ca or registry; repeat as needed."
+            ),
+        ),
+        cloup.option(
+            "--replace-secret",
+            "replace_secrets",
+            multiple=True,
+            metavar="FIELD",
+            callback=parse_secret_fields,
+            help=(
+                "Prompt again for one stored secret, such as kafka.auth.password; "
+                "repeat as needed."
+            ),
+        ),
+    ),
 )
 
 __all__ = ["add_profile_options", "edit_profile_options", "parse_labels"]

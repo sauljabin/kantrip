@@ -8,14 +8,14 @@
           "style": "secondary"
         }
       ],
-      "command": "kantrip add prod -b kafka.example.com:9093 --transport tls --ca-file ./ca.pem --auth scram-sha-512 --username app",
+      "command": "kantrip add prod -b kafka.example.com:9093 --ca-file ./ca.pem --auth scram-sha-512 --username app",
       "output": [
         {
           "text": "Kafka password: ",
           "wait": 1400
         },
         {
-          "text": "Added profile 'prod' to /home/demo/.local/share/kantrip/profiles.db"
+          "text": "Added profile 'prod': kafka.example.com:9093, tls, scram-sha-512"
         }
       ]
     },

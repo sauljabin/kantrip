@@ -116,7 +116,7 @@ class AddOptions:
     bootstrap_servers: tuple[str, ...]
     description: str | None
     labels: dict[str, str]
-    transport: str
+    transport: str | None
     ca_file: str | None
     auth_type: str
     username: str | None
@@ -139,6 +139,19 @@ class AddOptions:
     registry_oauth_ca_file: str | None
     registry_oauth_logical_cluster: str | None
     registry_oauth_identity_pool_id: str | None
+
+    @property
+    def resolved_transport(self) -> str:
+        """Return `--transport`, or `tls` when a Kafka security option implies it."""
+        if self.transport is not None:
+            return self.transport
+        secured = (
+            self.ca_file is not None
+            or self.auth_type != "none"
+            or self.client_certificate_file is not None
+            or self.client_key_file is not None
+        )
+        return "tls" if secured else "plaintext"
 
 
 @dataclass(frozen=True)

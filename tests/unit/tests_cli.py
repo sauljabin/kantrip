@@ -1401,6 +1401,114 @@ class TestCliOptionContract(unittest.TestCase):
         self.assertEqual(2, load_profiles(self.database).revision("p"))
 
 
+class TestCliResults(unittest.TestCase):
+    """Grouped help, TLS inference on `add`, success lines, and the `list` hint (#52)."""
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.database = Path(directory.name) / "profiles.db"
+        self.environment = {"KANTRIP_DATABASE": str(self.database)}
+        for target, value in (
+            ("kantrip.profiles.load_secret_store", {"return_value": _MemorySecretStore()}),
+            ("kantrip.cli_inputs.secret_prompt", {"return_value": Secret("synthetic-secret")}),
+        ):
+            patcher = patch(target, **value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def invoke(self, *arguments: str) -> Any:
+        return self.runner.invoke(cli, list(arguments), env=self.environment)
+
+    def test_help_groups_options_by_connection(self) -> None:
+        groups = (
+            "Kafka connection:",
+            "Kafka authentication:",
+            "Kafka OAuth:",
+            "Registry:",
+            "Registry authentication:",
+            "Registry OAuth:",
+            "Profile metadata:",
+        )
+        for command, extra in (("add", ()), ("edit", ("Removal and rotation:",))):
+            with self.subTest(command):
+                output = self.invoke(command, "--help").output
+                positions = [output.index(title) for title in (*groups, *extra)]
+
+                self.assertEqual(sorted(positions), positions)
+
+    def test_success_lines_state_the_result_without_the_database_path(self) -> None:
+        added = self.invoke(
+            "add", "prod", "-b", "k1:9093,k2:9093", "--auth", "scram-sha-512", "--username", "u"
+        )
+        edited = self.invoke("edit", "prod", "-b", "k3:9093")
+        local = self.invoke("add", "local")
+        removed = self.invoke("remove", "prod", "--yes")
+
+        self.assertEqual(
+            "Added profile 'prod': k1:9093,k2:9093, tls, scram-sha-512\n", added.stdout
+        )
+        self.assertEqual("Updated profile 'prod': k3:9093, tls, scram-sha-512\n", edited.stdout)
+        self.assertEqual(
+            "Added profile 'local': localhost:9092, plaintext, no authentication\n", local.stdout
+        )
+        self.assertEqual("Removed profile 'prod'\n", removed.stdout)
+        for result in (added, edited, local, removed):
+            self.assertNotIn(str(self.database.parent), result.output)
+
+    def test_add_infers_tls_from_security_options(self) -> None:
+        pki = synthetic_pki()
+        with temporary_pki_files(
+            ca=pki.ca, certificate=pki.client_certificate, key=pki.client_key
+        ) as paths:
+            cases = {
+                "plain": ((), "plaintext"),
+                "ca": (("--ca-file", str(paths["ca"])), "tls"),
+                "scram": (("--auth", "scram-sha-256", "--username", "u"), "tls"),
+                "mtls": (
+                    ("--auth", "mtls")
+                    + ("--client-certificate-file", str(paths["certificate"]))
+                    + ("--client-key-file", str(paths["key"])),
+                    "tls",
+                ),
+                "explicit": (("--transport", "tls"), "tls"),
+            }
+            results = {
+                name: self.invoke("add", name, *arguments) for name, (arguments, _) in cases.items()
+            }
+        profiles = load_profiles(self.database)
+
+        for name, (_, transport) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(0, results[name].exit_code, results[name].output)
+                self.assertEqual(transport, profiles.profile(name)["kafka"]["transport"])
+
+    def test_explicit_plaintext_with_authentication_still_fails(self) -> None:
+        result = self.invoke(
+            "add", "p", "--transport", "plaintext", "--auth", "scram-sha-512", "--username", "u"
+        )
+
+        self.assertNotEqual(0, result.exit_code, result.output)
+        self.assertIn("requires --transport tls", result.output)
+        self.assertFalse(self.database.exists() and "p" in load_profiles(self.database).profiles)
+
+    def test_empty_list_hints_only_on_a_terminal(self) -> None:
+        with patch("kantrip.cli._stdout_is_terminal", return_value=True):
+            empty_terminal = self.invoke("list")
+        empty_pipe = self.invoke("list")
+        self.invoke("add", "local")
+        with patch("kantrip.cli._stdout_is_terminal", return_value=True):
+            no_match = self.invoke("list", "-l", "owner=nobody")
+
+        hint = "No profiles yet. Add one with: kantrip add NAME\n"
+        self.assertEqual(0, empty_terminal.exit_code)
+        self.assertEqual("", empty_terminal.stdout)
+        self.assertEqual(hint, empty_terminal.stderr)
+        self.assertEqual("", empty_pipe.stdout + empty_pipe.stderr)
+        self.assertEqual("", no_match.stdout + no_match.stderr)
+
+
 class TestDescribeCompleteness(unittest.TestCase):
     """`describe` shows every public field and never touches the secret store."""
 

@@ -143,6 +143,20 @@ kantrip add production \
   --transport tls
 ```
 
+`add` selects TLS on its own when `--ca-file`, `--auth`, or a client
+certificate is given, so the examples below omit `--transport tls`. An explicit
+`--transport plaintext` with any of them still fails: credentials never travel
+over plaintext. Without them, `add` defaults to plaintext.
+
+On success, `add` and `edit` print the resulting connection, and `remove`
+confirms the removal:
+
+```text
+Added profile 'production': kafka.example.com:9093, tls, no authentication
+Updated profile 'production': kafka-2.example.com:9093, tls, scram-sha-512
+Removed profile 'production'
+```
+
 For a private CA, pass a PEM certificate bundle. Kantrip validates the bundle,
 copies the public certificates into the profile, and later materializes them
 only in the private session directory:
@@ -150,7 +164,6 @@ only in the private session directory:
 ```bash
 kantrip add production-private-ca \
   --bootstrap-server kafka.internal.example:9093 \
-  --transport tls \
   --ca-file ./cluster-ca.pem
 ```
 
@@ -169,7 +182,6 @@ profile document or command arguments:
 ```bash
 kantrip add production-scram \
   --bootstrap-server kafka.example.com:9093 \
-  --transport tls \
   --auth scram-sha-512 \
   --username application
 ```
@@ -189,7 +201,6 @@ credential store:
 ```bash
 kantrip add production-mtls \
   --bootstrap-server kafka.example.com:9093 \
-  --transport tls \
   --auth mtls \
   --client-certificate-file ./client.crt \
   --client-key-file ./client.key
@@ -204,7 +215,6 @@ trust independent:
 ```bash
 kantrip add production-oauth \
   --bootstrap-server kafka.example.com:9093 \
-  --transport tls \
   --ca-file ./kafka-ca.pem \
   --auth oauth \
   --oauth-token-url https://identity.example.com/oauth/token \
@@ -320,7 +330,8 @@ still return normally. A signal or `SIGKILL` can terminate the process before a
 CLI status is emitted; inspect the profile and `doctor` before retrying. Kantrip
 does not promise exactly-once command invocation across process termination.
 
-`kantrip list` succeeds without rows when no profiles exist. Kantrip validates
+`kantrip list` succeeds without rows when no profiles exist; on a terminal it
+also prints a hint to stderr. Kantrip validates
 every profile whenever it reads or updates the database.
 
 Human list output includes labels. Filter by an exact pair with `-l` or
