@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Redeploy with the new version once the Release workflow publishes it. A
+  # `release` trigger would not fire, because that workflow creates releases with
+  # GITHUB_TOKEN, and would run on the tag, which github-pages refuses;
+  # workflow_run runs on main.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +27,7 @@ env:
 jobs:
   validate:
     name: Validate site
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,8 +40,12 @@ jobs:
         with:
           uv-version: ${{ env.UV_VERSION }}
           python-version: "3.14"
+      - name: Write the current release into the page
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run --locked python -m scripts.website release
       # Also catches CLI changes outside site/ that break the demo commands.
-      - name: Check links, assets, transcript, and demo commands
+      - name: Check links, assets, transcript, release, and demo commands
         run: uv run --locked python -m scripts.website check
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
