@@ -319,7 +319,8 @@ Pass `-y/--yes` to skip the confirmation. Without a terminal, `remove` fails
 unless `--yes` is given.
 
 Profile mutations return status 0 when the change and cleanup completed, 1 when
-the requested change definitely did not commit, 2 for usage errors, 3 when the
+the requested change ran but definitely did not commit, 2 for invalid options or
+values (nothing is changed, and the message says what to fix), 3 when the
 change committed but cleanup or post-commit verification remains, and 4 when
 the commit outcome cannot be established. For 3, inspect `describe` and run
 `doctor --repair`; do not repeat the mutation blindly. For 4, stop automatic
@@ -354,6 +355,11 @@ kantrip describe local
 kantrip describe local --output yaml
 kantrip exec local -- kcat -L
 ```
+
+`kantrip exec PROFILE COMMAND…` passes everything after COMMAND to it unchanged,
+so `kantrip exec local kafka-topics --help` shows the tool's own help. The `--`
+before COMMAND is optional; the examples keep it for clarity. Kantrip's own
+options, such as `--no-color`, go before PROFILE.
 
 `describe` presents Rich sections by default. JSON and YAML are safe
 machine-readable observations rather than profile export documents. They show
