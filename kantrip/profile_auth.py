@@ -14,7 +14,11 @@ from kantrip.kafka import (
     validate_sasl_credential,
 )
 from kantrip.oauth import OAuthProfileError, validate_oauth_endpoint, validate_oauth_identity
-from kantrip.profile_storage import ProfileInputError, ProfileStoreError
+from kantrip.profile_storage import (
+    ProfileInputError,
+    ProfileStoreError,
+    connection_rule_violation,
+)
 from kantrip.secret_store import SecretStoreError, parse_secret_reference
 from kantrip.secret_value import Secret
 
@@ -757,8 +761,9 @@ def profile_secret_references(profile: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def validate_auth_transport(auth_type: str, transport: str) -> None:
-    if auth_type != "none" and transport != "tls":
-        raise ProfileInputError("Kafka authentication requires --transport tls")
+    violation = connection_rule_violation(transport=transport, kafka_auth=auth_type)
+    if violation is not None:
+        raise ProfileInputError(violation)
 
 
 def validated_ca_bundle(contents: str) -> str:

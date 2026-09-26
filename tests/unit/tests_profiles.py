@@ -1082,7 +1082,7 @@ class TestProfiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profiles.db"
             store = _RecordingSecretStore()
-            with self.assertRaisesRegex(ProfileStoreError, "requires --transport tls"):
+            with self.assertRaisesRegex(ProfileStoreError, "Kafka authentication requires TLS"):
                 add_profile(
                     "invalid",
                     path,
@@ -1576,12 +1576,12 @@ class TestProfileValidationMessages(unittest.TestCase):
         profile = self.profile(auth={"type": "scram-sha-512", "username": "u"})
 
         with self.assertRaisesRegex(
-            ProfileInputError, "authenticated profiles require TLS"
+            ProfileInputError, "Kafka authentication requires TLS"
         ) as raised:
             validate_profile(profile)
         self.assertEqual(2, raised.exception.exit_code)
         with self.assertRaisesRegex(
-            ProfileStoreError, "stored profile 'p' is invalid: authenticated profiles require TLS"
+            ProfileStoreError, "stored profile 'p' is invalid: Kafka authentication requires TLS"
         ):
             validate_profile(profile, name="p")
 

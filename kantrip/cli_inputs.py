@@ -13,6 +13,7 @@ import click
 
 from kantrip.kafka import KafkaProfileError, read_client_certificate, read_private_key
 from kantrip.profile_auth import KafkaAuthInput, RegistryAuthInput
+from kantrip.profile_storage import connection_rule_violation
 from kantrip.secret_value import Secret
 
 PASSWORD_AUTH_TYPES = frozenset({"plain", "scram-sha-256", "scram-sha-512"})
@@ -248,6 +249,44 @@ def parse_secret_fields(
             valid = ", ".join(SECRET_FIELDS)
             raise click.BadParameter(f"unknown field '{value}'; valid fields: {valid}")
     return tuple(SECRET_FIELDS[value] for value in values)
+
+
+def add_rule_violation(options: AddOptions) -> str | None:
+    """Check cross-field connection rules on `add` values before any secret prompt."""
+    return connection_rule_violation(
+        transport=options.resolved_transport,
+        kafka_auth=options.auth_type,
+        registry_provider=options.registry_provider or "confluent",
+        registry_url=options.registry_url,
+        registry_auth=options.registry_auth,
+        registry_tls=options.registry_ca_file is not None
+        or options.registry_client_certificate_file is not None,
+    )
+
+
+def edit_rule_violation(options: EditOptions, current: Mapping[str, Any]) -> str | None:
+    """Check cross-field rules on `edit` values merged with the stored profile.
+
+    Only fields the rules read are merged, and stored TLS material is ignored,
+    so this never rejects an edit the profile layer would accept; anything it
+    misses is still rejected there, after the prompts.
+    """
+    kafka = current.get("kafka")
+    kafka = kafka if isinstance(kafka, Mapping) else {}
+    kafka_auth = kafka.get("auth")
+    registry = None if options.unsets("registry") else current.get("registry")
+    stored_url, stored_auth, _ = _stored_registry(registry)
+    stored_provider = registry.get("provider") if isinstance(registry, dict) else None
+    return connection_rule_violation(
+        transport=options.transport or kafka.get("transport"),
+        kafka_auth=options.auth_type
+        or (kafka_auth.get("type") if isinstance(kafka_auth, Mapping) else None),
+        registry_provider=options.registry_provider or stored_provider or "confluent",
+        registry_url=options.registry_url or stored_url,
+        registry_auth=options.registry_auth or stored_auth.get("type", "none"),
+        registry_tls=options.registry_ca_file is not None
+        or options.registry_client_certificate_file is not None,
+    )
 
 
 def add_authentication(options: AddOptions) -> tuple[KafkaAuthInput, RegistryAuthInput | None]:
@@ -823,8 +862,10 @@ __all__ = [
     "AddOptions",
     "EditOptions",
     "add_authentication",
+    "add_rule_violation",
     "edit_kafka_authentication",
     "edit_registry_authentication",
+    "edit_rule_violation",
     "kafka_auth_input",
     "parse_secret_fields",
     "parse_unset_fields",
