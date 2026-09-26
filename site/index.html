@@ -77,7 +77,8 @@
 
   <section id="demo" class="container section" aria-labelledby="demo-title">
     <h2 id="demo-title">A session, start to finish</h2>
-    <p>Add a SCRAM profile over verified TLS, check it, and hand it to kcat and the Kafka CLIs.
+    <p>Add a SCRAM profile over verified TLS, check it, create a topic with the Kafka CLIs,
+      and list it from an interactive session.
       The password prompt shows nothing, and the secret never reaches the profile, the
       command line, or the output. Inside the session, your own prompt can
       <a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md#displaying-the-active-profile-in-your-prompt">show the active profile</a>.</p>
@@ -89,21 +90,14 @@
 <span class="ln out">Added profile &#x27;prod&#x27; to /home/demo/.local/share/kantrip/profiles.db</span>
 <span class="ln cmd" data-spinner="Checking profile &#x27;prod&#x27;"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip ping prod</span>
 <span class="ln out t-success">✅ Kafka transport: verified TLS; authentication: scram-sha-512 authenticated</span>
-<span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip exec prod -- kcat -L</span>
-<span class="ln out">% Reading configuration from file /run/user/1000/kantrip/sessions/session-5f0c2a9d4b7e41c8a3d6e9f1b2c4a7d0/kcat.conf</span>
-<span class="ln out">Metadata for all topics (from broker 0: sasl_ssl://kafka.example.com:9093/0):</span>
-<span class="ln out"> 1 brokers:</span>
-<span class="ln out">  broker 0 at kafka.example.com:9093 (controller)</span>
-<span class="ln out"> 2 topics:</span>
-<span class="ln out">  topic &quot;orders&quot; with 1 partitions:</span>
-<span class="ln out">    partition 0, leader 0, replicas: 0, isrs: 0</span>
-<span class="ln out">  topic &quot;payments&quot; with 1 partitions:</span>
-<span class="ln out">    partition 0, leader 0, replicas: 0, isrs: 0</span>
+<span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip exec prod -- kafka-topics --create --topic payments --partitions 1 --replication-factor 1</span>
+<span class="ln out">Created topic payments.</span>
 <span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span>kantrip exec prod</span>
 <span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> </span><span class="t-secondary">prod ❯ </span></span>kafka-topics --list</span>
 <span class="ln out">orders</span>
 <span class="ln out">payments</span>
-<span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> </span><span class="t-secondary">prod ❯ </span></span>exit</span><!-- demo-transcript:end --></code></pre>
+<span class="ln cmd"><span class="t-prompt"><span class="t-accent"><svg class="glyph" aria-hidden="true" focusable="false"><use href="#kafka"/></svg> </span><span class="t-secondary">prod ❯ </span></span>exit</span>
+<span class="ln cmd"><span class="t-prompt"><span class="t-secondary">❯ </span></span></span><!-- demo-transcript:end --></code></pre>
       </div>
     </figure>
     <div class="demo-controls" hidden>
