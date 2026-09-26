@@ -209,17 +209,17 @@ def edit_configured_profile(profile_name: str, **values: Any) -> None:
             profile_name,
             bootstrap_servers=options.bootstrap_servers,
             description=options.description,
-            clear_description=options.clear_description,
+            clear_description=options.unsets("description"),
             labels=options.labels,
-            remove_labels=options.remove_labels,
+            remove_labels=options.removed_labels,
             transport=options.transport,
             ca_certificates=options.ca_file,
-            default_trust=options.default_trust,
+            default_trust=options.unsets("kafka.tls.ca"),
             auth=auth,
             registry_provider=options.registry_provider,
             registry_url=options.registry_url,
             registry_auth=registry_auth,
-            remove_registry=options.remove_registry,
+            remove_registry=options.unsets("registry"),
             expected_profile_id=str(current_profile["id"]),
             expected_revision=expected_revision,
         )
@@ -231,14 +231,16 @@ def edit_configured_profile(profile_name: str, **values: Any) -> None:
 @cli.command("remove")
 @local_no_color
 @cloup.argument("profile_name", metavar="PROFILE")
-@cloup.option("--force", is_flag=True, help="Remove without an interactive confirmation.")
-def remove_configured_profile(profile_name: str, force: bool) -> None:
+@cloup.option("-y", "--yes", is_flag=True, help="Remove without asking for confirmation.")
+def remove_configured_profile(profile_name: str, yes: bool) -> None:
     """Remove a profile."""
     try:
         current = load_profiles(missing_ok=True)
         profile = current.profile(profile_name)
         revision = current.revision(profile_name)
-        if not force and not click.confirm(f"Remove profile '{profile_name}'?", default=False):
+        if not yes and not _stdin_is_terminal():
+            raise click.UsageError("confirmation requires a terminal; pass --yes")
+        if not yes and not click.confirm(f"Remove profile '{profile_name}'?", default=False):
             click.echo("Removal canceled; profile was not changed.")
             return
         profiles = remove_profile(
@@ -249,6 +251,10 @@ def remove_configured_profile(profile_name: str, force: bool) -> None:
     except ProfileStoreError as error:
         raise _profile_click_exception(error) from error
     _echo_committed_mutation(f"Removed profile '{profile_name}' from {profiles.path}")
+
+
+def _stdin_is_terminal() -> bool:
+    return bool(sys.stdin and sys.stdin.isatty())
 
 
 @cli.command("list")

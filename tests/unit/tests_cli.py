@@ -17,9 +17,11 @@ from click.testing import CliRunner
 
 from kantrip import APP_VERSION
 from kantrip.cli import cli
+from kantrip.cli_inputs import SECRET_FIELDS
 from kantrip.console import create_console
 from kantrip.maintenance import RepairAction, RepairReport
 from kantrip.ping import PingError, PingResult, RegistryPingResult, ping_profile
+from kantrip.profile_output import _SECRET_FIELDS as DESCRIBED_SECRET_FIELDS
 from kantrip.profile_storage import ProfileStoreError, load_profiles
 from kantrip.profiles import add_profile
 from kantrip.secret_store import SecretNotFoundError
@@ -140,7 +142,7 @@ class TestCli(unittest.TestCase):
             )
             profile = load_profiles(database_path).profile("development")
             listed = self.runner.invoke(cli, ["list"], env=environment)
-            removed = self.runner.invoke(cli, ["remove", "development", "--force"], env=environment)
+            removed = self.runner.invoke(cli, ["remove", "development", "--yes"], env=environment)
             empty = self.runner.invoke(cli, ["list"], env=environment)
 
         self.assertEqual(0, added.exit_code, added.output)
@@ -175,7 +177,7 @@ class TestCli(unittest.TestCase):
                     [
                         "add",
                         "production",
-                        "--bootstrap-servers",
+                        "--bootstrap-server",
                         "broker.example.com:9093",
                         "--transport",
                         "tls",
@@ -187,7 +189,7 @@ class TestCli(unittest.TestCase):
             secure = load_profiles(database_path).profile("production")
             default_trust = self.runner.invoke(
                 cli,
-                ["edit", "production", "--default-trust"],
+                ["edit", "production", "--unset", "kafka.tls.ca"],
                 env=environment,
             )
             default_profile = load_profiles(database_path).profile("production")
@@ -219,7 +221,7 @@ class TestCli(unittest.TestCase):
                 [
                     "edit",
                     "local",
-                    "--bootstrap-servers",
+                    "--bootstrap-server",
                     "broker-1.example.com:9092,broker-2.example.com:9092",
                     "--description",
                     "Shared development",
@@ -237,10 +239,12 @@ class TestCli(unittest.TestCase):
                 [
                     "edit",
                     "local",
-                    "--clear-description",
-                    "--remove-label",
-                    "environment",
-                    "--remove-registry",
+                    "--unset",
+                    "description",
+                    "--unset",
+                    "labels.environment",
+                    "--unset",
+                    "registry",
                 ],
                 env=environment,
             )
@@ -401,7 +405,7 @@ class TestCli(unittest.TestCase):
                 first = load_profiles(database_path).profile("secure")["kafka"]["auth"]
                 edited = self.runner.invoke(
                     cli,
-                    ["edit", "secure", "--replace-secret", "kafka/password"],
+                    ["edit", "secure", "--replace-secret", "kafka.auth.password"],
                     env=environment,
                 )
                 second = load_profiles(database_path).profile("secure")["kafka"]["auth"]
@@ -460,11 +464,16 @@ class TestCli(unittest.TestCase):
                     [
                         "edit",
                         "secure-registry",
-                        "--registry-default-trust",
-                        "--clear-registry-oauth-scopes",
-                        "--registry-oauth-default-trust",
-                        "--clear-registry-oauth-logical-cluster",
-                        "--clear-registry-oauth-identity-pool-id",
+                        "--unset",
+                        "registry.tls.ca",
+                        "--unset",
+                        "registry.auth.oauth.scopes",
+                        "--unset",
+                        "registry.auth.oauth.ca",
+                        "--unset",
+                        "registry.auth.oauth.logical-cluster",
+                        "--unset",
+                        "registry.auth.oauth.identity-pool-id",
                     ],
                     env=environment,
                 )
@@ -506,12 +515,13 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             _add_test_profile(database_path)
-            result = self.runner.invoke(
-                cli,
-                ["remove", "local"],
-                input="n\n",
-                env={"KANTRIP_DATABASE": str(database_path)},
-            )
+            with patch("kantrip.cli._stdin_is_terminal", return_value=True):
+                result = self.runner.invoke(
+                    cli,
+                    ["remove", "local"],
+                    input="n\n",
+                    env={"KANTRIP_DATABASE": str(database_path)},
+                )
 
             profile = load_profiles(database_path).profile("local")
 
@@ -524,8 +534,24 @@ class TestCli(unittest.TestCase):
             cli, ["add", "invalid", "-b", "localhost:9092,"], env={"KANTRIP_DATABASE": "x"}
         )
 
-        self.assertNotEqual(0, result.exit_code)
-        self.assertIn("comma-separated list of host:port addresses", result.output)
+        self.assertEqual(2, result.exit_code)
+        self.assertIn("each broker must be a non-empty host:port address", result.output)
+
+    def test_remove_without_a_terminal_requires_yes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _add_test_profile(database_path)
+            environment = {"KANTRIP_DATABASE": str(database_path)}
+            refused = self.runner.invoke(cli, ["remove", "local"], input="y\n", env=environment)
+            retained = tuple(load_profiles(database_path).profiles)
+            removed = self.runner.invoke(cli, ["remove", "local", "-y"], env=environment)
+            remaining = tuple(load_profiles(database_path).profiles)
+
+        self.assertEqual(2, refused.exit_code, refused.output)
+        self.assertIn("confirmation requires a terminal; pass --yes", refused.output)
+        self.assertEqual(("local",), retained)
+        self.assertEqual(0, removed.exit_code, removed.output)
+        self.assertEqual((), remaining)
 
     def test_mutation_errors_preserve_committed_and_unknown_exit_statuses(self) -> None:
         for exit_code in (3, 4):
@@ -1227,6 +1253,152 @@ class TestEditRegistryAuthentication(unittest.TestCase):
     def _invoke(self, arguments: list[str], environment: dict[str, str]) -> Any:
         with patch("kantrip.cli_inputs.secret_prompt", return_value=Secret("synthetic-secret")):
             return self.runner.invoke(cli, arguments, env=environment)
+
+
+class TestCliOptionContract(unittest.TestCase):
+    """The v0.1 option names: -b, --unset, --replace-secret, and remove --yes (#52)."""
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.database = Path(directory.name) / "profiles.db"
+        self.environment = {"KANTRIP_DATABASE": str(self.database)}
+        self.store = _MemorySecretStore()
+        for target, value in (
+            ("kantrip.profiles.load_secret_store", {"return_value": self.store}),
+            ("kantrip.cli_inputs.secret_prompt", {"return_value": Secret("synthetic-secret")}),
+        ):
+            patcher = patch(target, **value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def invoke(self, *arguments: str) -> Any:
+        return self.runner.invoke(cli, list(arguments), env=self.environment)
+
+    def test_bootstrap_server_repeats_and_comma_lists_combine_in_order(self) -> None:
+        added = self.invoke("add", "p", "-b", "k1:9092", "--bootstrap-server", "k2:9092,k3:9092")
+        stored = load_profiles(self.database).profile("p")["kafka"]["bootstrapServers"]
+        edited = self.invoke("edit", "p", "-b", "k4:9092", "-b", "k5:9092")
+        replaced = load_profiles(self.database).profile("p")["kafka"]["bootstrapServers"]
+
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual(["k1:9092", "k2:9092", "k3:9092"], stored)
+        self.assertEqual(0, edited.exit_code, edited.output)
+        self.assertEqual(["k4:9092", "k5:9092"], replaced)
+
+    def test_bootstrap_server_rejects_duplicates(self) -> None:
+        for arguments in (("-b", "k1:9092", "-b", "k1:9092"), ("-b", "k1:9092,k1:9092")):
+            with self.subTest(arguments):
+                result = self.invoke("add", "p", *arguments)
+
+                self.assertEqual(2, result.exit_code, result.output)
+                self.assertIn("broker 'k1:9092' was supplied more than once", result.output)
+        self.assertFalse(self.database.exists())
+
+    def test_removed_flags_are_unknown_options(self) -> None:
+        self.invoke("add", "p")
+        for command in (
+            ("add", "q", "--bootstrap-servers", "k1:9092"),
+            ("edit", "p", "--clear-description"),
+            ("edit", "p", "--remove-label", "owner"),
+            ("edit", "p", "--remove-registry"),
+            ("edit", "p", "--default-trust"),
+            ("edit", "p", "--clear-oauth-scopes"),
+            ("edit", "p", "--oauth-default-trust"),
+            ("edit", "p", "--registry-default-trust"),
+            ("edit", "p", "--clear-registry-oauth-scopes"),
+            ("edit", "p", "--registry-oauth-default-trust"),
+            ("edit", "p", "--clear-registry-oauth-logical-cluster"),
+            ("edit", "p", "--clear-registry-oauth-identity-pool-id"),
+            ("remove", "p", "--force"),
+        ):
+            with self.subTest(command):
+                result = self.invoke(*command)
+
+                self.assertEqual(2, result.exit_code, result.output)
+                self.assertIn("No such option", result.output)
+
+    def test_unset_rejects_unknown_and_repeated_fields(self) -> None:
+        self.invoke("add", "p")
+        unknown = self.invoke("edit", "p", "--unset", "kafka.bootstrap-servers")
+        empty_label = self.invoke("edit", "p", "--unset", "labels.")
+        repeated = self.invoke("edit", "p", "--unset", "description", "--unset", "description")
+
+        self.assertEqual(2, unknown.exit_code, unknown.output)
+        self.assertIn("unknown field 'kafka.bootstrap-servers'; valid fields:", unknown.output)
+        self.assertIn("labels.KEY", unknown.output)
+        self.assertEqual(2, empty_label.exit_code, empty_label.output)
+        self.assertEqual(2, repeated.exit_code, repeated.output)
+        self.assertIn("each field may be named only once", repeated.output)
+
+    def test_unset_cannot_be_combined_with_setting_the_same_field(self) -> None:
+        self.invoke("add", "p", "-l", "owner=platform")
+        for arguments, message in (
+            (
+                ("--unset", "description", "-d", "new"),
+                "--unset description cannot be combined with --description",
+            ),
+            (
+                ("--unset", "labels.owner", "-l", "owner=data"),
+                "--unset labels.owner cannot be combined with --label owner=VALUE",
+            ),
+        ):
+            with self.subTest(arguments):
+                result = self.invoke("edit", "p", *arguments)
+
+                self.assertEqual(2, result.exit_code, result.output)
+                self.assertIn(message, result.output)
+        self.assertEqual(1, load_profiles(self.database).revision("p"))
+
+    def test_unset_kafka_oauth_scopes_and_token_trust(self) -> None:
+        with temporary_pki_files(ca=synthetic_pki().ca) as paths:
+            added = self.invoke(
+                "add",
+                "p",
+                "--transport",
+                "tls",
+                "--auth",
+                "oauth",
+                "--oauth-token-url",
+                "https://idp.invalid/token",
+                "--oauth-client-id",
+                "client",
+                "--oauth-scope",
+                "kafka.read",
+                "--oauth-ca-file",
+                str(paths["ca"]),
+            )
+        before = load_profiles(self.database).profile("p")["kafka"]["auth"]
+        edited = self.invoke(
+            "edit", "p", "--unset", "kafka.auth.oauth.scopes", "--unset", "kafka.auth.oauth.ca"
+        )
+        after = load_profiles(self.database).profile("p")["kafka"]["auth"]
+
+        self.assertEqual(0, added.exit_code, added.output)
+        self.assertEqual(["kafka.read"], before["scopes"])
+        self.assertIn("caCertificates", before)
+        self.assertEqual(0, edited.exit_code, edited.output)
+        self.assertNotIn("caCertificates", after)
+        self.assertFalse(after.get("scopes"))
+        self.assertEqual(before["clientSecretRef"], after["clientSecretRef"])
+
+    def test_replace_secret_uses_the_names_describe_prints(self) -> None:
+        described = {
+            f"{scope}.auth.{field}"
+            for scope in ("kafka", "registry")
+            for _, field in DESCRIBED_SECRET_FIELDS
+        }
+
+        self.assertLessEqual(set(SECRET_FIELDS), described)
+        self.invoke("add", "p", "--transport", "tls", "--auth", "scram-sha-512", "--username", "u")
+        old_name = self.invoke("edit", "p", "--replace-secret", "kafka/password")
+        new_name = self.invoke("edit", "p", "--replace-secret", "kafka.auth.password")
+
+        self.assertEqual(2, old_name.exit_code, old_name.output)
+        self.assertIn("unknown field 'kafka/password'; valid fields:", old_name.output)
+        self.assertEqual(0, new_name.exit_code, new_name.output)
+        self.assertEqual(2, load_profiles(self.database).revision("p"))
 
 
 class TestDescribeCompleteness(unittest.TestCase):
