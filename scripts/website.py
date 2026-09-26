@@ -25,13 +25,6 @@ import pyte
 
 from kantrip.console import ARCANA_COLORS
 from scripts import TerminalTimeout, run_terminal
-from scripts.site_release import (
-    check_release,
-    current_release,
-    fetch_releases,
-    github_token,
-    render_release_index,
-)
 from scripts.tests import sandbox_state_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -371,7 +364,6 @@ def check_site(help_runner: HelpRunner = run_kantrip_help) -> list[str]:
     index_text = INDEX_PATH.read_text(encoding="utf-8")
     return [
         *check_transcript(demo, index_text),
-        *check_release(index_text),
         *check_demo_commands(page_commands(index_text), help_runner, "site/index.html"),
         *check_demo_content(demo),
         *check_pages(SITE_ROOT),
@@ -791,12 +783,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("check", "render", "release", "capture"),
+        choices=("check", "render", "capture"),
         nargs="?",
         default="check",
-        help="check the site (default), rewrite the transcript in index.html, write "
-        "the current GitHub release into index.html, or recapture the demo from the "
-        "running sandbox",
+        help="check the site (default), rewrite the transcript in index.html, "
+        "or recapture the demo from the running sandbox",
     )
     parser.add_argument(
         "--state-dir",
@@ -815,12 +806,6 @@ def main() -> None:
     elif args.action == "render":
         write_demo(load_demo())
         print(f"Rendered the demo transcript into {INDEX_PATH.relative_to(PROJECT_ROOT)}")
-        return
-    elif args.action == "release":
-        release = current_release(fetch_releases(github_token()))
-        text = INDEX_PATH.read_text(encoding="utf-8")
-        INDEX_PATH.write_text(render_release_index(release, text), encoding="utf-8")
-        print(f"Wrote release {release.tag if release else '(none)'} into site/index.html")
         return
     errors = check_site()
     for error in errors:

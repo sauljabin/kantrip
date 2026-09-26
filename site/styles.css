@@ -420,7 +420,7 @@ pre {
   text-align: center;
 }
 
-/* Filled in at deploy time by python -m scripts.website release. */
+/* site.js fills in the version; without it, the line links to Releases. */
 .release {
   margin: 1.25rem 0 0;
   color: var(--muted);
@@ -434,11 +434,11 @@ pre {
   color: var(--release-state, var(--muted));
 }
 
-.release-pre {
+.release[data-state="pre"] {
   --release-state: var(--warning);
 }
 
-.release-stable {
+.release[data-state="stable"] {
   --release-state: var(--success);
 }
 

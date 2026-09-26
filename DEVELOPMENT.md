@@ -408,8 +408,12 @@ fallback only bootstraps empty or exported checkouts.
 
 The project site at `https://sauljabin.github.io/kantrip/` is plain HTML, CSS,
 and vanilla JavaScript in `site/`, with no framework, build step, web fonts,
-analytics, cookies, or third-party requests. Deployment uploads the directory
-as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
+analytics, or cookies. Its only third-party request is `site/site.js` asking the
+GitHub API for the release shown in the hero: the newest stable release, or the
+newest pre-release while none is stable. The Content-Security-Policy allows
+`connect-src` to `https://api.github.com` only. Without JavaScript, or when the
+request fails or hits the anonymous rate limit, the line links to the Releases
+page. Deployment uploads the directory as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
 the same transcript as static text between the `demo-transcript` markers, so the
 page works without JavaScript, for screen readers, and with reduced motion.
 `site/site.js` replays that static transcript; it has no separate copy of the
@@ -431,22 +435,6 @@ nothing is requested from another origin, that JavaScript and CSS stay under
 `kantrip COMMAND --help` for every `kantrip` command in the demo and fails when
 a command or option no longer exists, so a CLI rename must update the demo in
 the same pull request.
-
-The hero shows the current release between the `release` markers in
-`site/index.html`: the newest stable GitHub release, or the newest pre-release
-while no stable release exists. Drafts and tags outside the release tag format
-are ignored, and versions are compared by number. The committed page keeps the
-fallback, a link to the Releases page; the `Pages` workflow writes the release
-before `check`, so the page needs no API request from the visitor's browser. To
-preview it, write it locally, then restore the fallback before committing
-(`check` accepts either):
-
-```bash
-uv run --locked python -m scripts.website release
-```
-
-`release` reads the GitHub API with `GITHUB_TOKEN` or `GH_TOKEN` when set, and
-unauthenticated otherwise.
 
 Preview the site under the same `/kantrip/` prefix that GitHub Pages uses, on
 macOS or Linux:
@@ -480,13 +468,9 @@ committing; `check` verifies that the file exists and matches the declared size.
 
 The `Pages` workflow validates the site on every pull request with read-only
 permissions and never deploys from one. It runs even when `site/` is unchanged,
-because a CLI change can break the demo commands. On pushes to `main`, and after
-each successful `Release` run, it uploads `site/` and deploys it; only the deploy
-job has `pages: write` and `id-token: write`. A `release` trigger would not work:
-`Release` creates releases with `GITHUB_TOKEN`, whose events start no workflows,
-and the run would be on the tag, which `github-pages` refuses. After editing a
-release by hand, such as promoting a pre-release, run `Pages` from the Actions
-tab. It requires this one-time repository setup:
+because a CLI change can break the demo commands. On pushes to `main` it
+uploads `site/` and deploys it; only the deploy job has `pages: write` and
+`id-token: write`. It requires this one-time repository setup:
 
 - Settings > Pages > Build and deployment > Source: **GitHub Actions**.
 - Settings > Environments > `github-pages` (created with the first setting) >
