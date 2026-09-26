@@ -8,11 +8,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.doctor import run_doctor
+from kantrip.profile_auth import KafkaAuthInput, RegistryAuthInput
 from kantrip.profile_storage import DATABASE_BACKUP_PREFIX, load_profiles
 from kantrip.profiles import add_profile
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
-from kantrip.secret_store import SecretStoreError, SecretStoreInfo, secret_reference
+from kantrip.secret_store import (
+    SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreInfo,
+    secret_reference,
+)
+from kantrip.secret_value import Secret
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
@@ -304,7 +311,11 @@ class TestDoctor(unittest.TestCase):
         visible = [check.message for _, checks in report.sections() for check in checks]
         verbose = [check.message for _, checks in report.sections(verbose=True) for check in checks]
         self.assertTrue(artifact_preserved)
-        self.assertTrue(any("Runtime stale: 1 session" in message for message in visible))
+        self.assertIn(
+            "Sessions on this machine: 0 active, 0 recent inactive, 1 stale; "
+            "run 'kantrip doctor --repair' to remove stale sessions",
+            visible,
+        )
         self.assertFalse(any(str(runtime_path.parent) in message for message in visible))
         self.assertTrue(any(str(runtime_path.parent) in message for message in verbose))
 
@@ -329,8 +340,10 @@ class TestDoctor(unittest.TestCase):
                 report = run_doctor(environment)
 
         self.assertFalse(report.healthy)
-        self.assertTrue(
-            any("Runtime invalid: 1 session" in check.message for check in report.checks)
+        self.assertIn(
+            f"Invalid session runtime entry: {runtime_root / 'unexpected'}; "
+            "inspect it and remove it manually",
+            [check.message for check in report.checks],
         )
 
     def test_pending_credential_cleanup_is_reported_without_modification(self) -> None:
@@ -417,6 +430,150 @@ def _installed_tool(name: str, path: str | None = None) -> str | None:
         "kafka-protobuf-console-producer",
     }
     return f"/tools/{name}" if name in installed else None
+
+
+class TestDoctorSecretsAndSessions(unittest.TestCase):
+    """Every referenced secret is checked; sessions of every profile are listed (#52)."""
+
+    def test_reports_every_referenced_secret_by_field_name(self) -> None:
+        store = _MemoryStore()
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            add_profile(
+                "secure",
+                database_path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "oauth",
+                    oauth_token_url="https://idp.invalid/token",
+                    oauth_client_id="kafka-client",
+                    oauth_client_secret=Secret("synthetic-client-secret"),
+                ),
+                registry_url="https://registry.invalid",
+                registry_auth=RegistryAuthInput("token", token=Secret("synthetic-token")),
+                secret_store=store,
+            )
+            registry_token = next(ref for ref in store.values if ref.endswith("/registry/token"))
+            del store.values[registry_token]
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+            with (
+                patch("kantrip.doctor.load_secret_store", return_value=store),
+                patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+            ):
+                report = run_doctor(environment)
+
+        messages = [check.message for _, checks in report.sections() for check in checks]
+        self.assertIn("Profile 'secure' kafka.auth.oauth.client-secret is stored", messages)
+        self.assertIn("Profile 'secure' registry.auth.token is missing", messages)
+        self.assertFalse(report.healthy)
+        self.assertFalse(any("synthetic" in message for message in messages))
+
+    def test_sessions_without_a_profile_name_each_session_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
+            profile_id = str(load_profiles(database_path).profile("local")["id"])
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+            runtimes = [
+                create_session_runtime(profile_id, 1, environment),
+                create_session_runtime(PROFILE_ID, 1, environment),
+            ]
+            try:
+                with (
+                    patch("kantrip.doctor.load_secret_store", return_value=_MemoryStore()),
+                    patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+                ):
+                    report = run_doctor(environment)
+            finally:
+                for runtime in runtimes:
+                    runtime.close()
+
+        messages = [check.message for _, checks in report.sections() for check in checks]
+        self.assertTrue(
+            any(m.startswith("Session active: profile 'local', revision 1") for m in messages),
+            messages,
+        )
+        self.assertTrue(
+            any(
+                m.startswith("Session active: profile not in this database, revision 1")
+                for m in messages
+            ),
+            messages,
+        )
+
+    def test_profile_scope_is_visible_and_keeps_machine_wide_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            database_path = root / "profiles.db"
+            _create_profile_database(database_path)
+            add_profile("other", database_path)
+            profiles = load_profiles(database_path)
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+            runtimes = [
+                create_session_runtime(str(profiles.profile("other")["id"]), 1, environment),
+                create_session_runtime(str(profiles.profile("local")["id"]), 1, environment),
+            ]
+            invalid = runtimes[0].path.parent / "unexpected"
+            invalid.mkdir()
+            try:
+                with (
+                    patch("kantrip.doctor.load_secret_store", return_value=_MemoryStore()),
+                    patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+                ):
+                    report = run_doctor(environment, profile_name="other")
+            finally:
+                for runtime in runtimes:
+                    runtime.close()
+
+        messages = [check.message for _, checks in report.sections() for check in checks]
+        self.assertIn("Profile database is healthy (2 profiles, schema version 1)", messages)
+        self.assertIn("Profile 'other' has no Registry", messages)
+        self.assertIn("This shell is not inside a Kantrip session", messages)
+        self.assertIn(
+            "Sessions for profile 'other': 1 active, 0 recent inactive, 0 stale", messages
+        )
+        self.assertEqual(1, sum(m.startswith("Session active: revision 1") for m in messages))
+        self.assertIn(
+            f"Invalid session runtime entry: {invalid}; inspect it and remove it manually",
+            messages,
+        )
+
+
+class _MemoryStore:
+    info = SecretStoreInfo("keyring.backends.SecretService.Keyring", "Secret Service")
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def get(self, reference: str) -> str:
+        try:
+            return self.values[reference]
+        except KeyError as error:
+            raise SecretNotFoundError("synthetic missing secret") from error
+
+    def set(self, reference: str, value: str) -> None:
+        self.values[reference] = value
+
+    def delete(self, reference: str) -> None:
+        self.values.pop(reference, None)
 
 
 def _create_profile_database(path: Path) -> None:

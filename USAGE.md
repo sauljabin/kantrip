@@ -41,17 +41,27 @@ Doctor groups local checks under System, Profiles, Credentials, Session, and
 Clients, names missing commands, and summarizes health. It validates the profile
 database, approved OS credential backend, Registry support, reconciliation
 state, active-session state, recoverable runtime artifacts, and installed
-clients. It reads each exact credential reference and checks certificate/key
-validity and certificate expiry without printing sensitive material. Use
-`--verbose` for paths, backend identity, and individual checks.
+clients. It reads every secret each profile references (Kafka and Registry,
+including OAuth client secrets) and reports it as stored, missing, or
+unavailable under its field name, such as `registry.auth.token`, without printing
+sensitive material. It also checks certificate/key validity and certificate
+expiry. `doctor` is the only command that reads secret values to report this;
+`describe` only lists them as `configured`. Use `-v`/`--verbose` for paths,
+backend identity, and individual checks.
 
-Scope checks to one immutable profile identity, or include its captured runtime
-sessions, with:
+Doctor always lists the sessions on this machine: one line per session with
+its profile, revision, and age, plus the session ID, supervisor PID, and path
+with `-v`. The Session section also says whether the current shell is inside a
+Kantrip session. Stale sessions come with a `--repair` hint; an entry Kantrip
+cannot verify as its own is reported by path and must be inspected and removed
+manually, because `--repair` never deletes it.
+
+Scope checks and sessions to one immutable profile identity. The title names the
+profile, and the database line still counts every profile:
 
 ```bash
 kantrip doctor production
-kantrip doctor production --sessions
-kantrip doctor production --sessions --verbose
+kantrip doctor production -v
 ```
 
 Missing optional clients or a first-run profile database produce warnings. An
@@ -99,8 +109,12 @@ The Registry probe performs one bounded read query: `/subjects?limit=1` on
 Confluent-compatible Registry, including Apicurio's ccompat API without URL
 rewriting, or `/search/versions?limit=1` on native Apicurio v3. Empty valid
 collections succeed. Authenticated profiles repeat the same query anonymously
-and require HTTP 401/403 (or a rejected no-client-certificate TLS exchange for
-mTLS), so a public response cannot falsely prove the configured credentials.
+and expect HTTP 401/403 (or a rejected no-client-certificate TLS exchange for
+mTLS). If the anonymous query also succeeds, the Registry is reachable but the
+configured credentials are not proven: `ping` reports it as ok with the proof
+"endpoint also allows anonymous reads, credentials not proven", prints a
+warning, and still exits `0`, as plaintext Kafka reports reachability.
+Credentials the Registry rejects (401/403 on the authenticated query) fail.
 OAuth first obtains one bounded client-credentials token. Each HTTPS hop
 verifies its independent configured trust. It needs no external CLI
 and applies one five-second deadline across configured services, configurable with
@@ -108,10 +122,26 @@ and applies one five-second deadline across configured services, configurable wi
 `[running]`. Failures include a sanitized message from the underlying client or
 transport exception.
 
-`ping` reports each service separately and exits `0` only when every attempted
-check passed. If Kafka succeeds and the Registry fails, the Kafka result is
-still printed and the Registry failure follows on stderr (exit `1`). If Kafka
-fails, the Registry is not contacted and is reported as skipped.
+`ping` reports each service as `ok`, `failed`, or `skipped` (not attempted) and
+exits `0` only when every attempted check is ok. If Kafka succeeds and the
+Registry fails, the Kafka result is still printed and the Registry failure
+follows on stderr (exit `1`). If Kafka fails, the Registry is not contacted and
+is reported as skipped.
+
+Scripts can read the same result as JSON or YAML with `-o json` or `-o yaml`;
+`--quiet` cannot be combined with them:
+
+```json
+{
+  "profile": "local",
+  "healthy": true,
+  "kafka": {"status": "ok", "transport": "verified TLS", "authentication": "scram-sha-512 authenticated", "proof": "sasl"},
+  "registry": {"status": "ok", "provider": "confluent", "transport": "verified TLS", "proof": "basic authenticated read query validated", "warning": null}
+}
+```
+
+A failed service carries `error` and `cause`; a skipped Registry carries
+`reason`.
 
 Kafka success does not prove topic, group, schema, cluster, or administrative
 access. Registry success proves only that the configured read/search query is

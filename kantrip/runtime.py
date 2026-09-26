@@ -60,6 +60,7 @@ class SessionScan:
     failed: int = 0
     truncated: bool = False
     observations: tuple[SessionObservation, ...] = ()
+    invalid_paths: tuple[Path, ...] = ()
 
     @property
     def has_errors(self) -> bool:
@@ -407,6 +408,7 @@ def _scan_open_root(
     }
     truncated = False
     observations: list[SessionObservation] = []
+    invalid_paths: list[Path] = []
     with os.scandir(root_descriptor) as entries:
         for index, entry in enumerate(entries):
             if limit is not None and index >= limit:
@@ -425,12 +427,15 @@ def _scan_open_root(
                 observations.append(result)
             elif result is not None:
                 counts[result] += 1
+                if result == "invalid":
+                    invalid_paths.append(root / entry.name)
     return SessionScan(
         root,
         True,
         **counts,
         truncated=truncated,
         observations=tuple(observations),
+        invalid_paths=tuple(invalid_paths),
     )
 
 

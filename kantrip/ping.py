@@ -58,11 +58,16 @@ class PingError(ConnectionError):
 
 @dataclass(frozen=True)
 class RegistryPingResult:
-    """Connectivity observation for one current plaintext Registry profile."""
+    """Connectivity observation for one configured Registry.
+
+    ``warning`` is set when the Registry answered but its credentials could not
+    be proven, because the endpoint also serves anonymous reads.
+    """
 
     provider: RegistryProvider
     transport: str
     proof: str
+    warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,53 @@ class PingResult:
     def healthy(self) -> bool:
         """Return whether every attempted service check succeeded."""
         return self.registry_error is None
+
+
+def ping_observation(
+    profile_name: str,
+    result: PingResult | None,
+    *,
+    kafka_error: PingError | None = None,
+    registry_provider: RegistryProvider | None,
+) -> dict[str, Any]:
+    """Describe each service as ok, failed, or skipped (not attempted)."""
+    kafka: dict[str, Any]
+    registry: dict[str, Any] | None = None
+    if result is None:
+        kafka = {"status": "failed", **_error_observation(kafka_error)}
+        if registry_provider is not None:
+            registry = {
+                "status": "skipped",
+                "provider": registry_provider,
+                "reason": "Kafka check failed",
+            }
+    else:
+        kafka = {
+            "status": "ok",
+            "transport": result.kafka_transport,
+            "authentication": result.kafka_authentication,
+            "proof": result.proof,
+        }
+        if result.registry is not None:
+            registry = {
+                "status": "ok",
+                "provider": result.registry.provider,
+                "transport": result.registry.transport,
+                "proof": result.registry.proof,
+                "warning": result.registry.warning,
+            }
+        elif result.registry_error is not None:
+            registry = {
+                "status": "failed",
+                "provider": registry_provider,
+                **_error_observation(result.registry_error),
+            }
+    healthy = kafka["status"] == "ok" and (registry is None or registry["status"] == "ok")
+    return {"profile": profile_name, "healthy": healthy, "kafka": kafka, "registry": registry}
+
+
+def _error_observation(error: PingError | None) -> dict[str, Any]:
+    return {"error": str(error) if error else None, "cause": error.detail if error else None}
 
 
 @dataclass
@@ -253,25 +305,31 @@ def _registry_connectivity(
             headers=headers,
             context=context,
         )
-    if connection.auth_type != "none":
-        _require_anonymous_rejection(
-            probe_url,
-            deadline,
-            context=_registry_ssl_context(connection, include_client=False),
-            accept=accept,
-            accept_mtls_rejection=connection.auth_type == "mtls",
-        )
+    transport = "verified TLS" if connection.url.startswith("https://") else "plaintext reachable"
     if connection.auth_type == "none":
-        proof = "read query validated"
-    elif connection.auth_type == "mtls":
+        return RegistryPingResult(connection.provider, transport, "read query validated")
+    anonymous_rejected = _anonymous_rejected(
+        probe_url,
+        deadline,
+        context=_registry_ssl_context(connection, include_client=False),
+        accept=accept,
+        accept_mtls_rejection=connection.auth_type == "mtls",
+    )
+    if not anonymous_rejected:
+        return RegistryPingResult(
+            connection.provider,
+            transport,
+            "reachable; endpoint also allows anonymous reads, credentials not proven",
+            warning=(
+                f"the {registry_name} accepts anonymous reads, so the configured "
+                f"{connection.auth_type} credentials were not proven"
+            ),
+        )
+    if connection.auth_type == "mtls":
         proof = "mTLS read query and anonymous rejection validated"
     else:
         proof = f"{connection.auth_type} authenticated read query validated"
-    return RegistryPingResult(
-        connection.provider,
-        "verified TLS" if connection.url.startswith("https://") else "plaintext reachable",
-        proof,
-    )
+    return RegistryPingResult(connection.provider, transport, proof)
 
 
 def _confluent_subjects(
@@ -494,36 +552,37 @@ def _registry_auth_headers(connection: RegistryConnection) -> dict[str, str]:
     return {}
 
 
-def _require_anonymous_rejection(
+def _anonymous_rejected(
     url: str,
     deadline: float,
     *,
     context: ssl.SSLContext | None,
     accept: str,
     accept_mtls_rejection: bool = False,
-) -> None:
+) -> bool:
+    """Return whether an unauthenticated read is rejected; False when it succeeds."""
     request = Request(url, headers={"Accept": accept})
     try:
         with _open_request(request, _remaining(deadline), context=context) as response:
             response.read(1)
     except HTTPError as error:
         if error.code in {401, 403}:
-            return
+            return True
         raise PingError(
             "Registry authentication proof was inconclusive",
             detail=f"anonymous control returned HTTP {error.code}",
         ) from error
     except URLError as error:
         if accept_mtls_rejection and isinstance(error.reason, ssl.SSLError):
-            return
+            return True
         raise PingError("Registry authentication proof was inconclusive", detail=error) from error
     except ssl.SSLError as error:
         if accept_mtls_rejection:
-            return
+            return True
         raise PingError("Registry authentication proof was inconclusive", detail=error) from error
     except (OSError, TimeoutError) as error:
         raise PingError("Registry authentication proof was inconclusive", detail=error) from error
-    raise PingError("Registry endpoint is public; configured authentication was not proven")
+    return False
 
 
 def _remaining(deadline: float) -> float:
@@ -581,4 +640,4 @@ def _client_configuration(
     return properties
 
 
-__all__ = ["PingError", "PingResult", "RegistryPingResult", "ping_profile"]
+__all__ = ["PingError", "PingResult", "RegistryPingResult", "ping_observation", "ping_profile"]

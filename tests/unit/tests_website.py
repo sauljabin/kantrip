@@ -95,12 +95,12 @@ class TestDemoCommands(unittest.TestCase):
 
     def test_card_commands_are_checked_too(self) -> None:
         page = (
-            '<p class="card-command" aria-hidden="true">kantrip doctor prod --sessions</p>'
-            '<p class="card-command">kantrip doctor prod --session</p>'
+            '<p class="card-command" aria-hidden="true">kantrip doctor prod --verbose</p>'
+            '<p class="card-command">kantrip doctor prod --sessions</p>'
         )
         self.assertEqual(
             check_demo_commands(page_commands(page), cli_help, "site/index.html"),
-            ["site/index.html: 'kantrip doctor' has no option --session"],
+            ["site/index.html: 'kantrip doctor' has no option --sessions"],
         )
 
     def test_help_options_read_only_option_rows(self) -> None:

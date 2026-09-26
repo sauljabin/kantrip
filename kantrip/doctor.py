@@ -32,6 +32,7 @@ from kantrip.adapters import (
     require_adapter_capability,
 )
 from kantrip.kafka import KafkaProfileError, kafka_connection, resolve_kafka_connection
+from kantrip.profile_output import credential_references
 from kantrip.profile_storage import (
     DATABASE_BACKUP_PREFIX,
     DATABASE_MAINTENANCE_SUFFIX,
@@ -46,6 +47,7 @@ from kantrip.reconciliation import ReconciliationError
 from kantrip.registry import RegistryProfileError, registry_connection
 from kantrip.runtime import (
     AUTOMATIC_SCAN_LIMIT,
+    SessionObservation,
     SessionRuntimeError,
     resolve_runtime_root,
     scan_sessions,
@@ -120,7 +122,6 @@ def run_doctor(
     environment: Mapping[str, str] | None = None,
     *,
     profile_name: str | None = None,
-    include_sessions: bool = False,
 ) -> DoctorReport:
     """Inspect Kantrip's local environment without contacting configured services."""
     env = os.environ if environment is None else environment
@@ -135,10 +136,15 @@ def run_doctor(
     credential_checks, store = _check_credentials(env)
     profile_credential_checks = _check_profile_credentials(profiles, store)
     profile_id = None
-    profile_revision = None
-    if profiles is not None and profile_name in profiles.profiles:
-        profile_id = str(profiles.profiles[profile_name]["id"])
-        profile_revision = profiles.revision(profile_name)
+    # Profile ID → (name, current revision), to label sessions of every profile.
+    known_profiles: dict[str, tuple[str, int]] = {}
+    if profiles is not None:
+        known_profiles = {
+            str(profile["id"]): (name, profiles.revision(name))
+            for name, profile in profiles.profiles.items()
+        }
+        if profile_name in profiles.profiles:
+            profile_id = str(profiles.profiles[profile_name]["id"])
     checks = [
         *_assign_section("System", system_checks),
         *_assign_section("Profiles", profile_checks),
@@ -149,9 +155,9 @@ def run_doctor(
                 *_check_session(profiles, env),
                 *_check_runtime_sessions(
                     env,
+                    profile_name=profile_name if profile_id is not None else None,
                     profile_id=profile_id,
-                    current_revision=profile_revision,
-                    include_details=include_sessions,
+                    known_profiles=known_profiles,
                 ),
             ],
         ),
@@ -216,48 +222,43 @@ def _check_profile_credentials(
             checks.append(DoctorCheck("error", f"Kafka profile '{name}' is not executable"))
             continue
         checks.extend(_check_certificate_validity(name, profile))
-        if not connection.requires_secrets:
+        references = credential_references(profile)
+        if not references:
             checks.append(DoctorCheck("success", f"Profile '{name}' requires no credentials"))
             continue
         if store is None:
             checks.append(DoctorCheck("error", f"Profile '{name}' credentials are unavailable"))
             continue
-        checks.extend(_check_exact_references(name, profile, store))
+        checks.extend(_check_exact_references(name, references, store))
+        if not connection.requires_secrets:
+            continue
         try:
             resolve_kafka_connection(connection, store)
         except KafkaProfileError:
-            checks.append(DoctorCheck("error", f"Profile '{name}' credential identity is invalid"))
+            checks.append(
+                DoctorCheck("error", f"Profile '{name}' Kafka credential identity is invalid")
+            )
         else:
-            checks.append(DoctorCheck("success", f"Profile '{name}' credentials are usable"))
+            checks.append(DoctorCheck("success", f"Profile '{name}' Kafka credentials are usable"))
     return checks
 
 
 def _check_exact_references(
     name: str,
-    profile: Mapping[str, object],
+    references: Mapping[str, str],
     store: SecretStore,
 ) -> list[DoctorCheck]:
-    kafka = profile.get("kafka")
-    auth = kafka.get("auth") if isinstance(kafka, Mapping) else None
-    if not isinstance(auth, Mapping):
-        return [DoctorCheck("error", f"Profile '{name}' authentication is invalid")]
+    """Report stored, missing, or unavailable for every referenced secret field."""
     checks: list[DoctorCheck] = []
-    for property_name, label in (
-        ("passwordRef", "password"),
-        ("privateKeyRef", "private key"),
-        ("privateKeyPasswordRef", "private-key password"),
-    ):
-        reference = auth.get(property_name)
-        if not isinstance(reference, str):
-            continue
+    for field, reference in references.items():
         try:
             store.get(reference)
         except SecretNotFoundError:
-            checks.append(DoctorCheck("error", f"Profile '{name}' {label} is missing"))
+            checks.append(DoctorCheck("error", f"Profile '{name}' {field} is missing"))
         except SecretStoreError:
-            checks.append(DoctorCheck("error", f"Profile '{name}' {label} is unavailable"))
+            checks.append(DoctorCheck("error", f"Profile '{name}' {field} is unavailable"))
         else:
-            checks.append(DoctorCheck("success", f"Profile '{name}' {label} is stored"))
+            checks.append(DoctorCheck("success", f"Profile '{name}' {field} is stored"))
     return checks
 
 
@@ -374,6 +375,7 @@ def _check_profile_database(
     except ProfileStoreError as error:
         return None, [DoctorCheck("error", str(error)), path_check]
 
+    profile_count = len(profiles.profiles)
     if profile_name is not None:
         profile = profiles.profiles.get(profile_name)
         if profile is None:
@@ -386,7 +388,6 @@ def _check_profile_database(
             {profile_name: profile},
             {profile_name: profiles.revision(profile_name)},
         )
-    profile_count = len(profiles.profiles)
     profile_label = "profile" if profile_count == 1 else "profiles"
     checks = [
         DoctorCheck(
@@ -398,7 +399,7 @@ def _check_profile_database(
     ]
     checks.extend(_check_database_artifacts(path))
     checks.append(_check_profiles(profiles))
-    checks.extend(_check_registry_profiles(profiles))
+    checks.extend(_check_registry_profiles(profiles, scoped=profile_name is not None))
     return profiles, checks
 
 
@@ -460,7 +461,7 @@ def _check_profiles(profiles: ProfileCollection) -> DoctorCheck:
     return DoctorCheck("success", "Stored Kafka profile documents are valid")
 
 
-def _check_registry_profiles(profiles: ProfileCollection) -> list[DoctorCheck]:
+def _check_registry_profiles(profiles: ProfileCollection, *, scoped: bool) -> list[DoctorCheck]:
     configured = 0
     checks: list[DoctorCheck] = []
     for name, profile in profiles.profiles.items():
@@ -478,6 +479,11 @@ def _check_registry_profiles(profiles: ProfileCollection) -> list[DoctorCheck]:
             )
     if checks:
         return checks
+    if scoped:
+        name = next(iter(profiles.profiles))
+        if not configured:
+            return [DoctorCheck("success", f"Profile '{name}' has no Registry")]
+        return [DoctorCheck("success", f"Profile '{name}' Registry is configured and executable")]
     if not configured:
         return [DoctorCheck("success", "Registry profiles: none configured")]
     label = "profile" if configured == 1 else "profiles"
@@ -498,7 +504,7 @@ def _check_session(
         for name in ("KANTRIP_PROFILE", "KANTRIP_SESSION_ID", "KANTRIP_SESSION_DIR")
     }
     if not any(variables.values()):
-        return [DoctorCheck("success", "No Kantrip profile session is active")]
+        return [DoctorCheck("success", "This shell is not inside a Kantrip session")]
     missing = [name for name, value in variables.items() if not value]
     if missing:
         return [DoctorCheck("error", f"Active session is missing {', '.join(missing)}")]
@@ -511,7 +517,9 @@ def _check_session(
             DoctorCheck("error", f"Active profile '{profile_name}' is not in the profile database")
         )
     else:
-        checks.append(DoctorCheck("success", f"Active profile exists: {profile_name}"))
+        checks.append(
+            DoctorCheck("success", f"This shell is inside a session of profile '{profile_name}'")
+        )
     if not session_directory.is_dir():
         checks.append(DoctorCheck("error", "Active session directory was not found"))
         checks.append(
@@ -539,9 +547,9 @@ def _check_session(
 def _check_runtime_sessions(
     environment: Mapping[str, str],
     *,
+    profile_name: str | None,
     profile_id: str | None,
-    current_revision: int | None,
-    include_details: bool,
+    known_profiles: Mapping[str, tuple[str, int]],
 ) -> list[DoctorCheck]:
     root = resolve_runtime_root(environment)
     path_check = DoctorCheck(
@@ -553,64 +561,75 @@ def _check_runtime_sessions(
         report = scan_sessions(environment, limit=AUTOMATIC_SCAN_LIMIT)
     except SessionRuntimeError:
         return [DoctorCheck("error", "Session runtime is not private and user-owned"), path_check]
-    checks = [path_check]
     if not report.exists:
-        return [DoctorCheck("success", "No stored session artifacts were found"), *checks]
+        return [DoctorCheck("success", "No stored session artifacts were found"), path_check]
     observations = tuple(
         observation
         for observation in report.observations
         if profile_id is None or observation.profile_id == profile_id
     )
-    state_counts = {
-        state: sum(observation.state == state for observation in observations)
-        for state in ("active", "recent", "stale")
-    }
-    checks.append(_runtime_count("active", state_counts["active"], "success"))
-    checks.append(_runtime_count("recent inactive", state_counts["recent"], "warning"))
-    checks.append(_runtime_count("stale", state_counts["stale"], "warning"))
-    checks.append(_runtime_count("invalid", report.invalid, "error"))
+    checks = [_session_summary(observations, profile_name), path_check]
+    now = int(time.time())
+    for observation in observations:
+        checks.extend(
+            _session_detail(observation, now, known_profiles, show_profile=profile_id is None)
+        )
+    # Invalid entries cannot be attributed to a profile, so they are reported in every scope.
+    checks.extend(
+        DoctorCheck(
+            "error",
+            f"Invalid session runtime entry: {path}; inspect it and remove it manually",
+        )
+        for path in report.invalid_paths
+    )
     if report.truncated:
         checks.append(DoctorCheck("error", "Session runtime scan reached its safety limit"))
-    if include_details:
-        now = int(time.time())
-        for observation in observations:
-            age = max(0, now - observation.created_at)
-            revision_note = ""
-            if current_revision is not None and observation.profile_revision < current_revision:
-                revision_note = f", older than current revision {current_revision}"
-            checks.append(
-                DoctorCheck(
-                    "warning" if observation.state != "active" else "success",
-                    f"Session {observation.state}: revision {observation.profile_revision}, "
-                    f"age {age}s{revision_note}",
-                )
-            )
-            checks.extend(
-                (
-                    DoctorCheck(
-                        "success",
-                        f"Session ID: {observation.session_id}",
-                        verbose_only=True,
-                    ),
-                    DoctorCheck(
-                        "success",
-                        f"Supervisor PID: {observation.supervisor_pid}",
-                        verbose_only=True,
-                    ),
-                    DoctorCheck(
-                        "success",
-                        f"Session path: {observation.path}",
-                        verbose_only=True,
-                    ),
-                )
-            )
     return checks
 
 
-def _runtime_count(label: str, count: int, nonzero_status: CheckStatus) -> DoctorCheck:
-    status: CheckStatus = nonzero_status if count else "success"
-    noun = "session" if count == 1 else "sessions"
-    return DoctorCheck(status, f"Runtime {label}: {count} {noun}")
+def _session_summary(
+    observations: Sequence[SessionObservation], profile_name: str | None
+) -> DoctorCheck:
+    counts = {
+        state: sum(observation.state == state for observation in observations)
+        for state in ("active", "recent", "stale")
+    }
+    scope = "on this machine" if profile_name is None else f"for profile '{profile_name}'"
+    message = (
+        f"Sessions {scope}: {counts['active']} active, "
+        f"{counts['recent']} recent inactive, {counts['stale']} stale"
+    )
+    if counts["stale"]:
+        message = f"{message}; run 'kantrip doctor --repair' to remove stale sessions"
+    status: CheckStatus = "warning" if counts["recent"] or counts["stale"] else "success"
+    return DoctorCheck(status, message)
+
+
+def _session_detail(
+    observation: SessionObservation,
+    now: int,
+    known_profiles: Mapping[str, tuple[str, int]],
+    *,
+    show_profile: bool,
+) -> tuple[DoctorCheck, ...]:
+    age = max(0, now - observation.created_at)
+    known = known_profiles.get(observation.profile_id)
+    revision_note = ""
+    if known is not None and observation.profile_revision < known[1]:
+        revision_note = f", older than current revision {known[1]}"
+    profile_note = ""
+    if show_profile:
+        profile_note = f"profile '{known[0]}', " if known else "profile not in this database, "
+    return (
+        DoctorCheck(
+            "warning" if observation.state != "active" else "success",
+            f"Session {observation.state}: {profile_note}"
+            f"revision {observation.profile_revision}, age {age}s{revision_note}",
+        ),
+        DoctorCheck("success", f"Session ID: {observation.session_id}", verbose_only=True),
+        DoctorCheck("success", f"Supervisor PID: {observation.supervisor_pid}", verbose_only=True),
+        DoctorCheck("success", f"Session path: {observation.path}", verbose_only=True),
+    )
 
 
 def _check_session_path(shim_directory: Path, environment: Mapping[str, str]) -> DoctorCheck:
