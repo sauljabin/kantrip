@@ -23,7 +23,13 @@ from pathlib import Path
 
 name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
+if name == "kcl" and arguments == ["--version"]:
+    # Kantrip's minimum-version gate probes kcl before it renders the shim.
+    print("kcl version v0.20.0")
+    sys.exit(0)
 config_path = os.environ.get("KCAT_CONFIG") if name in {kcat_executables} else None
+if name == "kcl":
+    config_path = os.environ.get("KCL_CONFIG_PATH")
 for option in ("--consumer.config", "--producer.config", "--command-config", "--config-file", "--config"):
     if option in arguments:
         config_path = arguments[arguments.index(option) + 1]
@@ -37,6 +43,7 @@ record = {{
     "config_mode": stat.S_IMODE(config.stat().st_mode) if config and config.is_file() else None,
     "config_in_session": bool(config and session_directory and config.is_relative_to(session_directory)),
     "home": os.environ.get("HOME"),
+    "kcl_variables": sorted(key for key in os.environ if key.startswith("KCL_")),
     "name": name,
     "profile": os.environ.get("KANTRIP_PROFILE"),
     "session_directory": session_directory,
@@ -142,6 +149,9 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 ),
                 "kaf -b other.invalid:9092 topics >/dev/null 2>&1 || echo __KAF_OVERRIDE_OK__",
                 "kaf config use-cluster other >/dev/null 2>&1 || echo __KAF_CONFIG_BLOCKED__",
+                "kcl -B other.invalid:9092 topic list >/dev/null 2>&1 || echo __KCL_OVERRIDE_OK__",
+                "kcl -jXsasl.user=other topic list >/dev/null 2>&1 || echo __KCL_CONFIG_BLOCKED__",
+                "kcl profile use other >/dev/null 2>&1 || echo __KCL_PROFILE_BLOCKED__",
                 (
                     "kafka-avro-console-producer --property "
                     "schema.registry.url=http://other.invalid:8081 >/dev/null 2>&1 "
@@ -172,6 +182,9 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__SCHEMA_OVERRIDE_OK__", output)
             self.assertIn("__KAF_OVERRIDE_OK__", output)
             self.assertIn("__KAF_CONFIG_BLOCKED__", output)
+            self.assertIn("__KCL_OVERRIDE_OK__", output)
+            self.assertIn("__KCL_CONFIG_BLOCKED__", output)
+            self.assertIn("__KCL_PROFILE_BLOCKED__", output)
             self.assertIn("contract\r\n", output)
             self.assertIn("a Kantrip session is already active", output)
             self.assertNotIn("__BYPASS__", output)
@@ -215,6 +228,14 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                         record["config_contents"],
                     )
                     self.assertEqual("topics", record["argv"][-1])
+                if record["name"] == "kcl":
+                    # Only the session's selector survives; KCL_<KEY> overrides are stripped.
+                    self.assertEqual(["KCL_CONFIG_PATH"], record["kcl_variables"])
+                    self.assertEqual(["topic", "list"], record["argv"])
+                    self.assertIn(
+                        '[registry]\nurls = ["http://registry.invalid:8081"]\n',
+                        record["config_contents"],
+                    )
                 if record["name"] == "kaskade" and "registry" in record["argv"]:
                     self.assertIn(
                         "\n[registry]\nprovider=confluent\nurl=http://registry.invalid:8081\n",
@@ -374,6 +395,7 @@ def _adapter_commands() -> list[str]:
             "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
             "kaskade consumer -v registry",
             "kaf topics",
+            "env KCL_SEED_BROKERS=other.invalid:9092 KCL_NO_CONFIG_FILE=1 kcl topic list",
         )
     )
     return commands

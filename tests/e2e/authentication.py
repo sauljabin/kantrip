@@ -64,6 +64,7 @@ class RegistryAuthCase:
     certificate_field: str | None = None
     key_field: str | None = None
     kaf_refusal: str = ""
+    kcl_refusal: str = ""
 
 
 CASES = (
@@ -153,6 +154,7 @@ REGISTRY_CASES = (
         secret_field="KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET",
         oauth_client_id_field="KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID",
         kaf_refusal="kaf does not support Registry authentication 'oauth'",
+        kcl_refusal="kcl does not support Registry authentication 'oauth'",
     ),
     RegistryAuthCase(
         "schema-registry-mtls",
@@ -171,6 +173,7 @@ REGISTRY_CASES = (
         "KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
         "KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
         kaf_refusal="kaf supports only Confluent-compatible registry profiles",
+        kcl_refusal="kcl supports only Confluent-compatible registry profiles",
     ),
     RegistryAuthCase(
         "apicurio-oauth",
@@ -180,6 +183,7 @@ REGISTRY_CASES = (
         secret_field="KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
         oauth_client_id_field="KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
         kaf_refusal="kaf supports only Confluent-compatible registry profiles",
+        kcl_refusal="kcl supports only Confluent-compatible registry profiles",
     ),
 )
 
@@ -198,6 +202,7 @@ def main() -> None:
             "kafka-topics",
             "kaf",
             "kcat",
+            "kcl",
             "kubectl",
             "zsh",
         )
@@ -225,6 +230,7 @@ def main() -> None:
                 profiles.append(profile)
                 _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
                 _exercise_kaf_registry_refusal(profile, registry_case, environment)
+                _exercise_kcl_registry(profile, registry_case, environment)
             _exercise_invalid_credentials(credentials, environment, profiles)
             _exercise_invalid_registry_credentials(directory, credentials, environment, profiles)
             _exercise_invalid_mtls(directory, environment, profiles)
@@ -474,8 +480,9 @@ def _exercise_profile(
             environment,
         )
         _exercise_kaf(profile, case, topic, environment)
+        _exercise_kcl(profile, case, topic, environment)
         for shell_name in ("bash", "zsh", "fish"):
-            _exercise_shell(profile, shell_name, environment, kaf=case.auth_type != "oauth")
+            _exercise_shell(profile, shell_name, environment, go_clients=case.auth_type != "oauth")
         if case.auth_type == "oauth":
             _exercise_oauth_refresh(profile, topic, environment)
     finally:
@@ -524,20 +531,65 @@ def _exercise_kaf_registry_refusal(
         raise AuthSmokeFailure(f"{profile} kaf did not fail before launch for its Registry")
 
 
+def _exercise_kcl(
+    profile: str,
+    case: AuthCase,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    """List, produce, and consume with kcl; OAuth has no kcl mapping and fails first."""
+    if case.auth_type == "oauth":
+        output = _run(
+            (*_cli(), "exec", profile, "--", "kcl", "topic", "list"), environment, accepted=(1,)
+        )
+        if "kcl does not support Kafka authentication 'oauth'" not in output:
+            raise AuthSmokeFailure(f"{profile} kcl did not fail before launch for OAuth")
+        return
+    output = _run((*_cli(), "exec", profile, "--", "kcl", "topic", "list"), environment)
+    if topic not in output:
+        raise AuthSmokeFailure(f"{profile} kcl did not list its smoke topic")
+    marker = f"kantrip kcl record for {case.name}"
+    _run(
+        (*_cli(), "exec", profile, "--", "kcl", "produce", topic),
+        environment,
+        input_text=f"{marker}\n",
+    )
+    output = _run(
+        (*_cli(), "exec", profile, "--", "kcl", "consume", topic, "--offset", ":end"),
+        environment,
+    )
+    if marker not in output:
+        raise AuthSmokeFailure(f"{profile} kcl did not consume its smoke record")
+
+
+def _exercise_kcl_registry(
+    profile: str,
+    case: RegistryAuthCase,
+    environment: Mapping[str, str],
+) -> None:
+    """kcl lists subjects through Basic or mTLS with the private CA and refuses the rest."""
+    command = (*_cli(), "exec", profile, "--", "kcl", "registry", "subject", "list")
+    if not case.kcl_refusal:
+        _run(command, environment)
+        return
+    if case.kcl_refusal not in _run(command, environment, accepted=(1,)):
+        raise AuthSmokeFailure(f"{profile} kcl did not fail before launch for its Registry")
+
+
 def _exercise_shell(
     profile: str,
     shell_name: str,
     environment: Mapping[str, str],
     *,
-    kaf: bool,
+    go_clients: bool,
 ) -> None:
     shell = shutil.which(shell_name, path=environment.get("PATH"))
     assert shell is not None
     shell_environment = dict(environment)
     shell_environment["SHELL"] = shell
     kcat_command = "kcat -X broker.address.family=v4 -L >/dev/null && exit"
-    kaf_command = "kaf topics >/dev/null && " if kaf else ""
-    shell_command = f"kafka-topics --list && {kaf_command}{kcat_command}"
+    go_commands = "kaf topics >/dev/null && kcl topic list >/dev/null && " if go_clients else ""
+    shell_command = f"kafka-topics --list && {go_commands}{kcat_command}"
     try:
         status, output = run_terminal(
             (*_cli(), "exec", profile),

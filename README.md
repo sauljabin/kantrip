@@ -14,7 +14,7 @@
 </p>
 
 Kantrip securely manages plaintext, TLS, SASL, mTLS, and OAuth Kafka profiles
-for kcat, the official Kafka CLIs, Kaskade, kaf, and compatible applications. This
+for kcat, the official Kafka CLIs, Kaskade, kaf, kcl, and compatible applications. This
 pre-release CLI validates and displays profiles, opens scoped sessions, and
 checks Kafka and registry connectivity.
 The typed connection core validates, resolves, and renders PLAIN,
@@ -50,6 +50,7 @@ ACL-independent Kafka connectivity checks.
 - Confluent Avro, JSON Schema, and Protobuf console producers and consumers
 - Kaskade `admin` and `consumer`, including Confluent and native Apicurio decoding
 - kaf, with a private one-cluster configuration and Confluent Avro decoding
+- kcl, with a private configuration and Confluent Registry administration and decoding
 - Private, profile-aware client configuration with connection overrides blocked
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Process-group and PTY supervision with child exit-status preservation

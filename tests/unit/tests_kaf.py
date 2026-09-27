@@ -156,8 +156,8 @@ class TestKafSession(KafSessionTestCase):
         cluster = observed["config"]["clusters"][0]
         self.assertNotIn("security-protocol", cluster)
         self.assertEqual(str(session / "kafka-client.crt"), cluster["TLS"]["clientfile"])
-        self.assertEqual(str(session / "kaf-client.key"), cluster["TLS"]["clientkeyfile"])
-        self.assertEqual(pki.client_key, observed["files"]["kaf-client.key"])
+        self.assertEqual(str(session / "client-unencrypted.key"), cluster["TLS"]["clientkeyfile"])
+        self.assertEqual(pki.client_key, observed["files"]["client-unencrypted.key"])
         # librdkafka clients keep the encrypted key and read its password themselves.
         self.assertEqual(pki.encrypted_client_key, observed["files"]["kafka-client.key"])
 
@@ -178,7 +178,7 @@ class TestKafSession(KafSessionTestCase):
         self.assertEqual(
             str(observed["session"] / "kafka-client.key"), cluster["TLS"]["clientkeyfile"]
         )
-        self.assertNotIn("kaf-client.key", observed["files"])
+        self.assertNotIn("client-unencrypted.key", observed["files"])
 
     def test_oauth_fails_before_launch(self) -> None:
         resolved = KafkaConnection(

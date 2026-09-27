@@ -13,6 +13,8 @@ from kantrip.adapter_policy import (
     JAVA_COMMANDS,
     KAF_HOME,
     KCAT_SCHEMA_REGISTRY_SIGNAL,
+    KCL_CONFIG_PATH_VARIABLE,
+    KCL_ENVIRONMENT_PREFIX,
     AdapterError,
     ClientConfiguration,
     require_kaskade_registry,
@@ -137,6 +139,24 @@ HOME={KAF_HOME} exec {shlex.quote(executable)} --config {shlex.quote(str(kaf_con
 """
 
 
+def render_kcl_shim(name: str, executable: str, inputs: ShimInputs) -> str:
+    """Render a shim that strips kcl's own variables and selects its private config."""
+    kcl_config = inputs.configuration.kcl_config
+    guard = ""
+    if inputs.capability_error is not None:
+        guard = _failure(inputs.capability_error)
+    elif kcl_config is None:
+        guard = _failure("kcl requires a private configuration file")
+    return f"""#!/bin/sh
+{guard}{_adapter_guard_command(name)}
+for kantrip_variable in $(env | sed -n 's/^\\({KCL_ENVIRONMENT_PREFIX}[A-Za-z0-9_]*\\)=.*/\\1/p'); do
+  unset "$kantrip_variable"
+done
+export {KCL_CONFIG_PATH_VARIABLE}={shlex.quote(str(kcl_config))}
+exec {shlex.quote(executable)} "$@"
+"""
+
+
 def render_kcat_shim(name: str, executable: str, inputs: ShimInputs) -> str:
     """Render a shim that exports `KCAT_CONFIG` and adds `-r` for Avro decoding."""
     registry = inputs.registry
@@ -196,5 +216,6 @@ __all__ = [
     "render_kaf_shim",
     "render_kaskade_shim",
     "render_kcat_shim",
+    "render_kcl_shim",
     "write_executable",
 ]

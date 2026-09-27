@@ -68,6 +68,13 @@ runs:
         printf '%s  %s\n' "$KAF_LINUX_SHA256" "kaf_${KAF_VERSION}_Linux_x86_64.tar.gz" \
           | (cd "$RUNNER_TEMP" && sha256sum --check -)
         tar -xzf "$RUNNER_TEMP/kaf_${KAF_VERSION}_Linux_x86_64.tar.gz" -C "$tool_root/bin" kaf
+        curl --fail --location --retry 3 \
+          "https://github.com/twmb/kcl/releases/download/v${KCL_VERSION}/kcl_linux_amd64.gz" \
+          -o "$RUNNER_TEMP/kcl_linux_amd64.gz"
+        printf '%s  %s\n' "$KCL_LINUX_SHA256" "kcl_linux_amd64.gz" \
+          | (cd "$RUNNER_TEMP" && sha256sum --check -)
+        gzip -dc "$RUNNER_TEMP/kcl_linux_amd64.gz" > "$tool_root/bin/kcl"
+        chmod 0755 "$tool_root/bin/kcl"
         UV_TOOL_DIR="$tool_root/uv" UV_TOOL_BIN_DIR="$tool_root/bin" \
           uv tool install --python "$E2E_PYTHON_VERSION" "kaskade==${KASKADE_VERSION}"
     - name: Activate and verify released clients
@@ -78,11 +85,13 @@ runs:
         tool_root="$RUNNER_TEMP/kantrip-e2e-tools"
         test -x "$tool_root/bin/kaskade"
         test -x "$tool_root/bin/kaf"
+        test -x "$tool_root/bin/kcl"
         test -x "$tool_root/confluent-${CONFLUENT_VERSION}/bin/kafka-avro-console-consumer"
         test -x "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin/kafka-console-consumer.sh"
         test -f "$tool_root/librdkafka/lib/librdkafka.so"
         "$tool_root/bin/kaskade" --version | grep -F "$KASKADE_VERSION"
         "$tool_root/bin/kaf" --version | grep -F "$KAF_VERSION"
+        "$tool_root/bin/kcl" --version | grep -F "$KCL_VERSION"
         "$tool_root/confluent-${CONFLUENT_VERSION}/bin/kafka-topics" --version \
           | grep -F "$CONFLUENT_VERSION"
         "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin/kafka-topics.sh" --version \

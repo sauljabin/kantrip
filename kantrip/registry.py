@@ -307,6 +307,60 @@ def kaf_registry_fields(connection: RegistryConnection) -> dict[str, Any]:
     return fields
 
 
+def kcl_registry_config(
+    connection: RegistryConnection,
+    *,
+    ca_location: Path | None = None,
+    client_certificate_location: Path | None = None,
+    private_key_location: Path | None = None,
+) -> dict[str, Any]:
+    """Render the `[registry]` table of kcl v0.20.0's configuration.
+
+    kcl speaks the Confluent API with Basic, a fixed bearer token, or a client
+    certificate, and has no OAuth client. Its client cannot decrypt a key, so
+    `private_key_location` must name an unencrypted copy.
+    """
+    if connection.provider != CONFLUENT_PROVIDER:
+        raise RegistryProfileError("kcl requires a Confluent-compatible Registry profile")
+    config: dict[str, Any] = {"urls": [connection.url]}
+    if connection.auth_type == "basic":
+        if connection.username is None or connection.password is None:
+            raise RegistryProfileError("Registry Basic credentials are not resolved")
+        config["user"] = connection.username
+        config["pass"] = connection.password.reveal()
+    elif connection.auth_type == "token":
+        if connection.token is None:
+            raise RegistryProfileError("Registry token is not resolved")
+        config["bearer_token"] = connection.token.reveal()
+    elif connection.auth_type == "oauth":
+        raise RegistryProfileError("kcl does not support Registry authentication 'oauth'")
+    tls = _kcl_registry_tls(
+        connection, ca_location, client_certificate_location, private_key_location
+    )
+    if tls:
+        config["tls"] = {"insecure": False, **tls}
+    return config
+
+
+def _kcl_registry_tls(
+    connection: RegistryConnection,
+    ca_location: Path | None,
+    client_certificate_location: Path | None,
+    private_key_location: Path | None,
+) -> dict[str, str]:
+    tls: dict[str, str] = {}
+    if connection.ca_certificates is not None:
+        if ca_location is None:
+            raise RegistryProfileError("Registry CA bundle requires a private session file")
+        tls["ca_cert_path"] = str(ca_location)
+    if connection.auth_type == "mtls":
+        if client_certificate_location is None or private_key_location is None:
+            raise RegistryProfileError("Registry mTLS credentials require private session files")
+        tls["client_cert_path"] = str(client_certificate_location)
+        tls["client_key_path"] = str(private_key_location)
+    return tls
+
+
 def confluent_console_properties(
     connection: RegistryConnection,
     *,
@@ -707,6 +761,7 @@ __all__ = [
     "display_registry",
     "kaf_registry_fields",
     "kaskade_registry_properties",
+    "kcl_registry_config",
     "registry_connection",
     "resolve_registry_connection",
 ]
