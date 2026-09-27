@@ -27,8 +27,14 @@ PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
 _UNVERIFIED_ERROR = "could not verify the installed"
 _FLOOR_ERROR = "is not supported; install Apache Kafka 2.6 or Confluent Platform 6.0 or newer"
-_PEM_ERROR = "does not support PEM trust stores"
-_OAUTH_ERROR = "does not support Kantrip's native OAuth mapping"
+_PEM_ERROR = (
+    "does not support PEM trust stores; custom CA profiles require "
+    "Apache Kafka 2.7 or Confluent Platform 6.1 or newer"
+)
+_OAUTH_ERROR = (
+    "does not support Kantrip's native OAuth mapping; "
+    "install Apache Kafka 4.1 or Confluent Platform 8.1 or newer"
+)
 
 
 class TestJavaCapabilityParity(unittest.TestCase):

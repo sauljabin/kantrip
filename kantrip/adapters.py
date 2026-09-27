@@ -70,6 +70,15 @@ ShimRendering = Callable[[str, str, ShimInputs], str]
 EnvironmentPreparation = Callable[[MutableMapping[str, str], ClientConfiguration], None]
 
 
+def rendered_release(release: Sequence[int]) -> str:
+    """Render a release such as `(6, 0)` as `6.0`."""
+    return ".".join(str(part) for part in release)
+
+
+def _at_least(product: str, release: Sequence[int]) -> str:
+    return f"{product} {rendered_release(release)} or newer"
+
+
 @dataclass(frozen=True)
 class ClientVersion:
     """An installed client's release as its version option prints it."""
@@ -78,7 +87,7 @@ class ClientVersion:
     suffix: str = ""
 
     def __str__(self) -> str:
-        return ".".join(str(part) for part in self.release) + self.suffix
+        return rendered_release(self.release) + self.suffix
 
 
 class VersionGate(Protocol):
@@ -134,11 +143,42 @@ class ReleaseGate:
 
     def requirement(self, name: str) -> str:
         del name
-        return f"{self.product} {ClientVersion(self.minimum)} or newer"
+        return _at_least(self.product, self.minimum)
 
 
 _APACHE_KAFKA_MAJORS = frozenset({2, 3, 4})
 _CONFLUENT_PLATFORM_MAJORS = frozenset({5, 6, 7, 8})
+
+
+@dataclass(frozen=True)
+class JavaFloor:
+    """The oldest Apache Kafka and Confluent Platform releases for one Java capability.
+
+    `apache` is None when only Confluent Platform ships the executable.
+    """
+
+    apache: tuple[int, int] | None
+    confluent: tuple[int, int]
+
+    def admits(self, version: ClientVersion) -> bool:
+        major, minor, _ = version.release
+        floor = self.apache if major in _APACHE_KAFKA_MAJORS else self.confluent
+        return floor is not None and (major, minor) >= floor
+
+    def requirement(self) -> str:
+        confluent = _at_least("Confluent Platform", self.confluent)
+        if self.apache is None:
+            return confluent
+        return f"Apache Kafka {rendered_release(self.apache)} or {confluent}"
+
+
+_JAVA_CLI_FLOOR = JavaFloor(apache=(2, 6), confluent=(6, 0))
+_SCHEMA_REGISTRY_CONSOLE_FLOOR = JavaFloor(apache=None, confluent=(5, 5))
+# Native PEM trust stores arrived in Apache Kafka 2.7, which Confluent Platform 6.1 ships.
+_JAVA_PEM_FLOOR = JavaFloor(apache=(2, 7), confluent=(6, 1))
+# The `sasl.oauthbearer.client.credentials.*` properties arrived in Apache
+# Kafka 4.1, which Confluent Platform 8.1 ships.
+_JAVA_OAUTH_FLOOR = JavaFloor(apache=(4, 1), confluent=(8, 1))
 # A suffix starts with a letter, so a Scala-prefixed `2.13-2.6.0` reads as 2.6.0.
 _JAVA_VERSION_PATTERN = re.compile(r"(?<![\d.])(\d+)\.(\d+)(?:\.(\d+))?(-[A-Za-z][\w.]*)?")
 
@@ -166,17 +206,16 @@ class JavaReleaseGate:
         return recognized
 
     def supports(self, name: str, version: ClientVersion) -> bool:
-        major, minor, _ = version.release
-        if name in SCHEMA_REGISTRY_EXECUTABLES:
-            return major in _CONFLUENT_PLATFORM_MAJORS and (major, minor) >= (5, 5)
-        if major in _APACHE_KAFKA_MAJORS:
-            return (major, minor) >= (2, 6)
-        return (major, minor) >= (6, 0)
+        return _java_floor(name).admits(version)
 
     def requirement(self, name: str) -> str:
-        if name in SCHEMA_REGISTRY_EXECUTABLES:
-            return "Confluent Platform 5.5 or newer"
-        return "Apache Kafka 2.6 or Confluent Platform 6.0 or newer"
+        return _java_floor(name).requirement()
+
+
+def _java_floor(name: str) -> JavaFloor:
+    if name in SCHEMA_REGISTRY_EXECUTABLES:
+        return _SCHEMA_REGISTRY_CONSOLE_FLOOR
+    return _JAVA_CLI_FLOOR
 
 
 @dataclass(frozen=True)
@@ -272,40 +311,35 @@ def _java_pem_support(
     name: str, version: ClientVersion, output: str, needs: KafkaNeeds
 ) -> str | None:
     del output
-    major, minor, _ = version.release
-    if not needs.custom_pem or _java_client_supports_pem((major, minor)):
+    if not needs.custom_pem or _JAVA_PEM_FLOOR.admits(version):
         return None
     return (
         f"{name} {version} does not support PEM trust stores; "
-        "custom CA profiles require Apache Kafka 2.7+ or Confluent Platform 6.1+"
+        f"custom CA profiles require {_JAVA_PEM_FLOOR.requirement()}"
     )
 
 
 def _java_oauth_support(
     name: str, version: ClientVersion, output: str, needs: KafkaNeeds
 ) -> str | None:
-    # The `sasl.oauthbearer.client.credentials.*` properties arrived in Apache
-    # Kafka 4.1, which Confluent Platform 8.1 ships.
     del output
-    major, minor, _ = version.release
-    floor = (4, 1) if major in _APACHE_KAFKA_MAJORS else (8, 1)
-    if needs.auth_type != "oauth" or (major, minor) >= floor:
+    if needs.auth_type != "oauth" or _JAVA_OAUTH_FLOOR.admits(version):
         return None
     return (
         f"{name} {version} does not support Kantrip's native OAuth mapping; "
-        "install Apache Kafka 4.1+ or Confluent Platform 8.1+"
+        f"install {_JAVA_OAUTH_FLOOR.requirement()}"
     )
 
 
 _LIBRDKAFKA_VERSION_PATTERN = re.compile(r"\blibrdkafka (\d+)\.(\d+)\.(\d+)")
+# `https.ca.location`, which trusts the token endpoint's CA, arrived in librdkafka 2.11.0.
 _LIBRDKAFKA_HTTPS_CA_MIN_VERSION = (2, 11, 0)
 
 
 def _librdkafka_oauth_ca_support(
     name: str, version: ClientVersion, output: str, needs: KafkaNeeds
 ) -> str | None:
-    # `https.ca.location`, which trusts the token endpoint's CA, arrived in
-    # librdkafka 2.11.0; kcat prints the linked library with its own release.
+    # kcat prints the linked librdkafka alongside its own release.
     del version
     if needs.auth_type != "oauth" or not needs.oauth_ca:
         return None
@@ -313,10 +347,10 @@ def _librdkafka_oauth_ca_support(
     linked = tuple(int(part) for part in match.groups()) if match else None
     if linked is not None and linked >= _LIBRDKAFKA_HTTPS_CA_MIN_VERSION:
         return None
-    rendered = f"librdkafka {'.'.join(match.groups())}" if match else "an unidentified librdkafka"
+    rendered = f"librdkafka {rendered_release(linked)}" if linked else "an unidentified librdkafka"
     return (
         f"{name} links {rendered}, which cannot trust the profile's OAuth token-endpoint CA; "
-        "install librdkafka 2.11.0 or newer"
+        f"install {_at_least('librdkafka', _LIBRDKAFKA_HTTPS_CA_MIN_VERSION)}"
     )
 
 
@@ -634,17 +668,6 @@ def _version_output(resolved: str, option: str, environment: Mapping[str, str]) 
     return f"{result.stdout}\n{result.stderr}"
 
 
-def _java_client_supports_pem(version: tuple[int, int]) -> bool:
-    major, minor = version
-    if major == 2:
-        return minor >= 7
-    if major in {3, 4}:
-        return True
-    if major == 6:
-        return minor >= 1
-    return major in {7, 8}
-
-
 __all__ = [
     "ADAPTER_EXECUTABLES",
     "CLIENT_ADAPTERS",
@@ -676,6 +699,7 @@ __all__ = [
     "create_subshell_shims",
     "prepare_command",
     "prepare_command_environment",
+    "rendered_release",
     "require_adapter_capability",
     "require_minimum_version",
 ]
