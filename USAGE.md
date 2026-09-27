@@ -499,21 +499,24 @@ Configure only the integration that renders your prompt:
 - Use **Starship** if Starship controls your prompt.
 - Use **Powerlevel10k** if Powerlevel10k controls your prompt, even when it is
   installed through Oh My Zsh.
-- Use **Oh My Zsh** for a theme that uses the standard `PROMPT` variable.
-- Use **Bash** or **Fish** for their own prompt without a prompt framework.
+- Use **Zsh** for Zsh's own prompt, or for an Oh My Zsh theme that uses the
+  standard `PROMPT` variable.
+- Use **Bash** or **Fish** for their own prompt.
 
 Kantrip keeps your normal startup files, so these settings also load inside the
 session.
 
 ### Choose a display style
 
-Examples use `kantrip:PROFILE`; the alternatives below provide compact prefixes:
+The examples show the Apache Kafka glyph before the profile name. To use another
+style, replace the glyph as each section describes:
 
 | Style | Reference | Requirement |
 | --- | --- | --- |
+| Apache Kafka (default) | <img src="images/nf-md-apache-kafka.svg" alt="Nerd Font Apache Kafka glyph" height="16"> | A [Nerd Font](https://www.nerdfonts.com/) with `nf-md-apache_kafka` (`U+F100F`) |
+| Kantrip magic staff | <img src="images/nf-md-magic-staff.svg" alt="Nerd Font magic staff glyph" height="16"> | A [Nerd Font](https://www.nerdfonts.com/) with `nf-md-magic_staff` (`U+F1844`) |
 | Magic-wand emoji | 🪄 | An emoji fallback font |
-| Kantrip magic staff | <img src="images/nf-md-magic-staff.svg" alt="Nerd Font magic staff glyph" width="48"> | MesloLGS NF or another Nerd Font with `nf-md-magic_staff` (`U+F1844`) |
-| Apache Kafka | <img src="images/nf-md-apache-kafka.svg" alt="Nerd Font Apache Kafka glyph" width="48"> | MesloLGS NF or another Nerd Font with `nf-md-apache_kafka` (`U+F100F`) |
+| Text | `kantrip:` | None |
 
 GitHub may render Nerd Font characters as boxes; the images show their terminal
 appearance. See the [Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet)
@@ -527,42 +530,26 @@ Add a custom module to `~/.config/starship.toml`:
 [custom.kantrip]
 command = 'printf %s "$KANTRIP_PROFILE"'
 when = 'test -n "$KANTRIP_PROFILE"'
-format = '[kantrip:$output]($style) '
+symbol = '󱀏 '
 style = 'bold purple'
 ```
 
-For a compact prefix, replace `format` with one of these alternatives.
-
-Magic-wand emoji:
-
-```toml
-format = '[🪄 $output]($style) '
-```
-
-Kantrip magic staff (`nf-md-magic_staff`):
-
-```toml
-format = '[󱡄 $output]($style) '
-```
-
-Apache Kafka (`nf-md-apache_kafka`):
-
-```toml
-format = '[󱀏 $output]($style) '
-```
+Like Starship's own modules, the custom module shows its `symbol` before its
+output. For another style, set `symbol` to `'󱡄 '`, `'🪄 '`, or `'kantrip:'`.
 
 Starship's default prompt includes custom modules. If you define a custom global
 `format`, add `${custom.kantrip}` where the profile should appear.
 
-### Oh My Zsh
+### Zsh
 
-For an Oh My Zsh theme that uses the standard `PROMPT` variable, add this after
-`source $ZSH/oh-my-zsh.sh` in `~/.zshrc`:
+For Zsh's own prompt, or an Oh My Zsh theme that uses the standard `PROMPT`
+variable, add this to the end of `~/.zshrc`, after `source $ZSH/oh-my-zsh.sh`
+when you use Oh My Zsh:
 
 ```zsh
 kantrip_prompt_info() {
   [[ -n ${KANTRIP_PROFILE:-} ]] || return
-  print -P -n '%F{magenta}kantrip:%f%F{cyan}'
+  print -P -n '%F{magenta}󱀏 %f%F{cyan}'
   print -rn -- "$KANTRIP_PROFILE"
   print -P -n '%f '
 }
@@ -571,28 +558,9 @@ setopt prompt_subst
 PROMPT='$(kantrip_prompt_info)'"$PROMPT"
 ```
 
-For a compact prefix, replace the first `print` command with one alternative.
-
-Magic-wand emoji:
-
-```zsh
-print -P -n '%F{magenta}🪄 %f%F{cyan}'
-```
-
-Kantrip magic staff (`nf-md-magic_staff`):
-
-```zsh
-print -P -n '%F{magenta}󱡄 %f%F{cyan}'
-```
-
-Apache Kafka (`nf-md-apache_kafka`):
-
-```zsh
-print -P -n '%F{magenta}󱀏 %f%F{cyan}'
-```
-
-Themes that replace `PROMPT` after this code may need the snippet moved to the
-end of `~/.zshrc`.
+For another style, replace `󱀏 ` in the first `print` command with `󱡄 `, `🪄 `, or
+`kantrip:`. If a theme or plugin sets `PROMPT` later in `~/.zshrc`, keep this
+snippet after it.
 
 ### Powerlevel10k
 
@@ -601,42 +569,28 @@ Define a custom segment in `~/.p10k.zsh`:
 ```zsh
 function prompt_kantrip() {
   [[ -n ${KANTRIP_PROFILE:-} ]] || return
-  p10k segment -f 5 -t "kantrip:${KANTRIP_PROFILE}"
+  p10k segment -f 5 -i '󱀏' -t "${KANTRIP_PROFILE}"
 }
-```
-
-For a compact prefix, replace the `p10k segment` line with one alternative.
-
-Magic-wand emoji:
-
-```zsh
-p10k segment -f 5 -t "🪄 ${KANTRIP_PROFILE}"
-```
-
-Kantrip magic staff (`nf-md-magic_staff`):
-
-```zsh
-p10k segment -f 5 -t "󱡄 ${KANTRIP_PROFILE}"
-```
-
-Apache Kafka (`nf-md-apache_kafka`):
-
-```zsh
-p10k segment -f 5 -t "󱀏 ${KANTRIP_PROFILE}"
 ```
 
 Then add `kantrip` to either `POWERLEVEL9K_LEFT_PROMPT_ELEMENTS` or
 `POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS` in the same file.
+
+The glyph is the segment's icon (`-i`), so Powerlevel10k places it like its
+other icons: before the profile in the left prompt and after it in the right
+prompt, unless `POWERLEVEL9K_ICON_BEFORE_CONTENT` says otherwise. For another
+style, set the icon to `'󱡄'` or `'🪄'`; for text, remove `-i '󱀏'` and use
+`-t "kantrip:${KANTRIP_PROFILE}"`.
 
 ### Bash
 
 Add this to the end of `~/.bashrc`:
 
 ```bash
-PS1='${KANTRIP_PROFILE:+kantrip:$KANTRIP_PROFILE }'"$PS1"
+PS1='${KANTRIP_PROFILE:+󱀏 $KANTRIP_PROFILE }'"$PS1"
 ```
 
-For a compact prefix, replace `kantrip:` with `🪄 `, `󱡄 `, or `󱀏 `.
+For another style, replace `󱀏 ` with `󱡄 `, `🪄 `, or `kantrip:`.
 
 ### Fish
 
@@ -645,12 +599,12 @@ Add this to `~/.config/fish/config.fish`:
 ```fish
 functions --copy fish_prompt kantrip_original_prompt
 function fish_prompt
-    set -q KANTRIP_PROFILE; and printf 'kantrip:%s ' $KANTRIP_PROFILE
+    set -q KANTRIP_PROFILE; and printf '󱀏 %s ' $KANTRIP_PROFILE
     kantrip_original_prompt
 end
 ```
 
-For a compact prefix, replace `kantrip:` with `🪄 `, `󱡄 `, or `󱀏 `.
+For another style, replace `󱀏 ` with `󱡄 `, `🪄 `, or `kantrip:`.
 
 ### Verify the prompt
 
