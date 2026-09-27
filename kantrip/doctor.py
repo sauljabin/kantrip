@@ -32,6 +32,7 @@ from kantrip.adapters import (
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
     VersionProbe,
+    rendered_release,
     require_adapter_capability,
     require_minimum_version,
 )
@@ -66,7 +67,8 @@ from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
 
-# The supported range must match requires-python in pyproject.toml; a unit test enforces it.
+# The supported range must match requires-python and the Python classifiers in
+# pyproject.toml; a unit test enforces it.
 PYTHON_MINIMUM = (3, 10)
 PYTHON_EXCLUSIVE_MAXIMUM = (3, 15)
 
@@ -343,12 +345,8 @@ def _check_python() -> DoctorCheck:
     return DoctorCheck(
         "error",
         f"Python version is not supported ({version}); "
-        f"use Python {_python_label(PYTHON_MINIMUM)} through {_python_label(newest)}",
+        f"use Python {rendered_release(PYTHON_MINIMUM)} through {rendered_release(newest)}",
     )
-
-
-def _python_label(version: tuple[int, int]) -> str:
-    return ".".join(str(part) for part in version)
 
 
 def _check_cli(environment: Mapping[str, str]) -> DoctorCheck:

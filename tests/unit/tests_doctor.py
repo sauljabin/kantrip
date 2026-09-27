@@ -9,6 +9,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+from kantrip.adapters import rendered_release
 from kantrip.doctor import (
     PYTHON_EXCLUSIVE_MAXIMUM,
     PYTHON_MINIMUM,
@@ -610,12 +611,23 @@ class TestDoctorPythonRange(unittest.TestCase):
     def test_supported_range_matches_requires_python(self) -> None:
         pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         match = re.search(r'^requires-python = "(.+)"$', pyproject, re.MULTILINE)
-        minimum = ".".join(map(str, PYTHON_MINIMUM))
-        maximum = ".".join(map(str, PYTHON_EXCLUSIVE_MAXIMUM))
+        minimum = rendered_release(PYTHON_MINIMUM)
+        maximum = rendered_release(PYTHON_EXCLUSIVE_MAXIMUM)
 
         self.assertIsNotNone(match)
         assert match is not None
         self.assertEqual(f">={minimum},<{maximum}", match.group(1))
+
+    def test_supported_range_matches_python_classifiers(self) -> None:
+        pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        classified = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', pyproject)
+        major = PYTHON_MINIMUM[0]
+        supported = [
+            rendered_release((major, minor))
+            for minor in range(PYTHON_MINIMUM[1], PYTHON_EXCLUSIVE_MAXIMUM[1])
+        ]
+
+        self.assertEqual(supported, classified)
 
     def test_unsupported_python_names_supported_range(self) -> None:
         version_info = namedtuple("version_info", "major minor micro releaselevel serial")
