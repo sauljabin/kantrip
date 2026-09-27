@@ -325,6 +325,19 @@ def require_kcat_registry(name: str, registry: RegistryConnection | None) -> Reg
     return connection
 
 
+def require_kaf_registry(registry: RegistryConnection) -> RegistryConnection:
+    """Require a Registry that kaf's Go client reaches with system trust and Basic at most."""
+    connection = _require_confluent_registry("kaf", registry)
+    if connection.auth_type not in {"none", "basic"}:
+        raise AdapterError(f"kaf does not support Registry authentication '{connection.auth_type}'")
+    if connection.ca_certificates is not None:
+        raise AdapterError(
+            "kaf trusts only the system CA store for the Registry; "
+            "profiles with a custom Registry CA are not supported"
+        )
+    return connection
+
+
 def require_kaskade_registry(registry: RegistryConnection | None) -> RegistryConnection:
     """Require a Registry whose authentication Kaskade's deserializers can map safely."""
     connection = _require_registry("kaskade", registry)
@@ -588,6 +601,7 @@ __all__ = [
     "prepare_java_command",
     "prepare_kaskade_command",
     "prepare_kcat_command",
+    "require_kaf_registry",
     "require_kaskade_registry",
     "require_kcat_registry",
     "require_registry_console_registry",

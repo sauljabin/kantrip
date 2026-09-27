@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
+import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -184,6 +187,7 @@ def smoke(
                 profile=profile,
                 topic=topic,
                 registry_provider=registry_provider,
+                registry_url=registry_url,
                 installed=installed,
                 kcat_executables=kcat_executables,
                 shells=resolved_shells,
@@ -229,6 +233,7 @@ def _exercise_clients(
     profile: str,
     topic: str,
     registry_provider: str,
+    registry_url: str,
     installed: Mapping[str, Sequence[str]],
     kcat_executables: Sequence[str],
     shells: Sequence[tuple[str, str]],
@@ -237,7 +242,7 @@ def _exercise_clients(
     creator = installed["topics"][0]
     if registry_provider == "confluent":
         _show_section(console, "Confluent registry clients")
-        _check_schema_registry_clients(console, profile, topic, creator, environment)
+        _check_schema_registry_clients(console, profile, topic, creator, registry_url, environment)
     _show_section(console, "Kafka CLI")
     _check_java_operations(console, profile, topic, installed, environment)
     _show_section(console, "Additional clients")
@@ -715,6 +720,7 @@ def _check_schema_registry_clients(
     profile: str,
     topic_prefix: str,
     topic_executable: str,
+    registry_url: str,
     environment: Mapping[str, str],
 ) -> None:
     cases = (
@@ -790,8 +796,76 @@ def _check_schema_registry_clients(
                     f"{consumer} did not decode its {format_name} record: "
                     f"{output.strip()[-500:]}"
                 )
+            if format_name == "avro":
+                _check_kaf_avro(console, profile, topic, registry_url, marker, environment)
         finally:
             _delete_topic(console, profile, topic_executable, topic, environment)
+
+
+def _check_kaf_avro(
+    console: Console,
+    profile: str,
+    topic: str,
+    registry_url: str,
+    marker: str,
+    environment: Mapping[str, str],
+) -> None:
+    """Decode the console producer's Avro record with kaf, then encode one by schema ID."""
+    output = _check(
+        console,
+        "kaf: consume avro",
+        _kantrip(profile, "kaf", "consume", topic, "--offset", "oldest"),
+        environment,
+    )
+    # The raw record holds the marker too; only a decoded one is a JSON field.
+    if re.search(rf'"value":\s*{re.escape(json.dumps(marker))}', output) is None:
+        raise SmokeFailure(f"kaf did not decode its avro record: {output.strip()[-500:]}")
+    kaf_marker = "kantrip avro record from kaf"
+    _check(
+        console,
+        "kaf: produce avro",
+        _kantrip(
+            profile,
+            "kaf",
+            "produce",
+            topic,
+            "--avro-schema-id",
+            str(_latest_schema_id(registry_url, f"{topic}-value")),
+        ),
+        environment,
+        input_text=_avro_json(kaf_marker) + "\n",
+    )
+    output = _check(
+        console,
+        "kafka-avro-console-consumer: consume kaf avro",
+        _kantrip(
+            profile,
+            "kafka-avro-console-consumer",
+            "--topic",
+            topic,
+            "--group",
+            f"{topic}-kaf",
+            "--from-beginning",
+            "--max-messages",
+            "2",
+        ),
+        environment,
+    )
+    if kaf_marker not in output:
+        raise SmokeFailure(f"kaf did not encode its avro record: {output.strip()[-500:]}")
+
+
+def _avro_json(marker: str) -> str:
+    return json.dumps({"value": marker}, separators=(",", ":"))
+
+
+def _latest_schema_id(registry_url: str, subject: str) -> int:
+    url = f"{registry_url}/subjects/{urllib.parse.quote(subject, safe='')}/versions/latest"
+    with urllib.request.urlopen(url, timeout=10) as response:
+        schema_id = json.load(response)["id"]
+    if not isinstance(schema_id, int):
+        raise SmokeFailure(f"Registry returned no schema ID for {subject}")
+    return schema_id
 
 
 def _check(
