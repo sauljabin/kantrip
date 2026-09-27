@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | End users | `USAGE.md`, `COMPATIBILITY.md` | Installed `kantrip` commands, supported clients/protocols/formats, actionable limits and environment behavior |
 | Developers | `DEVELOPMENT.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `MANUAL_TESTING.md` | Contributor workflows, technical decisions and rationale, security analysis, reproducible human QA |
-| AI agents | `AGENT.md`, `RELEASE_CHECKLIST.md` | Durable engineering instructions and release execution gates |
+| AI agents | `AGENT.md`, `RELEASE_CHECKLIST.md` | Durable engineering instructions and release execution gates; `CLAUDE.md` only imports `AGENT.md` so Claude Code loads it |
 
 - Keep sandbox instructions, `uv run`, repository workflows, internal-only
   capabilities, and future CLI contracts out of end-user guides. Document only
@@ -42,6 +42,10 @@
   `THREAT_MODEL.md` with implemented controls and explicit residual risks.
 - Keep each manual scenario's setup, commands, and expected results in
   `MANUAL_TESTING.md`; keep release orchestration in `RELEASE_CHECKLIST.md`.
+- `USAGE.md`, `ARCHITECTURE.md`, `DEVELOPMENT.md`, and `THREAT_MODEL.md` open
+  with a `## Contents` list of their `##` and `###` headings, linked by GitHub
+  anchor. Update it whenever a heading is added, renamed, or removed. Shorter
+  guides, checklists, and `AGENT.md` have none.
 
 ## Planning and Delivery
 
@@ -355,4 +359,6 @@ overflows the site banner on phones, and misplaces the wand's star.
   `<type>(<optional scope>): <imperative summary>`. Keep the summary short and do
   not use it as a change list.
 - End commit messages and pull-request descriptions with a blank line followed by
-  `Assisted-by: <AI model> <version>`, using the actual model and version.
+  `Assisted-by: <AI model> <version>`, using the actual model and version. It is
+  the only attribution and the last line: do not add `Co-Authored-By` trailers or
+  "Generated with" footers, even when a tool's defaults ask for them.

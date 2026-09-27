@@ -13,6 +13,31 @@ overrides, and abandoned secret-bearing artifacts. It does not make an
 untrusted command safe and does not defend against a compromised operating
 system or user account.
 
+## Contents
+
+- [Security objectives](#security-objectives)
+- [Protected assets](#protected-assets)
+- [Actors and trust assumptions](#actors-and-trust-assumptions)
+- [Trust boundaries and entry points](#trust-boundaries-and-entry-points)
+  - [Profile storage boundary](#profile-storage-boundary)
+  - [Execution boundary](#execution-boundary)
+  - [Network boundary](#network-boundary)
+  - [Sandbox laboratory boundary](#sandbox-laboratory-boundary)
+  - [Recovery boundary](#recovery-boundary)
+- [Threats and controls](#threats-and-controls)
+  - [Profile tampering and connection confusion](#profile-tampering-and-connection-confusion)
+  - [Schema migration tampering and partial upgrades](#schema-migration-tampering-and-partial-upgrades)
+  - [Secret disclosure at rest](#secret-disclosure-at-rest)
+  - [Secret disclosure during execution](#secret-disclosure-during-execution)
+  - [Adapter bypass and command injection](#adapter-bypass-and-command-injection)
+  - [Network interception and endpoint substitution](#network-interception-and-endpoint-substitution)
+  - [Abandoned runtime artifacts and process escape](#abandoned-runtime-artifacts-and-process-escape)
+  - [Diagnostic and output leakage](#diagnostic-and-output-leakage)
+  - [Availability and resource exhaustion](#availability-and-resource-exhaustion)
+- [Security strengths](#security-strengths)
+- [Residual weaknesses](#residual-weaknesses)
+- [Out of scope](#out-of-scope)
+
 ## Security objectives
 
 Kantrip aims to preserve these properties:
