@@ -28,6 +28,7 @@ from kantrip.adapters import (
     KAFKA_TOPICS_EXECUTABLES,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
+    KCL_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
     require_adapter_capability,
@@ -688,6 +689,8 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
         *_check_command_paths("Kaskade", (("executable", KASKADE_EXECUTABLES),), search_path),
         _check_command_group("kaf", (KAF_EXECUTABLES,), search_path),
         *_check_command_paths("kaf", (("executable", KAF_EXECUTABLES),), search_path),
+        _check_command_group("kcl", (KCL_EXECUTABLES,), search_path),
+        *_check_command_paths("kcl", (("executable", KCL_EXECUTABLES),), search_path),
     ]
 
 

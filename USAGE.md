@@ -816,6 +816,45 @@ HTTPS that the system trusts. Any other Registry profile makes every kaf command
 fail before launch: Apicurio's native API, a custom Registry CA, fixed token,
 mTLS, or OAuth.
 
+### kcl
+
+Kantrip gives [kcl](https://github.com/twmb/kcl) a private TOML configuration
+built from the profile and selects it with `KCL_CONFIG_PATH`. The command line
+is not changed:
+
+```bash
+kantrip exec local -- kcl topic list
+kantrip exec local -- kcl consume orders --offset :end
+echo hello | kantrip exec local -- kcl produce orders
+kantrip exec local -- kcl group list
+```
+
+kcl supports plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
+and mTLS profiles. OAuth profiles fail before launch because kcl has no OAuth
+mechanism. An encrypted mTLS key is decrypted into a private session file,
+because kcl can't read encrypted keys.
+
+Kantrip rejects `-B`/`--bootstrap-servers`, `-R`/`--registry`,
+`-C`/`--profile`, `--config-path`, `--no-config-file`, `--config-env-prefix`,
+and every `kcl profile` command. `-X`/`--config-opt` accepts only
+`broker_timeout`, `dial_timeout`, `retry_timeout`, `help`, and `list`; every
+other key would change the connection. kcl also reads `KCL_*` variables, such
+as `KCL_SEED_BROKERS` or `KCL_PROFILE`, so Kantrip removes them before kcl
+starts. Your own kcl configuration file is never read or changed.
+
+When the profile has a Registry, `kcl registry` commands use it, `consume
+--decode` decodes records, and `produce --schema` encodes JSON input:
+
+```bash
+kantrip exec local -- kcl registry subject list
+kantrip exec local -- kcl consume orders --decode=value
+echo '{"id":"42"}' | kantrip exec local -- kcl produce orders --schema id:7
+```
+
+kcl supports a Confluent-compatible Registry with no authentication, Basic, a
+fixed token, or mTLS, with system trust or the profile's custom CA. OAuth and
+Apicurio's native API make every kcl command fail before launch.
+
 ## Profile storage
 
 Kantrip stores profiles in a private local database. Use `add`, `edit`, and

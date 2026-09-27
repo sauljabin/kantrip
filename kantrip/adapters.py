@@ -12,7 +12,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +28,7 @@ from kantrip.adapter_policy import (
     KAFKA_TOPICS_EXECUTABLES,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
+    KCL_EXECUTABLES,
     SCHEMA_REGISTRY_CONSUMER_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
     SCHEMA_REGISTRY_PRODUCER_EXECUTABLES,
@@ -37,11 +38,16 @@ from kantrip.adapter_policy import (
     check_kaf_arguments,
     check_kaskade_arguments,
     check_kcat_arguments,
+    check_kcl_arguments,
     prepare_java_command,
     prepare_kaf_command,
+    prepare_kaf_environment,
     prepare_kaskade_command,
     prepare_kcat_command,
+    prepare_kcl_command,
+    prepare_kcl_environment,
     require_kaf_registry,
+    require_kcl_registry,
 )
 from kantrip.adapter_shims import (
     ShimInputs,
@@ -49,6 +55,7 @@ from kantrip.adapter_shims import (
     render_kaf_shim,
     render_kaskade_shim,
     render_kcat_shim,
+    render_kcl_shim,
     write_executable,
 )
 from kantrip.registry import APICURIO_PROVIDER, CONFLUENT_PROVIDER, RegistryConnection
@@ -58,6 +65,7 @@ CommandPreparation = Callable[
     [list[str], ClientConfiguration, RegistryConnection | None], list[str]
 ]
 ShimRendering = Callable[[str, str, ShimInputs], str]
+EnvironmentPreparation = Callable[[MutableMapping[str, str], ClientConfiguration], None]
 
 _KAFKA_AUTHENTICATION = frozenset(
     {"none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth"}
@@ -73,7 +81,8 @@ class ClientAdapter:
     `prepare_command` and `render_shim` inject the private configuration:
     options for Java tools and Kaskade, `KCAT_CONFIG` plus `-r` for kcat. The
     remaining fields are the family's capability matrix and version gates;
-    `registry_check` gates a family that reads the profile's Registry on every run.
+    `registry_check` gates a family that reads the profile's Registry on every run,
+    and `prepare_environment` adjusts a direct child's environment.
     """
 
     name: str
@@ -88,6 +97,7 @@ class ClientAdapter:
     oauth_version_gate: bool = False
     registry_version_gate: bool = False
     registry_check: Callable[[RegistryConnection], object] | None = None
+    prepare_environment: EnvironmentPreparation | None = None
 
 
 def _missing_kcat(name: str) -> str:
@@ -115,6 +125,14 @@ def _missing_kaf(name: str) -> str:
     return (
         "command 'kaf' was not found; install it with 'brew install kaf' on macOS or "
         "from https://github.com/birdayz/kaf/releases on Linux"
+    )
+
+
+def _missing_kcl(name: str) -> str:
+    del name
+    return (
+        "command 'kcl' was not found; install it from "
+        "https://github.com/twmb/kcl/releases and ensure its executable is on PATH"
     )
 
 
@@ -162,8 +180,21 @@ KAF_ADAPTER = ClientAdapter(
     # profile's token-endpoint CA, so OAuth has no safe mapping.
     kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
     registry_check=require_kaf_registry,
+    prepare_environment=prepare_kaf_environment,
 )
-CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER)
+KCL_ADAPTER = ClientAdapter(
+    "kcl",
+    KCL_EXECUTABLES,
+    check_arguments=check_kcl_arguments,
+    prepare_command=prepare_kcl_command,
+    render_shim=render_kcl_shim,
+    missing_command=_missing_kcl,
+    # kcl's SASL mechanisms are PLAIN, SCRAM, and AWS MSK IAM; it has no OAUTHBEARER.
+    kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
+    registry_check=require_kcl_registry,
+    prepare_environment=prepare_kcl_environment,
+)
+CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER, KCL_ADAPTER)
 _ADAPTERS_BY_EXECUTABLE = {
     executable: adapter for adapter in CLIENT_ADAPTERS for executable in adapter.executables
 }
@@ -191,6 +222,19 @@ def prepare_command(
     return adapter.prepare_command(prepared, configuration, registry)
 
 
+def prepare_command_environment(
+    arguments: Sequence[str],
+    environment: Mapping[str, str],
+    configuration: ClientConfiguration,
+) -> dict[str, str]:
+    """Return the environment a supported explicit command runs with."""
+    prepared = dict(environment)
+    adapter = client_adapter(Path(arguments[0]).name) if arguments else None
+    if adapter is not None and adapter.prepare_environment is not None:
+        adapter.prepare_environment(prepared, configuration)
+    return prepared
+
+
 def create_subshell_shims(
     directory: Path,
     *,
@@ -206,6 +250,7 @@ def create_subshell_shims(
     schema_registry_java_config_path: Path | None = None,
     registry_oauth_ssl_cert_file: Path | None = None,
     kaf_config_path: Path | None = None,
+    kcl_config_path: Path | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     configuration = ClientConfiguration(
@@ -217,6 +262,7 @@ def create_subshell_shims(
         schema_registry_java_config=schema_registry_java_config_path,
         registry_oauth_ssl_cert_file=registry_oauth_ssl_cert_file,
         kaf_config=kaf_config_path,
+        kcl_config=kcl_config_path,
     )
     installed = _installed_executables(environment.get("PATH", os.defpath))
     gates = _ShimCapabilityGates(environment, registry, require_java_pem, kafka_auth_type)
@@ -507,6 +553,7 @@ __all__ = [
     "KAF_EXECUTABLES",
     "KASKADE_EXECUTABLES",
     "KCAT_EXECUTABLES",
+    "KCL_EXECUTABLES",
     "SCHEMA_REGISTRY_CONSUMER_EXECUTABLES",
     "SCHEMA_REGISTRY_EXECUTABLES",
     "SCHEMA_REGISTRY_PRODUCER_EXECUTABLES",
@@ -516,6 +563,7 @@ __all__ = [
     "client_adapter",
     "create_subshell_shims",
     "prepare_command",
+    "prepare_command_environment",
     "require_adapter_capability",
     "require_java_oauth_support",
     "require_java_pem_support",

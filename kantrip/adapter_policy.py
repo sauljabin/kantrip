@@ -7,7 +7,7 @@ native argument grammar in an explicit function; the descriptors in
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -18,6 +18,11 @@ KAF_EXECUTABLES = frozenset({"kaf"})
 # fails before any file exists, so profile credentials can never reach it.
 KAF_HOME = "/dev/null"
 KASKADE_EXECUTABLES = frozenset({"kaskade"})
+KCL_EXECUTABLES = frozenset({"kcl"})
+# kcl reads `KCL_<KEY>` overrides and config-file selectors from its environment;
+# sessions strip them and select the private file through this variable.
+KCL_ENVIRONMENT_PREFIX = "KCL_"
+KCL_CONFIG_PATH_VARIABLE = "KCL_CONFIG_PATH"
 KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
 KAFKA_CONSOLE_CONSUMER_EXECUTABLES = frozenset(
     {"kafka-console-consumer", "kafka-console-consumer.sh"}
@@ -67,6 +72,7 @@ class ClientConfiguration:
     schema_registry_java_config: Path | None = None
     registry_oauth_ssl_cert_file: Path | None = None
     kaf_config: Path | None = None
+    kcl_config: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,29 @@ _KAF_CONNECTION_OPTIONS = ("--config", "--brokers", "--cluster", "--schema-regis
 _KAF_CONNECTION_SHORT_OPTIONS = {"b": "--brokers", "c": "--cluster"}
 _KAF_BOOLEAN_SHORT_OPTIONS = frozenset("fhv")
 _KAF_BOOLEAN_LONG_OPTIONS = frozenset({"--follow", "--help", "--verbose", "--version"})
+# kcl v0.20.0 (client/client.go, main.go): persistent options that replace or bypass
+# the profile, the `-X` keys a session may still set, the root options that take a
+# value (so the command after them is found as cobra finds it), and every short
+# option that is a boolean in some command; any other short option takes a value.
+_KCL_CONNECTION_OPTIONS = frozenset(
+    {
+        "--bootstrap-servers",
+        "--config-env-prefix",
+        "--config-path",
+        "--no-config-file",
+        "--profile",
+        "--registry",
+    }
+)
+_KCL_CONNECTION_SHORT_OPTIONS = {"B": "--bootstrap-servers", "C": "--profile", "R": "--registry"}
+_KCL_CONFIG_OPTION = "--config-opt"
+_KCL_CONFIG_SHORT_OPTION = "X"
+_KCL_SAFE_CONFIG_KEYS = frozenset(
+    {"broker_timeout", "dial_timeout", "retry_timeout", "help", "list"}
+)
+_KCL_ROOT_VALUE_OPTIONS = frozenset({"--as-version", "--format", "--log-file", "--log-level"})
+_KCL_BOOLEAN_SHORT_OPTIONS = frozenset("dHhijmrvyZ")
+_KCL_PROFILE_COMMANDS = frozenset({"myconfig", "profile"})
 _SAFE_RUNTIME_KAFKA_PROPERTIES = frozenset({"group.id", "broker.address.family"})
 _KAFKA_CLIENT_PROPERTY_OPTIONS = frozenset(
     {"--command-property", "--consumer-property", "--producer-property"}
@@ -204,6 +233,13 @@ def check_kaf_arguments(executable: str, arguments: Sequence[str]) -> str | None
     """Reject kaf options and `config` commands that replace or persist the profile."""
     del executable
     _reject_kaf_overrides(arguments)
+    return None
+
+
+def check_kcl_arguments(executable: str, arguments: Sequence[str]) -> str | None:
+    """Reject kcl options, `-X` keys, and profile commands that replace the profile."""
+    del executable
+    _reject_kcl_overrides(arguments)
     return None
 
 
@@ -293,6 +329,38 @@ def prepare_kaf_command(
     return [prepared[0], "--config", str(configuration.kaf_config), *prepared[1:]]
 
 
+def prepare_kcl_command(
+    prepared: list[str],
+    configuration: ClientConfiguration,
+    registry: RegistryConnection | None,
+) -> list[str]:
+    """Check kcl's arguments; its environment selects the private configuration."""
+    del registry
+    _reject_kcl_overrides(prepared[1:])
+    if configuration.kcl_config is None:
+        raise AdapterError("kcl requires a private configuration file")
+    return prepared
+
+
+def prepare_kaf_environment(
+    environment: MutableMapping[str, str], configuration: ClientConfiguration
+) -> None:
+    """Run kaf under a home where its `~/.kaf/config` save fails."""
+    del configuration
+    environment["HOME"] = KAF_HOME
+
+
+def prepare_kcl_environment(
+    environment: MutableMapping[str, str], configuration: ClientConfiguration
+) -> None:
+    """Strip kcl's own overrides and select the private configuration file."""
+    if configuration.kcl_config is None:
+        raise AdapterError("kcl requires a private configuration file")
+    for name in [name for name in environment if name.startswith(KCL_ENVIRONMENT_PREFIX)]:
+        del environment[name]
+    environment[KCL_CONFIG_PATH_VARIABLE] = str(configuration.kcl_config)
+
+
 def require_registry_console_registry(
     name: str, registry: RegistryConnection | None
 ) -> RegistryConnection:
@@ -335,6 +403,14 @@ def require_kaf_registry(registry: RegistryConnection) -> RegistryConnection:
             "kaf trusts only the system CA store for the Registry; "
             "profiles with a custom Registry CA are not supported"
         )
+    return connection
+
+
+def require_kcl_registry(registry: RegistryConnection) -> RegistryConnection:
+    """Require a Confluent-compatible Registry whose authentication kcl can map."""
+    connection = _require_confluent_registry("kcl", registry)
+    if connection.auth_type not in {"none", "basic", "token", "mtls"}:
+        raise AdapterError(f"kcl does not support Registry authentication '{connection.auth_type}'")
     return connection
 
 
@@ -426,6 +502,74 @@ def _kaf_short_group_takes_value(group: str) -> bool:
             # A value option consumes the rest of the group, or the next argument.
             return index == len(group) - 1
     return False
+
+
+def _reject_kcl_overrides(arguments: Sequence[str]) -> None:
+    command: str | None = None
+    pending: str | None = None
+    for argument in arguments:
+        if argument == "--":
+            break
+        if pending == _KCL_CONFIG_OPTION:
+            pending = None
+            _check_kcl_config_option(argument)
+            continue
+        if pending is not None:
+            pending = None
+            # An option-like value is checked anyway: a rejection beats a bypass.
+            if not argument.startswith("-"):
+                continue
+        if argument.startswith("--"):
+            pending = _kcl_long_option(argument)
+        elif argument.startswith("-") and len(argument) > 1:
+            pending = _kcl_short_group(argument[1:])
+        elif command is None:
+            command = argument
+    if command in _KCL_PROFILE_COMMANDS:
+        raise AdapterError(
+            f"kcl {command} commands cannot change or show the selected Kantrip profile; "
+            "Kantrip selects the connection for this session"
+        )
+
+
+def _kcl_long_option(argument: str) -> str | None:
+    """Check one long option and return what its separate value is, if it takes one."""
+    name, separator, value = argument.partition("=")
+    if name in _KCL_CONNECTION_OPTIONS:
+        raise AdapterError(f"kcl option '{name}' cannot override the selected Kantrip profile")
+    if name == _KCL_CONFIG_OPTION:
+        if separator:
+            _check_kcl_config_option(value)
+            return None
+        return _KCL_CONFIG_OPTION
+    # Other options are taken as booleans, so a command name after them is still found.
+    return name if not separator and name in _KCL_ROOT_VALUE_OPTIONS else None
+
+
+def _kcl_short_group(group: str) -> str | None:
+    """Check one short option group and return what its separate value is, if any."""
+    for index, option in enumerate(group):
+        if option in _KCL_CONNECTION_SHORT_OPTIONS:
+            name = _KCL_CONNECTION_SHORT_OPTIONS[option]
+            raise AdapterError(
+                f"kcl option '-{option}/{name}' cannot override the selected Kantrip profile"
+            )
+        rest = group[index + 1 :]
+        if option == _KCL_CONFIG_SHORT_OPTION:
+            if not rest:
+                return _KCL_CONFIG_OPTION
+            _check_kcl_config_option(rest.removeprefix("="))
+            return None
+        if option not in _KCL_BOOLEAN_SHORT_OPTIONS:
+            # A value option consumes the rest of the group, or the next argument.
+            return None if rest else f"-{option}"
+    return None
+
+
+def _check_kcl_config_option(value: str) -> None:
+    key = value.partition("=")[0]
+    if key.lower().replace(".", "_") not in _KCL_SAFE_CONFIG_KEYS:
+        raise AdapterError(f"kcl config key '{key}' cannot override the selected Kantrip profile")
 
 
 def _safe_runtime_kafka_property(value: str) -> bool:
@@ -588,6 +732,9 @@ __all__ = [
     "KASKADE_EXECUTABLES",
     "KCAT_EXECUTABLES",
     "KCAT_SCHEMA_REGISTRY_SIGNAL",
+    "KCL_CONFIG_PATH_VARIABLE",
+    "KCL_ENVIRONMENT_PREFIX",
+    "KCL_EXECUTABLES",
     "SCHEMA_REGISTRY_CONSUMER_EXECUTABLES",
     "SCHEMA_REGISTRY_EXECUTABLES",
     "SCHEMA_REGISTRY_PRODUCER_EXECUTABLES",
@@ -598,11 +745,16 @@ __all__ = [
     "check_java_arguments",
     "check_kaskade_arguments",
     "check_kcat_arguments",
+    "check_kcl_arguments",
     "prepare_java_command",
+    "prepare_kaf_environment",
     "prepare_kaskade_command",
     "prepare_kcat_command",
+    "prepare_kcl_command",
+    "prepare_kcl_environment",
     "require_kaf_registry",
     "require_kaskade_registry",
     "require_kcat_registry",
+    "require_kcl_registry",
     "require_registry_console_registry",
 ]

@@ -222,7 +222,7 @@ def _discover_clients(
         _require_command(f"Kafka {adapter} CLI", bool(executables))
     kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
     _require_command("kcat", "kcat" in kcat_executables)
-    for client in ("kaskade", "kaf"):
+    for client in ("kaskade", "kaf", "kcl"):
         _require_command(client, shutil.which(client, path=environment.get("PATH")) is not None)
     return installed, kcat_executables
 
@@ -249,6 +249,7 @@ def _exercise_clients(
     _check_kcat_operations(console, profile, topic, kcat_executables, environment)
     _check_kaskade_operations(console, profile, topic, environment)
     _check_kaf_operations(console, profile, topic, environment)
+    _check_kcl_operations(console, profile, topic, environment)
     _check_shells(
         console,
         profile=profile,
@@ -447,6 +448,39 @@ def _check_kaf_operations(
         raise SmokeFailure("kaf changed the user's ~/.kaf/config")
 
 
+def _check_kcl_operations(
+    console: Console,
+    profile: str,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    # Inherited kcl overrides that would reach another cluster; sessions strip them.
+    kcl_environment = {
+        **environment,
+        "KCL_NO_CONFIG_FILE": "1",
+        "KCL_SEED_BROKERS": "127.0.0.1:9",
+    }
+    output = _check(
+        console, "kcl: list topics", _kantrip(profile, "kcl", "topic", "list"), kcl_environment
+    )
+    _require_topic(topic, output, "kcl")
+    marker = "kantrip smoke record from kcl"
+    _check(
+        console,
+        "kcl: produce record",
+        _kantrip(profile, "kcl", "produce", topic),
+        kcl_environment,
+        input_text=f"{marker}\n",
+    )
+    output = _check(
+        console,
+        "kcl: consume records",
+        _kantrip(profile, "kcl", "consume", topic, "--offset", ":end"),
+        kcl_environment,
+    )
+    _require_topic(marker, output, "kcl")
+
+
 def kaf_user_config_state(environment: Mapping[str, str]) -> tuple[int, int] | None:
     """Return the user's kaf config identity and change time, which sessions never touch."""
     home = environment.get("HOME")
@@ -620,6 +654,7 @@ def _shell_commands(
         f"{executable} -X broker.address.family=v4 -L" for executable in kcat_executables
     )
     commands.append("kaf topics")
+    commands.append("kcl topic list")
     return commands
 
 
@@ -798,6 +833,7 @@ def _check_schema_registry_clients(
                 )
             if format_name == "avro":
                 _check_kaf_avro(console, profile, topic, registry_url, marker, environment)
+                _check_kcl_avro(console, profile, topic, registry_url, marker, environment)
         finally:
             _delete_topic(console, profile, topic_executable, topic, environment)
 
@@ -853,6 +889,58 @@ def _check_kaf_avro(
     )
     if kaf_marker not in output:
         raise SmokeFailure(f"kaf did not encode its avro record: {output.strip()[-500:]}")
+
+
+def _check_kcl_avro(
+    console: Console,
+    profile: str,
+    topic: str,
+    registry_url: str,
+    marker: str,
+    environment: Mapping[str, str],
+) -> None:
+    """Decode the console producer's Avro record with kcl, then encode one by schema ID."""
+    output = _check(
+        console,
+        "kcl: consume avro",
+        _kantrip(profile, "kcl", "consume", topic, "--decode=value", "--num", "1"),
+        environment,
+    )
+    if re.search(rf'"value":\s*{re.escape(json.dumps(marker))}', output) is None:
+        raise SmokeFailure(f"kcl did not decode its avro record: {output.strip()[-500:]}")
+    kcl_marker = "kantrip avro record from kcl"
+    _check(
+        console,
+        "kcl: produce avro",
+        _kantrip(
+            profile,
+            "kcl",
+            "produce",
+            topic,
+            "--schema",
+            f"id:{_latest_schema_id(registry_url, f'{topic}-value')}",
+        ),
+        environment,
+        input_text=_avro_json(kcl_marker) + "\n",
+    )
+    output = _check(
+        console,
+        "kafka-avro-console-consumer: consume kcl avro",
+        _kantrip(
+            profile,
+            "kafka-avro-console-consumer",
+            "--topic",
+            topic,
+            "--group",
+            f"{topic}-kcl",
+            "--from-beginning",
+            "--max-messages",
+            "3",
+        ),
+        environment,
+    )
+    if kcl_marker not in output:
+        raise SmokeFailure(f"kcl did not encode its avro record: {output.strip()[-500:]}")
 
 
 def _avro_json(marker: str) -> str:

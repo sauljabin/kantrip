@@ -40,6 +40,7 @@ def check_preconditions(environment: Mapping[str, str]) -> None:
     )
     _require_exact_version("kaskade", ("kaskade", "--version"), versions["KASKADE_VERSION"])
     _require_exact_version("kaf", ("kaf", "--version"), versions["KAF_VERSION"])
+    _require_exact_version("kcl", ("kcl", "--version"), versions["KCL_VERSION"])
     kcat_version = (
         versions["KCAT_MACOS_VERSION"] if sys.platform == "darwin" else versions["KCAT_VERSION"]
     )

@@ -14,15 +14,14 @@ from typing import Any
 import yaml
 
 from kantrip._files import write_exclusive_text
-from kantrip.adapter_policy import KAF_HOME
 from kantrip.adapters import (
-    KAF_EXECUTABLES,
     KCAT_EXECUTABLES,
     AdapterError,
     ClientConfiguration,
     client_adapter,
     create_subshell_shims,
     prepare_command,
+    prepare_command_environment,
     require_adapter_capability,
 )
 from kantrip.kafka import (
@@ -35,9 +34,10 @@ from kantrip.kafka import (
     java_properties,
     kaf_cluster,
     kafka_connection,
+    kcl_config,
     librdkafka_properties,
     resolve_kafka_connection,
-    unencrypted_private_key,
+    unencrypted_pem_key,
 )
 from kantrip.registry import (
     APICURIO_PROVIDER,
@@ -52,6 +52,7 @@ from kantrip.registry import (
     confluent_console_properties,
     kaf_registry_fields,
     kaskade_registry_properties,
+    kcl_registry_config,
     registry_connection,
     resolve_registry_connection,
 )
@@ -62,12 +63,16 @@ from kantrip.runtime import (
     create_session_runtime,
 )
 from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
+from kantrip.secret_value import Secret
 from kantrip.shells import ShellError, prepare_interactive_shell, resolve_interactive_shell
 from kantrip.supervisor import SupervisorError, run_supervised_process
 
 KAF_CLUSTER_NAME = "kantrip"
 KAF_CONFIG_FILENAME = "kaf.yaml"
-KAF_CLIENT_KEY_FILENAME = "kaf-client.key"
+KCL_CONFIG_FILENAME = "kcl.toml"
+# Go clients (kaf, kcl) cannot decrypt a PEM key; they read these unencrypted copies.
+UNENCRYPTED_CLIENT_KEY_FILENAME = "client-unencrypted.key"
+UNENCRYPTED_REGISTRY_CLIENT_KEY_FILENAME = "registry-client-unencrypted.key"
 _SCRUBBED_PREFIXES = ("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KANTRIP_SANDBOX_")
 _SCRUBBED_JAVA_VARIABLES = frozenset(
     {"KAFKA_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
@@ -166,6 +171,7 @@ class _KafkaMaterial:
     certificate: Path | None = None
     private_key: Path | None = None
     oauth_ca: Path | None = None
+    unencrypted_private_key: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +182,7 @@ class _RegistryMaterial:
     oauth_ca: Path | None = None
     certificate: Path | None = None
     private_key: Path | None = None
+    unencrypted_private_key: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -236,8 +243,13 @@ def _run_in_runtime(
         registry,
         registry_material.oauth_ca,
     )
-    if has_command and Path(arguments[0]).name in KAF_EXECUTABLES:
-        execution_environment["HOME"] = KAF_HOME
+    if has_command:
+        try:
+            execution_environment = prepare_command_environment(
+                arguments, execution_environment, clients.configuration
+            )
+        except AdapterError as error:
+            raise SessionError(str(error)) from error
     result = _run_child(
         arguments,
         env=execution_environment,
@@ -253,6 +265,7 @@ def _write_kafka_material(directory: Path, kafka: KafkaConnection) -> _KafkaMate
         ca_path = _write_private(directory / CA_BUNDLE_FILENAME, kafka.ca_certificates)
     certificate_path: Path | None = None
     private_key_path: Path | None = None
+    unencrypted_key_path: Path | None = None
     if kafka.auth_type == "mtls":
         if kafka.client_certificate is None or kafka.private_key is None:
             raise SessionError("Kafka mTLS credentials are not resolved")
@@ -262,12 +275,20 @@ def _write_kafka_material(directory: Path, kafka: KafkaConnection) -> _KafkaMate
         private_key_path = _write_private(
             directory / CLIENT_KEY_FILENAME, kafka.private_key.reveal()
         )
+        unencrypted_key_path = _write_unencrypted_key(
+            directory / UNENCRYPTED_CLIENT_KEY_FILENAME,
+            kafka.private_key,
+            kafka.private_key_password,
+            private_key_path,
+        )
     oauth_ca_path: Path | None = None
     if kafka.oauth is not None and kafka.oauth.ca_certificates is not None:
         oauth_ca_path = _write_private(
             directory / OAUTH_CA_BUNDLE_FILENAME, kafka.oauth.ca_certificates
         )
-    return _KafkaMaterial(ca_path, certificate_path, private_key_path, oauth_ca_path)
+    return _KafkaMaterial(
+        ca_path, certificate_path, private_key_path, oauth_ca_path, unencrypted_key_path
+    )
 
 
 def _write_registry_material(
@@ -290,6 +311,7 @@ def _write_registry_material(
         )
     certificate_path: Path | None = None
     private_key_path: Path | None = None
+    unencrypted_key_path: Path | None = None
     if registry.auth_type == "mtls":
         if registry.client_certificate is None or registry.private_key is None:
             raise SessionError("Registry mTLS credentials are not resolved")
@@ -299,7 +321,27 @@ def _write_registry_material(
         private_key_path = _write_private(
             directory / REGISTRY_CLIENT_KEY_FILENAME, registry.private_key.reveal()
         )
-    return _RegistryMaterial(ca_path, oauth_ca_path, certificate_path, private_key_path)
+        unencrypted_key_path = _write_unencrypted_key(
+            directory / UNENCRYPTED_REGISTRY_CLIENT_KEY_FILENAME,
+            registry.private_key,
+            registry.private_key_password,
+            private_key_path,
+        )
+    return _RegistryMaterial(
+        ca_path, oauth_ca_path, certificate_path, private_key_path, unencrypted_key_path
+    )
+
+
+def _write_unencrypted_key(
+    path: Path, private_key: Secret, password: Secret | None, plain_key_path: Path
+) -> Path:
+    """Reuse an unencrypted key file, or write a decrypted copy for Go clients."""
+    if password is None:
+        return plain_key_path
+    try:
+        return _write_private(path, unencrypted_pem_key(private_key, password).reveal())
+    except KafkaProfileError as error:
+        raise SessionError(str(error)) from error
 
 
 def _write_client_files(
@@ -326,6 +368,9 @@ def _write_client_files(
         raise SessionError(str(error)) from error
     schema_registry_java_config_path = directory / "schema-registry-kafka.properties"
     kaf_config = _write_kaf_config(directory, kafka, kafka_material, registry)
+    kcl_config_path = _write_kcl_config(
+        directory, kafka, kafka_material, registry, registry_material
+    )
     configuration = ClientConfiguration(
         bootstrap_servers=kcat_properties["bootstrap.servers"],
         java_config=directory / "kafka.properties",
@@ -335,6 +380,7 @@ def _write_client_files(
         schema_registry_java_config=schema_registry_java_config_path,
         registry_oauth_ssl_cert_file=registry_material.oauth_ca,
         kaf_config=kaf_config,
+        kcl_config=kcl_config_path,
     )
     registry_config_path = directory / "registry.properties"
     rendered_kafka = _render_properties(kcat_properties)
@@ -379,18 +425,12 @@ def _write_kaf_config(
         registry_fields = kaf_registry_fields(registry) if registry is not None else {}
     except RegistryProfileError:
         return None
-    private_key = material.private_key
-    if kafka.auth_type == "mtls" and kafka.private_key_password is not None:
-        # kaf cannot decrypt a key; kcat's files already hold this key and its password.
-        private_key = _write_private(
-            directory / KAF_CLIENT_KEY_FILENAME, unencrypted_private_key(kafka).reveal()
-        )
     try:
         cluster = kaf_cluster(
             kafka,
             ca_location=material.ca,
             client_certificate_location=material.certificate,
-            private_key_location=private_key,
+            private_key_location=material.unencrypted_private_key,
         )
     except KafkaProfileError as error:
         raise SessionError(str(error)) from error
@@ -400,6 +440,49 @@ def _write_kaf_config(
     }
     return _write_private(
         directory / KAF_CONFIG_FILENAME, yaml.safe_dump(document, sort_keys=False)
+    )
+
+
+def _write_kcl_config(
+    directory: Path,
+    kafka: KafkaConnection,
+    kafka_material: _KafkaMaterial,
+    registry: RegistryConnection | None,
+    registry_material: _RegistryMaterial,
+) -> Path | None:
+    """Write kcl's flat TOML config; a profile kcl cannot map gets none.
+
+    Kafka OAuth, Registry OAuth, and native Apicurio have no kcl mapping; the
+    capability gate refuses kcl before launch.
+    """
+    if kafka.auth_type == "oauth":
+        return None
+    try:
+        registry_config = (
+            {
+                "registry": kcl_registry_config(
+                    registry,
+                    ca_location=registry_material.ca,
+                    client_certificate_location=registry_material.certificate,
+                    private_key_location=registry_material.unencrypted_private_key,
+                )
+            }
+            if registry is not None
+            else {}
+        )
+    except RegistryProfileError:
+        return None
+    try:
+        config = kcl_config(
+            kafka,
+            ca_location=kafka_material.ca,
+            client_certificate_location=kafka_material.certificate,
+            private_key_location=kafka_material.unencrypted_private_key,
+        )
+    except KafkaProfileError as error:
+        raise SessionError(str(error)) from error
+    return _write_private(
+        directory / KCL_CONFIG_FILENAME, _render_kcl_toml(config | registry_config)
     )
 
 
@@ -551,6 +634,7 @@ def _prepare_subshell(
         kaskade_config_path=configuration.kaskade_config,
         kaskade_registry_config_path=configuration.kaskade_registry_config,
         kaf_config_path=configuration.kaf_config,
+        kcl_config_path=configuration.kcl_config,
         environment=environment,
         registry=registry,
         registry_oauth_ssl_cert_file=configuration.registry_oauth_ssl_cert_file,
@@ -660,6 +744,40 @@ def _render_properties(properties: Mapping[str, str]) -> str:
         if "\n" in value or "\r" in value:
             raise SessionError("client property values cannot contain line breaks")
     return "".join(f"{key}={value}\n" for key, value in sorted(properties.items()))
+
+
+def _render_kcl_toml(table: Mapping[str, Any], header: str = "") -> str:
+    """Serialize kcl's string, boolean, and string-list keys, then its nested tables."""
+    lines = [f"[{header}]\n"] if header else []
+    nested: list[str] = []
+    for key, value in table.items():
+        if isinstance(value, Mapping):
+            nested.append(_render_kcl_toml(value, f"{header}.{key}" if header else key))
+        elif isinstance(value, bool):
+            lines.append(f"{key} = {'true' if value else 'false'}\n")
+        elif isinstance(value, list):
+            items = ", ".join(_kcl_toml_string(item) for item in value)
+            lines.append(f"{key} = [{items}]\n")
+        else:
+            lines.append(f"{key} = {_kcl_toml_string(value)}\n")
+    return "\n".join(["".join(lines), *nested]) if nested else "".join(lines)
+
+
+def _kcl_toml_string(value: str) -> str:
+    """Quote a TOML basic string that kcl reads literally.
+
+    kcl expands `${NAME}` from the environment in every string it loads and reads
+    `$${` as a literal `${`, so each `${` is escaped first.
+    """
+    escaped: list[str] = []
+    for character in value.replace("${", "$${"):
+        if character in {'"', "\\"}:
+            escaped.append(f"\\{character}")
+        elif ord(character) < 0x20 or ord(character) == 0x7F:
+            escaped.append(f"\\u{ord(character):04X}")
+        else:
+            escaped.append(character)
+    return f'"{"".join(escaped)}"'
 
 
 def _render_java_properties(properties: Mapping[str, str]) -> str:

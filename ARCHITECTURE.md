@@ -364,7 +364,7 @@ Apicurio scopes) and runs a Java install directory's `--version` once.
 | Module | Responsibility | I/O |
 | --- | --- | --- |
 | `adapters.py` | `ClientAdapter` descriptors and lookup; direct-command, shim, and capability dispatch; installed-version probes | Runs `--version` probes; creates the shim directory |
-| `adapter_policy.py` | Executable names, the per-command Java option table, native argument grammars (kcat getopt clusters, Java and Kaskade long options), direct-command injection, per-client Registry compatibility | None |
+| `adapter_policy.py` | Executable names, the per-command Java option table, native argument grammars (kcat getopt clusters, Java and Kaskade long options, kaf and kcl pflag options), direct-command injection, per-client Registry compatibility | None |
 | `adapter_shims.py` | POSIX shim rendering and quoting | Writes mode-0700 shims |
 | `_adapter_guard.py` | Shim-side entry point that runs the descriptor's argument check | None |
 
@@ -372,9 +372,17 @@ Configuration reaches each client natively: Java tools receive
 `--bootstrap-server` and their config-file option (Registry consoles also a
 formatter/reader config file and `schema.registry.url` property); kcat reads
 `KCAT_CONFIG` and receives `-r` only for Avro decoding; Kaskade `admin` and
-`consumer` receive `--config-file`. Two session steps remain client-specific in
-`session.py`: kcat's `-F` rejection before secrets are resolved, and the
-Kaskade Registry-OAuth `SSL_CERT_FILE` described above.
+`consumer` receive `--config-file`; kaf receives `--config` and runs with
+`HOME=/dev/null`, because it saves its loaded configuration to `~/.kaf/config`;
+kcl reads a private TOML file through `KCL_CONFIG_PATH` after every inherited
+`KCL_*` variable is removed, because kcl reads each configuration key from the
+environment. A descriptor's `prepare_environment` makes such child-environment
+changes for direct commands, and its shim makes them in shells. kcl expands
+`${NAME}` in every configuration string, so its renderer writes each `${` as
+kcl's literal `$${`. kaf and kcl cannot decrypt PEM keys, so an encrypted mTLS
+key also gets one decrypted private session copy per service. Two session steps
+remain client-specific in `session.py`: kcat's `-F` rejection before secrets are
+resolved, and the Kaskade Registry-OAuth `SSL_CERT_FILE` described above.
 
 | Client family | Profile-owned native inputs | Runtime inputs retained |
 | --- | --- | --- |
@@ -382,6 +390,8 @@ Kaskade Registry-OAuth `SSL_CERT_FILE` described above.
 | Confluent Registry consoles | Kafka and Registry files/URLs, alternate command/formatter/reader files, and profile-owned format properties | Consumer `group.id` and presentation properties that cannot replace a connection |
 | `kcat`/`kafkacat` | `-b`, `-F`, `-r`, and arbitrary `-X` configuration | `-X group.id` and `-X broker.address.family` only |
 | Kaskade | Bootstrap/Registry/config-file options and arbitrary `--kafka` properties | `--kafka group.id` and `--kafka broker.address.family` only |
+| kaf | `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands | Resource, format, and output options |
+| kcl | `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` configuration keys, `KCL_*` variables, and `kcl profile` commands | `-X` timeouts, `help`, and `list`; resource, format, and output options |
 
 These are native-client grammars, not a generic passthrough policy. A future
 client option is admitted only after checking the released tool's semantics,
@@ -392,7 +402,7 @@ arbitrary executable remains trusted with its child environment and is not
 confined by these adapter guards.
 
 Current adapters cover Apache and Confluent Kafka commands, Confluent Schema
-Registry consoles, `kcat`/`kafkacat`, and Kaskade. The exact version and feature
+Registry consoles, `kcat`/`kafkacat`, Kaskade, kaf, and kcl. The exact version and feature
 matrix lives in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 Interactive Bash, Zsh, and Fish sessions use temporary shims. The shell keeps
