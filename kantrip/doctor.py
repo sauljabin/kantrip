@@ -31,7 +31,9 @@ from kantrip.adapters import (
     KCL_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
+    VersionProbe,
     require_adapter_capability,
+    require_minimum_version,
 )
 from kantrip.kafka import KafkaProfileError, kafka_connection, resolve_kafka_connection
 from kantrip.profile_output import credential_references
@@ -135,6 +137,8 @@ def run_doctor(
         _check_shell(env),
     ]
     profiles, profile_checks = _check_profile_database(env, profile_name=profile_name)
+    # One version run per installed client serves both client sections.
+    versions = VersionProbe(env)
     credential_checks, store = _check_credentials(env)
     profile_credential_checks = _check_profile_credentials(profiles, store)
     profile_id = None
@@ -164,7 +168,12 @@ def run_doctor(
             ],
         ),
         *_assign_section(
-            "Clients", [*_check_commands(env), *_check_profile_clients(profiles, env)]
+            "Clients",
+            [
+                *_check_commands(env),
+                *_check_client_versions(env, versions),
+                *_check_profile_clients(profiles, env, versions),
+            ],
         ),
     ]
     return DoctorReport(tuple(checks))
@@ -694,9 +703,38 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
     ]
 
 
+def _check_client_versions(
+    environment: Mapping[str, str], versions: VersionProbe
+) -> list[DoctorCheck]:
+    """Report each installed client whose release Kantrip does not support."""
+    search_path = environment.get("PATH")
+    installed = [
+        (adapter, executable)
+        for adapter in CLIENT_ADAPTERS
+        if (executable := _find_first(adapter.executables, search_path)) is not None
+    ]
+    versions.prefetch((adapter.minimum_version, executable) for adapter, executable in installed)
+    checks: list[DoctorCheck] = []
+    for adapter, executable in installed:
+        try:
+            version = require_minimum_version(
+                executable, adapter.minimum_version, environment=environment, versions=versions
+            )
+        except AdapterError as error:
+            checks.append(DoctorCheck("warning", str(error)))
+        else:
+            checks.append(
+                DoctorCheck(
+                    "success", f"{Path(executable).name} {version} is supported", verbose_only=True
+                )
+            )
+    return checks
+
+
 def _check_profile_clients(
     profiles: ProfileCollection | None,
     environment: Mapping[str, str],
+    versions: VersionProbe,
 ) -> list[DoctorCheck]:
     """Report installed adapters that can execute each selected profile."""
     if profiles is None:
@@ -723,6 +761,9 @@ def _check_profile_clients(
                     auth_type=connection.auth_type,
                     custom_pem=custom_pem,
                     environment=environment,
+                    oauth_ca=connection.oauth is not None
+                    and connection.oauth.ca_certificates is not None,
+                    versions=versions,
                 )
             except AdapterError as error:
                 rejected.append(f"{label}: {error}")

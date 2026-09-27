@@ -13,6 +13,7 @@ from typing import Any
 from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES, KCAT_EXECUTABLES
 from kantrip.profiles import add_profile
 from scripts import run_terminal
+from tests.unit.client_versions import SUPPORTED_VERSION_OUTPUT
 
 _FAKE_CLIENT = r"""#!{python}
 import json
@@ -23,9 +24,9 @@ from pathlib import Path
 
 name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
-if name == "kcl" and arguments == ["--version"]:
-    # Kantrip's minimum-version gate probes kcl before it renders the shim.
-    print("kcl version v0.20.0")
+if arguments in (["--version"], ["-V"]):
+    # Kantrip's minimum-version gate probes each client before it renders the shim.
+    print({supported_version_output!r})
     sys.exit(0)
 config_path = os.environ.get("KCAT_CONFIG") if name in {kcat_executables} else None
 if name == "kcl":
@@ -260,6 +261,7 @@ def _write_fake_clients(directory: Path) -> None:
     contents = _FAKE_CLIENT.format(
         python=sys.executable,
         kcat_executables=repr(set(KCAT_EXECUTABLES)),
+        supported_version_output=SUPPORTED_VERSION_OUTPUT.rstrip("\n"),
     )
     for executable in ADAPTER_EXECUTABLES:
         path = directory / executable

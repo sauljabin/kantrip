@@ -269,11 +269,9 @@ grouped by implementation rather than wrapper: one Confluent Java console case,
 one Kaskade Confluent Python case, and one Kaskade native Apicurio case.
 
 The native Apicurio OAuth contract is verified against the published
-[Kaskade 5.0.1 release](https://github.com/sauljabin/kaskade/releases/tag/v5.0.1).
-That is the minimum version only when scopes require the official
-`apicurio.registry.auth.client.scope` property. Keep scope-free profiles
-compatible with earlier Kaskade releases and test release gates with installed
-stable distributions rather than development-version strings alone.
+[Kaskade 5.0.1 release](https://github.com/sauljabin/kaskade/releases/tag/v5.0.1),
+which is also Kaskade's minimum version in Kantrip. Test version checks with
+installed stable releases, not only with development-version strings.
 An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
 through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
 from a private temporary config file. `sandbox-admin` is the only superuser.
@@ -305,8 +303,10 @@ or reader property to suppress Confluent's built-in localhost default. Registry
 OAuth sessions own the JVM URL allowlist and use Java PEM truststore properties
 for both the Registry and token endpoint.
 
-Install the exact released client versions listed in `tests/e2e/versions.env`
-outside Kantrip's environment. Build the candidate wheel and install it in a
+Install the released client versions listed in `tests/e2e/versions.env`
+outside Kantrip's environment. CI installs each pinned version exactly. A local
+run also accepts a newer release, because Kantrip only checks a minimum version.
+A unit test keeps every pin at or above Kantrip's minimum for that client. Build the candidate wheel and install it in a
 separate environment, then set `KANTRIP_E2E_KANTRIP` to that environment's
 `kantrip` executable. The test process validates all tools, sandbox workloads,
 host endpoints, private file modes, and the native credential store before any
