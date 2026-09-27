@@ -119,45 +119,51 @@ class ClientAdapter:
     minimum_version: VersionGate | None = None
 
 
+def missing_command_message(name: str, hint: str | None = None) -> str:
+    """Return the missing-command error, followed by an install hint when one is known."""
+    message = f"command '{name}' was not found"
+    return message if hint is None else f"{message}; {hint}"
+
+
 def _missing_kcat(name: str) -> str:
     del name
-    return (
-        "command 'kcat' was not found; install it with 'brew install kcat' "
-        "on macOS or your Linux package manager"
+    return missing_command_message(
+        "kcat", "install it with 'brew install kcat' on macOS or your Linux package manager"
     )
 
 
 def _missing_java_command(name: str) -> str:
     if name in SCHEMA_REGISTRY_EXECUTABLES:
-        return (
-            f"command '{name}' was not found; install the Confluent Schema "
-            "Registry package and ensure its bin directory is on PATH"
+        return missing_command_message(
+            name,
+            "install the Confluent Schema Registry package and ensure its bin directory is on PATH",
         )
-    return (
-        f"command '{name}' was not found; install the Apache Kafka CLI "
-        "and ensure its bin directory is on PATH"
+    return missing_command_message(
+        name, "install the Apache Kafka CLI and ensure its bin directory is on PATH"
     )
 
 
 def _missing_kaf(name: str) -> str:
     del name
-    return (
-        "command 'kaf' was not found; install it with 'brew install kaf' on macOS or "
-        "from https://github.com/birdayz/kaf/releases on Linux"
+    return missing_command_message(
+        "kaf",
+        "install it with 'brew install kaf' on macOS or "
+        "from https://github.com/birdayz/kaf/releases on Linux",
     )
 
 
 def _missing_kcl(name: str) -> str:
     del name
-    return (
-        "command 'kcl' was not found; install it from "
-        "https://github.com/twmb/kcl/releases and ensure its executable is on PATH"
+    return missing_command_message(
+        "kcl",
+        "install it from https://github.com/twmb/kcl/releases "
+        "and ensure its executable is on PATH",
     )
 
 
 def _missing_kaskade(name: str) -> str:
     del name
-    return "command 'kaskade' was not found; install it and ensure its executable is on PATH"
+    return missing_command_message("kaskade", "install it and ensure its executable is on PATH")
 
 
 KCAT_ADAPTER = ClientAdapter(
@@ -500,7 +506,7 @@ def _released_client_version(
 ) -> tuple[tuple[int, int, int], str, str]:
     resolved = shutil.which(executable, path=environment.get("PATH"))
     if resolved is None:
-        raise AdapterError(f"command '{Path(executable).name}' was not found")
+        raise AdapterError(missing_command_message(Path(executable).name))
     try:
         result = subprocess.run(
             [resolved, "--version"],
@@ -540,7 +546,7 @@ def _java_client_version(
 ) -> tuple[int, int]:
     resolved = shutil.which(executable, path=environment.get("PATH"))
     if resolved is None:
-        raise AdapterError(f"command '{Path(executable).name}' was not found")
+        raise AdapterError(missing_command_message(Path(executable).name))
     version = probe(resolved, environment)
     if version is None:
         raise AdapterError(f"could not verify {capability} support for {Path(executable).name}")
@@ -616,6 +622,7 @@ __all__ = [
     "VersionGate",
     "client_adapter",
     "create_subshell_shims",
+    "missing_command_message",
     "prepare_command",
     "prepare_command_environment",
     "require_adapter_capability",

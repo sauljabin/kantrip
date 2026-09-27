@@ -20,6 +20,7 @@ from kantrip.adapters import (
     ClientConfiguration,
     client_adapter,
     create_subshell_shims,
+    missing_command_message,
     prepare_command,
     prepare_command_environment,
     require_adapter_capability,
@@ -726,7 +727,7 @@ def _validate_executable(executable: str, environment: Mapping[str, str]) -> Non
     executable_name = Path(executable).name
     adapter = client_adapter(executable_name)
     if adapter is None:
-        raise SessionError(f"command '{executable}' was not found")
+        raise SessionError(missing_command_message(executable))
     raise SessionError(adapter.missing_command(executable_name))
 
 
