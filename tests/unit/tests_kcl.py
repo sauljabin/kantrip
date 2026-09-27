@@ -12,6 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 from kantrip.adapter_policy import AdapterError, check_kcl_arguments
+from kantrip.adapters import KCL_ADAPTER, require_minimum_version
 from kantrip.kafka import KafkaConnection
 from kantrip.oauth import OAuthConnection
 from kantrip.registry import RegistryConnection
@@ -42,6 +43,12 @@ class KclSessionTestCase(unittest.TestCase):
         )
         runtime_patch.start()
         self.addCleanup(runtime_patch.stop)
+        for version_patch in (
+            patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kcl"),
+            patch("kantrip.adapters.subprocess.run", return_value=_version("kcl version v0.20.0")),
+        ):
+            version_patch.start()
+            self.addCleanup(version_patch.stop)
 
     def run_kcl(
         self,
@@ -404,6 +411,35 @@ class TestKclShim(KclSessionTestCase):
         self.assertEqual(0o700, observed["mode"])
 
 
+class TestKclMinimumVersion(KclSessionTestCase):
+    def test_releases_from_the_minimum_on_are_accepted(self) -> None:
+        assert KCL_ADAPTER.minimum_version is not None
+        for output in ("kcl version v0.20.0", "kcl version v0.20.1", "kcl version v1.0.0"):
+            with (
+                self.subTest(output=output),
+                patch("kantrip.adapters.subprocess.run", return_value=_version(output)),
+            ):
+                require_minimum_version(
+                    "kcl", KCL_ADAPTER.minimum_version, environment={"PATH": "/opt/bin"}
+                )
+
+    def test_older_suffixed_or_unreadable_builds_fail_before_launch(self) -> None:
+        for output, message in (
+            ("kcl version v0.19.0", "kcl 0.19.0 is not supported; install kcl 0.20.0 or newer"),
+            (
+                "kcl version v0.21.0-dirty",
+                "kcl 0.21.0-dirty is not supported; install kcl 0.20.0 or newer",
+            ),
+            ("kcl version dev+abc1234", "could not verify the installed kcl version"),
+            ("KCL configuration language v0.11.0", "could not verify the installed kcl version"),
+        ):
+            with (
+                self.subTest(output=output),
+                patch("kantrip.adapters.subprocess.run", return_value=_version(output)),
+            ):
+                self.assert_fails_before_launch(message)
+
+
 class TestKclArgumentPolicy(unittest.TestCase):
     def test_connection_options_are_rejected_in_every_form(self) -> None:
         for arguments in (
@@ -511,6 +547,10 @@ class TestKclConfigStrings(unittest.TestCase):
             with self.subTest(value=value):
                 rendered = _kcl_toml_string(value)
                 self.assertEqual(value, _kcl_expand(_toml_basic_string(rendered)))
+
+
+def _version(output: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(["kcl", "--version"], 0, f"{output}\n", "")
 
 
 def _toml_basic_string(rendered: str) -> str:

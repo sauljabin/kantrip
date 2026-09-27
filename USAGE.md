@@ -829,8 +829,10 @@ echo hello | kantrip exec local -- kcl produce orders
 kantrip exec local -- kcl group list
 ```
 
-kcl supports plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512,
-and mTLS profiles. OAuth profiles fail before launch because kcl has no OAuth
+Kantrip requires kcl 0.20.0 or newer and checks the installed version with
+`kcl --version` before launch; development builds fail that check. kcl supports
+plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS
+profiles. OAuth profiles fail before launch because kcl has no OAuth
 mechanism. An encrypted mTLS key is decrypted into a private session file,
 because kcl can't read encrypted keys.
 

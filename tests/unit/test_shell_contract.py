@@ -23,6 +23,10 @@ from pathlib import Path
 
 name = Path(sys.argv[0]).name
 arguments = sys.argv[1:]
+if name == "kcl" and arguments == ["--version"]:
+    # Kantrip's minimum-version gate probes kcl before it renders the shim.
+    print("kcl version v0.20.0")
+    sys.exit(0)
 config_path = os.environ.get("KCAT_CONFIG") if name in {kcat_executables} else None
 if name == "kcl":
     config_path = os.environ.get("KCL_CONFIG_PATH")

@@ -359,7 +359,10 @@ functions. Both paths invoke the same argument guard before launching the native
 client; shell quoting and process supervision remain separate. Direct commands,
 shims, and `doctor` also share one capability decision, which applies every
 installed-version gate the profile needs (Java PEM trust, Java OAuth, Kaskade
-Apicurio scopes) and runs a Java install directory's `--version` once.
+Apicurio scopes) and runs a Java install directory's `--version` once. A
+descriptor's `minimum_version` also gates every launch on the oldest release
+whose native contract its mapping follows (kcl 0.20.0); a suffixed development
+or pre-release build never passes.
 
 | Module | Responsibility | I/O |
 | --- | --- | --- |

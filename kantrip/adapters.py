@@ -67,6 +67,23 @@ CommandPreparation = Callable[
 ShimRendering = Callable[[str, str, ShimInputs], str]
 EnvironmentPreparation = Callable[[MutableMapping[str, str], ClientConfiguration], None]
 
+
+@dataclass(frozen=True)
+class VersionGate:
+    """The oldest release whose native contract a client's mapping relies on.
+
+    `pattern` reads `--version` output into major, minor, patch, and a suffix;
+    a suffixed build, such as a development or pre-release one, never passes.
+    """
+
+    pattern: re.Pattern[str]
+    minimum: tuple[int, int, int]
+
+    @property
+    def rendered_minimum(self) -> str:
+        return ".".join(str(part) for part in self.minimum)
+
+
 _KAFKA_AUTHENTICATION = frozenset(
     {"none", "plain", "scram-sha-256", "scram-sha-512", "mtls", "oauth"}
 )
@@ -82,7 +99,8 @@ class ClientAdapter:
     options for Java tools and Kaskade, `KCAT_CONFIG` plus `-r` for kcat. The
     remaining fields are the family's capability matrix and version gates;
     `registry_check` gates a family that reads the profile's Registry on every run,
-    and `prepare_environment` adjusts a direct child's environment.
+    `minimum_version` gates every launch on the installed release, and
+    `prepare_environment` adjusts a direct child's environment.
     """
 
     name: str
@@ -98,6 +116,7 @@ class ClientAdapter:
     registry_version_gate: bool = False
     registry_check: Callable[[RegistryConnection], object] | None = None
     prepare_environment: EnvironmentPreparation | None = None
+    minimum_version: VersionGate | None = None
 
 
 def _missing_kcat(name: str) -> str:
@@ -193,6 +212,10 @@ KCL_ADAPTER = ClientAdapter(
     kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
     registry_check=require_kcl_registry,
     prepare_environment=prepare_kcl_environment,
+    # The argument policy, `[registry]` table, and `KCL_*` scrub follow v0.20.0.
+    minimum_version=VersionGate(
+        re.compile(r"\bkcl version v?(\d+)\.(\d+)\.(\d+)(\S*)"), (0, 20, 0)
+    ),
 )
 CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER, KCL_ADAPTER)
 _ADAPTERS_BY_EXECUTABLE = {
@@ -358,6 +381,8 @@ def _require_capability(
         raise AdapterError(f"{adapter.name} does not support Kafka authentication '{auth_type}'")
     if registry is not None and adapter.registry_check is not None:
         adapter.registry_check(registry)
+    if adapter.minimum_version is not None:
+        require_minimum_version(executable, adapter.minimum_version, environment=environment)
     if custom_pem and adapter.pem_version_gate:
         require_java_pem_support(executable, environment=environment, probe=java_probe)
     if auth_type == "oauth" and adapter.oauth_version_gate:
@@ -415,6 +440,26 @@ def require_java_oauth_support(
         )
 
 
+def require_minimum_version(
+    executable: str,
+    gate: VersionGate,
+    *,
+    environment: Mapping[str, str],
+) -> None:
+    """Reject an installed client older than the release its mapping relies on."""
+    name = Path(executable).name
+    guidance = f"install {name} {gate.rendered_minimum} or newer"
+    version, suffix, rendered = _released_client_version(
+        executable,
+        environment,
+        gate.pattern,
+        failure=f"could not verify the installed {name} version; {guidance}",
+    )
+    if not suffix and version >= gate.minimum:
+        return
+    raise AdapterError(f"{name} {rendered} is not supported; {guidance}")
+
+
 def require_kaskade_apicurio_security_support(
     executable: str,
     registry: RegistryConnection,
@@ -424,7 +469,12 @@ def require_kaskade_apicurio_security_support(
     """Gate native Apicurio OAuth scopes on their first stable Kaskade release."""
     if not _requires_new_kaskade_apicurio_security(registry):
         return
-    version, suffix, rendered = _kaskade_client_version(executable, environment)
+    version, suffix, rendered = _released_client_version(
+        executable,
+        environment,
+        _KASKADE_VERSION_PATTERN,
+        failure="could not verify Kaskade Apicurio security support",
+    )
     if not suffix and version >= _KASKADE_APICURIO_SECURITY_MIN_VERSION:
         return
     raise AdapterError(
@@ -441,9 +491,12 @@ def _requires_new_kaskade_apicurio_security(connection: RegistryConnection) -> b
     return bool(connection.oauth.scopes)
 
 
-def _kaskade_client_version(
+def _released_client_version(
     executable: str,
     environment: Mapping[str, str],
+    pattern: re.Pattern[str],
+    *,
+    failure: str,
 ) -> tuple[tuple[int, int, int], str, str]:
     resolved = shutil.which(executable, path=environment.get("PATH"))
     if resolved is None:
@@ -459,10 +512,10 @@ def _kaskade_client_version(
             env=dict(environment),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise AdapterError("could not verify Kaskade Apicurio security support") from error
-    match = _KASKADE_VERSION_PATTERN.search(f"{result.stdout}\n{result.stderr}")
+        raise AdapterError(failure) from error
+    match = pattern.search(f"{result.stdout}\n{result.stderr}")
     if result.returncode != 0 or match is None:
-        raise AdapterError("could not verify Kaskade Apicurio security support")
+        raise AdapterError(failure)
     version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
     suffix = match.group(4)
     rendered = ".".join(str(part) for part in version) + suffix
@@ -560,6 +613,7 @@ __all__ = [
     "AdapterError",
     "ClientAdapter",
     "ClientConfiguration",
+    "VersionGate",
     "client_adapter",
     "create_subshell_shims",
     "prepare_command",
@@ -568,4 +622,5 @@ __all__ = [
     "require_java_oauth_support",
     "require_java_pem_support",
     "require_kaskade_apicurio_security_support",
+    "require_minimum_version",
 ]
