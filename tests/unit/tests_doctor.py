@@ -28,6 +28,7 @@ from kantrip.secret_store import (
     secret_reference,
 )
 from kantrip.secret_value import Secret
+from tests.unit.client_versions import SUPPORTED_VERSION_OUTPUT, use_supported_client_versions
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +45,7 @@ class TestDoctor(unittest.TestCase):
         patcher = patch("kantrip.doctor.load_secret_store", return_value=store)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.supported_versions = use_supported_client_versions(self)
 
     def test_reports_valid_profile_database_and_installed_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -89,6 +91,42 @@ class TestDoctor(unittest.TestCase):
                 for message in verbose_messages
             )
         )
+        self.assertIn("kcat 1.7.0 is supported", verbose_messages)
+        self.assertIn("kaskade 5.0.1 is supported", verbose_messages)
+
+    def test_reports_a_client_below_its_floor_and_probes_each_client_once(self) -> None:
+        self.supported_versions.stop()
+        probes: list[str] = []
+
+        def version_output(resolved: str, option: str, environment: object) -> str:
+            del option, environment
+            probes.append(resolved)
+            if resolved.endswith("/kaskade"):
+                return "kaskade, version 5.0.0\n"
+            return SUPPORTED_VERSION_OUTPUT
+
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            environment = {
+                "KANTRIP_DATABASE": str(database_path),
+                "XDG_RUNTIME_DIR": directory,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+
+            with (
+                patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+                patch("kantrip.adapters._version_output", side_effect=version_output),
+            ):
+                report = run_doctor(environment)
+
+        warnings = [check.message for check in report.checks if check.status == "warning"]
+        floor = "kaskade 5.0.0 is not supported; install Kaskade 5.0.1 or newer"
+        self.assertIn(floor, warnings)
+        self.assertIn(f"Profile 'local' client rejected: Kaskade: {floor}", warnings)
+        # The version report and the profile check share one run per client.
+        self.assertEqual(sorted(set(probes)), sorted(probes))
 
     def test_invalid_database_is_unhealthy_without_contacting_kafka(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -419,6 +457,8 @@ class TestDoctor(unittest.TestCase):
 
 def _installed_tool(name: str, path: str | None = None) -> str | None:
     del path
+    # Like shutil.which, an installed absolute path resolves to itself.
+    name = name.removeprefix("/tools/")
     installed = {
         "kantrip",
         "zsh",

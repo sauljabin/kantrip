@@ -512,6 +512,10 @@ def _uses_custom_pem(kafka: KafkaConnection) -> bool:
     return kafka.ca_certificates is not None or kafka.auth_type == "mtls"
 
 
+def _uses_oauth_ca(kafka: KafkaConnection) -> bool:
+    return kafka.oauth is not None and kafka.oauth.ca_certificates is not None
+
+
 def _prepare_command(
     arguments: Sequence[str],
     configuration: ClientConfiguration,
@@ -527,6 +531,7 @@ def _prepare_command(
         custom_pem=_uses_custom_pem(kafka),
         environment=environment,
         registry=registry,
+        oauth_ca=_uses_oauth_ca(kafka),
     )
     return prepare_command(arguments, configuration, registry=registry)
 
@@ -641,6 +646,7 @@ def _prepare_subshell(
         registry_oauth_ssl_cert_file=configuration.registry_oauth_ssl_cert_file,
         require_java_pem=_uses_custom_pem(kafka),
         kafka_auth_type=kafka.auth_type,
+        kafka_oauth_ca=_uses_oauth_ca(kafka),
     )
     child_environment["PATH"] = f"{shim_directory}{os.pathsep}{environment.get('PATH', os.defpath)}"
     plan = prepare_interactive_shell(

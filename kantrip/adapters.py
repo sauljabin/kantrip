@@ -12,9 +12,11 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from kantrip.adapter_policy import (
     KAF_EXECUTABLES,
@@ -68,20 +70,166 @@ ShimRendering = Callable[[str, str, ShimInputs], str]
 EnvironmentPreparation = Callable[[MutableMapping[str, str], ClientConfiguration], None]
 
 
+def rendered_release(release: Sequence[int]) -> str:
+    """Render a release such as `(6, 0)` as `6.0`."""
+    return ".".join(str(part) for part in release)
+
+
+def _at_least(product: str, release: Sequence[int]) -> str:
+    return f"{product} {rendered_release(release)} or newer"
+
+
 @dataclass(frozen=True)
-class VersionGate:
+class ClientVersion:
+    """An installed client's release as its version option prints it."""
+
+    release: tuple[int, int, int]
+    suffix: str = ""
+
+    def __str__(self) -> str:
+        return rendered_release(self.release) + self.suffix
+
+
+class VersionGate(Protocol):
+    """How to read an installed client's release and whether Kantrip supports it."""
+
+    @property
+    def option(self) -> str:
+        """The option that prints the release."""
+        ...
+
+    @property
+    def shared_by_directory(self) -> bool:
+        """Whether every executable in one install directory reports one release."""
+        ...
+
+    def read(self, output: str) -> ClientVersion | None:
+        """Return the release printed by the version option, if recognized."""
+        ...
+
+    def supports(self, name: str, version: ClientVersion) -> bool:
+        """Return whether executable `name` at `version` meets the floor."""
+        ...
+
+    def requirement(self, name: str) -> str:
+        """Name the oldest supported release for executable `name`."""
+        ...
+
+
+@dataclass(frozen=True)
+class ReleaseGate:
     """The oldest release whose native contract a client's mapping relies on.
 
-    `pattern` reads `--version` output into major, minor, patch, and a suffix;
+    `pattern` reads the version output into major, minor, patch, and a suffix;
     a suffixed build, such as a development or pre-release one, never passes.
     """
 
+    product: str
     pattern: re.Pattern[str]
     minimum: tuple[int, int, int]
+    option: str = "--version"
+    shared_by_directory: bool = False
 
-    @property
-    def rendered_minimum(self) -> str:
-        return ".".join(str(part) for part in self.minimum)
+    def read(self, output: str) -> ClientVersion | None:
+        match = self.pattern.search(output)
+        if match is None:
+            return None
+        major, minor, patch = (int(part) for part in match.group(1, 2, 3))
+        return ClientVersion((major, minor, patch), match.group(4))
+
+    def supports(self, name: str, version: ClientVersion) -> bool:
+        del name
+        return not version.suffix and version.release >= self.minimum
+
+    def requirement(self, name: str) -> str:
+        del name
+        return _at_least(self.product, self.minimum)
+
+
+_APACHE_KAFKA_MAJORS = frozenset({2, 3, 4})
+_CONFLUENT_PLATFORM_MAJORS = frozenset({5, 6, 7, 8})
+
+
+@dataclass(frozen=True)
+class JavaFloor:
+    """The oldest Apache Kafka and Confluent Platform releases for one Java capability.
+
+    `apache` is None when only Confluent Platform ships the executable.
+    """
+
+    apache: tuple[int, int] | None
+    confluent: tuple[int, int]
+
+    def admits(self, version: ClientVersion) -> bool:
+        major, minor, _ = version.release
+        floor = self.apache if major in _APACHE_KAFKA_MAJORS else self.confluent
+        return floor is not None and (major, minor) >= floor
+
+    def requirement(self) -> str:
+        confluent = _at_least("Confluent Platform", self.confluent)
+        if self.apache is None:
+            return confluent
+        return f"Apache Kafka {rendered_release(self.apache)} or {confluent}"
+
+
+_JAVA_CLI_FLOOR = JavaFloor(apache=(2, 6), confluent=(6, 0))
+_SCHEMA_REGISTRY_CONSOLE_FLOOR = JavaFloor(apache=None, confluent=(5, 5))
+# Native PEM trust stores arrived in Apache Kafka 2.7, which Confluent Platform 6.1 ships.
+_JAVA_PEM_FLOOR = JavaFloor(apache=(2, 7), confluent=(6, 1))
+# The `sasl.oauthbearer.client.credentials.*` properties arrived in Apache
+# Kafka 4.1, which Confluent Platform 8.1 ships.
+_JAVA_OAUTH_FLOOR = JavaFloor(apache=(4, 1), confluent=(8, 1))
+# A suffix starts with a letter, so a Scala-prefixed `2.13-2.6.0` reads as 2.6.0.
+_JAVA_VERSION_PATTERN = re.compile(r"(?<![\d.])(\d+)\.(\d+)(?:\.(\d+))?(-[A-Za-z][\w.]*)?")
+
+
+@dataclass(frozen=True)
+class JavaReleaseGate:
+    """Apache Kafka and Confluent Platform floors for the Java CLIs.
+
+    Apache Kafka majors are 2 to 4 and Confluent Platform majors 5 to 8, so the
+    major names the distribution. The Schema Registry consoles ship only with
+    Confluent Platform. Confluent's `-ccs` and `-ce` suffixes mark release
+    builds, and JVM warnings may surround the release line.
+    """
+
+    option: str = "--version"
+    shared_by_directory: bool = True
+
+    def read(self, output: str) -> ClientVersion | None:
+        recognized: ClientVersion | None = None
+        for match in _JAVA_VERSION_PATTERN.finditer(output):
+            major, minor = int(match.group(1)), int(match.group(2))
+            if major in _APACHE_KAFKA_MAJORS | _CONFLUENT_PLATFORM_MAJORS:
+                patch = int(match.group(3) or 0)
+                recognized = ClientVersion((major, minor, patch), match.group(4) or "")
+        return recognized
+
+    def supports(self, name: str, version: ClientVersion) -> bool:
+        return _java_floor(name).admits(version)
+
+    def requirement(self, name: str) -> str:
+        return _java_floor(name).requirement()
+
+
+def _java_floor(name: str) -> JavaFloor:
+    if name in SCHEMA_REGISTRY_EXECUTABLES:
+        return _SCHEMA_REGISTRY_CONSOLE_FLOOR
+    return _JAVA_CLI_FLOOR
+
+
+@dataclass(frozen=True)
+class KafkaNeeds:
+    """What the selected profile's Kafka connection asks of an installed client."""
+
+    auth_type: str
+    custom_pem: bool = False
+    oauth_ca: bool = False
+
+
+# A feature check reads the installed release (and the raw version output, for
+# linked libraries) and returns why the profile cannot use it, or None.
+FeatureCheck = Callable[[str, ClientVersion, str, KafkaNeeds], str | None]
 
 
 _KAFKA_AUTHENTICATION = frozenset(
@@ -96,10 +244,11 @@ class ClientAdapter:
     `check_arguments` rejects profile-owned connection options for both direct
     commands and the shim guard, and may return a signal the shim acts on.
     `prepare_command` and `render_shim` inject the private configuration:
-    options for Java tools and Kaskade, `KCAT_CONFIG` plus `-r` for kcat. The
-    remaining fields are the family's capability matrix and version gates;
-    `registry_check` gates a family that reads the profile's Registry on every run,
+    options for Java tools and Kaskade, `KCAT_CONFIG` plus `-r` for kcat.
     `minimum_version` gates every launch on the installed release, and
+    `feature_checks` apply the profile's needs to that same release. The
+    remaining fields are the family's capability matrix; `registry_check` gates
+    a family that reads the profile's Registry on every run, and
     `prepare_environment` adjusts a direct child's environment.
     """
 
@@ -109,14 +258,12 @@ class ClientAdapter:
     prepare_command: CommandPreparation
     render_shim: ShimRendering
     missing_command: Callable[[str], str]
+    minimum_version: VersionGate
     kafka_authentication: frozenset[str] = _KAFKA_AUTHENTICATION
     registry_providers: frozenset[str] = frozenset({CONFLUENT_PROVIDER})
-    pem_version_gate: bool = False
-    oauth_version_gate: bool = False
-    registry_version_gate: bool = False
+    feature_checks: tuple[FeatureCheck, ...] = ()
     registry_check: Callable[[RegistryConnection], object] | None = None
     prepare_environment: EnvironmentPreparation | None = None
-    minimum_version: VersionGate | None = None
 
 
 def missing_command_message(name: str, hint: str | None = None) -> str:
@@ -166,6 +313,53 @@ def _missing_kaskade(name: str) -> str:
     return missing_command_message("kaskade", "install it and ensure its executable is on PATH")
 
 
+def _java_pem_support(
+    name: str, version: ClientVersion, output: str, needs: KafkaNeeds
+) -> str | None:
+    del output
+    if not needs.custom_pem or _JAVA_PEM_FLOOR.admits(version):
+        return None
+    return (
+        f"{name} {version} does not support PEM trust stores; "
+        f"custom CA profiles require {_JAVA_PEM_FLOOR.requirement()}"
+    )
+
+
+def _java_oauth_support(
+    name: str, version: ClientVersion, output: str, needs: KafkaNeeds
+) -> str | None:
+    del output
+    if needs.auth_type != "oauth" or _JAVA_OAUTH_FLOOR.admits(version):
+        return None
+    return (
+        f"{name} {version} does not support Kantrip's native OAuth mapping; "
+        f"install {_JAVA_OAUTH_FLOOR.requirement()}"
+    )
+
+
+_LIBRDKAFKA_VERSION_PATTERN = re.compile(r"\blibrdkafka (\d+)\.(\d+)\.(\d+)")
+# `https.ca.location`, which trusts the token endpoint's CA, arrived in librdkafka 2.11.0.
+_LIBRDKAFKA_HTTPS_CA_MIN_VERSION = (2, 11, 0)
+
+
+def _librdkafka_oauth_ca_support(
+    name: str, version: ClientVersion, output: str, needs: KafkaNeeds
+) -> str | None:
+    # kcat prints the linked librdkafka alongside its own release.
+    del version
+    if needs.auth_type != "oauth" or not needs.oauth_ca:
+        return None
+    match = _LIBRDKAFKA_VERSION_PATTERN.search(output)
+    linked = tuple(int(part) for part in match.groups()) if match else None
+    if linked is not None and linked >= _LIBRDKAFKA_HTTPS_CA_MIN_VERSION:
+        return None
+    rendered = f"librdkafka {rendered_release(linked)}" if linked else "an unidentified librdkafka"
+    return (
+        f"{name} links {rendered}, which cannot trust the profile's OAuth token-endpoint CA; "
+        f"install {_at_least('librdkafka', _LIBRDKAFKA_HTTPS_CA_MIN_VERSION)}"
+    )
+
+
 KCAT_ADAPTER = ClientAdapter(
     "kcat",
     KCAT_EXECUTABLES,
@@ -173,6 +367,10 @@ KCAT_ADAPTER = ClientAdapter(
     prepare_command=prepare_kcat_command,
     render_shim=render_kcat_shim,
     missing_command=_missing_kcat,
+    minimum_version=ReleaseGate(
+        "kcat", re.compile(r"\bVersion (\d+)\.(\d+)\.(\d+)(\S*)"), (1, 7, 0), option="-V"
+    ),
+    feature_checks=(_librdkafka_oauth_ca_support,),
 )
 KASKADE_ADAPTER = ClientAdapter(
     "Kaskade",
@@ -181,8 +379,13 @@ KASKADE_ADAPTER = ClientAdapter(
     prepare_command=prepare_kaskade_command,
     render_shim=render_kaskade_shim,
     missing_command=_missing_kaskade,
+    # 5.0.1 is the first release that maps native Apicurio OAuth scopes.
+    minimum_version=ReleaseGate(
+        "Kaskade",
+        re.compile(r"\bkaskade,\s+version\s+(\d+)\.(\d+)\.(\d+)(\S*)", re.IGNORECASE),
+        (5, 0, 1),
+    ),
     registry_providers=frozenset({CONFLUENT_PROVIDER, APICURIO_PROVIDER}),
-    registry_version_gate=True,
 )
 JAVA_CLI_ADAPTER = ClientAdapter(
     "Apache/Confluent Java CLI",
@@ -191,8 +394,8 @@ JAVA_CLI_ADAPTER = ClientAdapter(
     prepare_command=prepare_java_command,
     render_shim=render_java_shim,
     missing_command=_missing_java_command,
-    pem_version_gate=True,
-    oauth_version_gate=True,
+    minimum_version=JavaReleaseGate(),
+    feature_checks=(_java_pem_support, _java_oauth_support),
 )
 KAF_ADAPTER = ClientAdapter(
     "kaf",
@@ -201,6 +404,10 @@ KAF_ADAPTER = ClientAdapter(
     prepare_command=prepare_kaf_command,
     render_shim=render_kaf_shim,
     missing_command=_missing_kaf,
+    # The argument policy and one-cluster YAML follow v0.2.14.
+    minimum_version=ReleaseGate(
+        "kaf", re.compile(r"\bkaf version v?(\d+)\.(\d+)\.(\d+)(\S*)"), (0, 2, 14)
+    ),
     # kaf's token client uses Go's default trust store and cannot take the
     # profile's token-endpoint CA, so OAuth has no safe mapping.
     kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
@@ -214,14 +421,14 @@ KCL_ADAPTER = ClientAdapter(
     prepare_command=prepare_kcl_command,
     render_shim=render_kcl_shim,
     missing_command=_missing_kcl,
+    # The argument policy, `[registry]` table, and `KCL_*` scrub follow v0.20.0.
+    minimum_version=ReleaseGate(
+        "kcl", re.compile(r"\bkcl version v?(\d+)\.(\d+)\.(\d+)(\S*)"), (0, 20, 0)
+    ),
     # kcl's SASL mechanisms are PLAIN, SCRAM, and AWS MSK IAM; it has no OAUTHBEARER.
     kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
     registry_check=require_kcl_registry,
     prepare_environment=prepare_kcl_environment,
-    # The argument policy, `[registry]` table, and `KCL_*` scrub follow v0.20.0.
-    minimum_version=VersionGate(
-        re.compile(r"\bkcl version v?(\d+)\.(\d+)\.(\d+)(\S*)"), (0, 20, 0)
-    ),
 )
 CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER, KCL_ADAPTER)
 _ADAPTERS_BY_EXECUTABLE = {
@@ -276,6 +483,7 @@ def create_subshell_shims(
     registry: RegistryConnection | None = None,
     require_java_pem: bool = False,
     kafka_auth_type: str = "none",
+    kafka_oauth_ca: bool = False,
     schema_registry_java_config_path: Path | None = None,
     registry_oauth_ssl_cert_file: Path | None = None,
     kaf_config_path: Path | None = None,
@@ -294,14 +502,16 @@ def create_subshell_shims(
         kcl_config=kcl_config_path,
     )
     installed = _installed_executables(environment.get("PATH", os.defpath))
-    gates = _ShimCapabilityGates(environment, registry, require_java_pem, kafka_auth_type)
+    versions = VersionProbe(environment)
+    versions.prefetch((adapter.minimum_version, executable) for adapter, _, executable in installed)
+    needs = KafkaNeeds(kafka_auth_type, require_java_pem, kafka_oauth_ca)
     directory.mkdir(mode=0o700)
     for adapter, name, executable in installed:
         inputs = ShimInputs(
             configuration,
             registry,
             kafka_auth_type,
-            gates.capability_error(adapter, executable),
+            _capability_error(adapter, executable, needs, registry, versions),
         )
         write_executable(directory / name, adapter.render_shim(name, executable, inputs))
     return directory
@@ -316,33 +526,15 @@ def _installed_executables(search_path: str) -> list[tuple[ClientAdapter, str, s
     ]
 
 
-@dataclass
-class _ShimCapabilityGates:
-    """Decide each installed shim's capability, probing a Java install directory once."""
-
-    environment: Mapping[str, str]
-    registry: RegistryConnection | None
-    require_java_pem: bool
-    kafka_auth_type: str
-    _java_probe: _JavaVersionProbe = field(default_factory=lambda: _JavaVersionProbe())
-
-    def capability_error(self, adapter: ClientAdapter, executable: str) -> str | None:
-        return _gate_error(
-            lambda: _require_capability(
-                adapter,
-                executable,
-                auth_type=self.kafka_auth_type,
-                custom_pem=self.require_java_pem,
-                environment=self.environment,
-                registry=self.registry,
-                java_probe=self._java_probe,
-            )
-        )
-
-
-def _gate_error(check: Callable[[], None]) -> str | None:
+def _capability_error(
+    adapter: ClientAdapter,
+    executable: str,
+    needs: KafkaNeeds,
+    registry: RegistryConnection | None,
+    versions: VersionProbe,
+) -> str | None:
     try:
-        check()
+        _require_capability(adapter, executable, needs, registry, versions)
     except AdapterError as error:
         return str(error)
     return None
@@ -355,6 +547,8 @@ def require_adapter_capability(
     custom_pem: bool,
     environment: Mapping[str, str],
     registry: RegistryConnection | None = None,
+    oauth_ca: bool = False,
+    versions: VersionProbe | None = None,
 ) -> None:
     """Apply the same mechanism and installed-version decision to direct clients."""
     adapter = client_adapter(Path(executable).name)
@@ -363,87 +557,31 @@ def require_adapter_capability(
     _require_capability(
         adapter,
         executable,
-        auth_type=auth_type,
-        custom_pem=custom_pem,
-        environment=environment,
-        registry=registry,
-        java_probe=_JavaVersionProbe(),
+        KafkaNeeds(auth_type, custom_pem, oauth_ca),
+        registry,
+        versions or VersionProbe(environment),
     )
 
 
 def _require_capability(
     adapter: ClientAdapter,
     executable: str,
-    *,
-    auth_type: str,
-    custom_pem: bool,
-    environment: Mapping[str, str],
+    needs: KafkaNeeds,
     registry: RegistryConnection | None,
-    java_probe: _JavaVersionProbe,
+    versions: VersionProbe,
 ) -> None:
     # The one capability decision for direct commands and shell shims; every
-    # gate the profile needs applies, in this order.
-    if auth_type not in adapter.kafka_authentication:
-        raise AdapterError(f"{adapter.name} does not support Kafka authentication '{auth_type}'")
+    # gate the profile needs applies, in this order, to one version probe.
+    if needs.auth_type not in adapter.kafka_authentication:
+        raise AdapterError(
+            f"{adapter.name} does not support Kafka authentication '{needs.auth_type}'"
+        )
     if registry is not None and adapter.registry_check is not None:
         adapter.registry_check(registry)
-    if adapter.minimum_version is not None:
-        require_minimum_version(executable, adapter.minimum_version, environment=environment)
-    if custom_pem and adapter.pem_version_gate:
-        require_java_pem_support(executable, environment=environment, probe=java_probe)
-    if auth_type == "oauth" and adapter.oauth_version_gate:
-        require_java_oauth_support(executable, environment=environment, probe=java_probe)
-    if adapter.registry_version_gate and registry is not None:
-        require_kaskade_apicurio_security_support(
-            executable,
-            registry,
-            environment=environment,
-        )
-
-
-_CLIENT_VERSION_PATTERN = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.\d+)?")
-_KASKADE_VERSION_PATTERN = re.compile(
-    r"\bkaskade,\s+version\s+(\d+)\.(\d+)\.(\d+)([^\s]*)",
-    re.IGNORECASE,
-)
-_JAVA_PEM_VERSION_TIMEOUT_SECONDS = 5
-_KASKADE_APICURIO_SECURITY_MIN_VERSION = (5, 0, 1)
-
-
-def require_java_pem_support(
-    executable: str,
-    *,
-    environment: Mapping[str, str],
-    probe: _JavaVersionProbe | None = None,
-) -> None:
-    """Reject Java clients whose version cannot safely consume a PEM trust store."""
-    version = _java_client_version(
-        executable, environment, capability="PEM trust-store", probe=probe or _JavaVersionProbe()
-    )
-    if not _java_client_supports_pem(version):
-        rendered_version = ".".join(str(part) for part in version)
-        raise AdapterError(
-            f"{Path(executable).name} {rendered_version} does not support PEM trust stores; "
-            "custom CA profiles require Apache Kafka 2.7+ or Confluent Platform 6.1+"
-        )
-
-
-def require_java_oauth_support(
-    executable: str,
-    *,
-    environment: Mapping[str, str],
-    probe: _JavaVersionProbe | None = None,
-) -> None:
-    """Require the verified Apache Kafka 4.x native client-credentials callback."""
-    version = _java_client_version(
-        executable, environment, capability="OAuth", probe=probe or _JavaVersionProbe()
-    )
-    if version[0] < 4:
-        rendered_version = ".".join(str(part) for part in version)
-        raise AdapterError(
-            f"{Path(executable).name} {rendered_version} does not support Kantrip's native "
-            "OAuth mapping; install Apache Kafka 4.0+"
-        )
+    version, output = _supported_version(executable, adapter.minimum_version, versions)
+    for check in adapter.feature_checks:
+        if (error := check(Path(executable).name, version, output, needs)) is not None:
+            raise AdapterError(error)
 
 
 def require_minimum_version(
@@ -451,132 +589,81 @@ def require_minimum_version(
     gate: VersionGate,
     *,
     environment: Mapping[str, str],
-) -> None:
-    """Reject an installed client older than the release its mapping relies on."""
-    name = Path(executable).name
-    guidance = f"install {name} {gate.rendered_minimum} or newer"
-    version, suffix, rendered = _released_client_version(
-        executable,
-        environment,
-        gate.pattern,
-        failure=f"could not verify the installed {name} version; {guidance}",
-    )
-    if not suffix and version >= gate.minimum:
-        return
-    raise AdapterError(f"{name} {rendered} is not supported; {guidance}")
-
-
-def require_kaskade_apicurio_security_support(
-    executable: str,
-    registry: RegistryConnection,
-    *,
-    environment: Mapping[str, str],
-) -> None:
-    """Gate native Apicurio OAuth scopes on their first stable Kaskade release."""
-    if not _requires_new_kaskade_apicurio_security(registry):
-        return
-    version, suffix, rendered = _released_client_version(
-        executable,
-        environment,
-        _KASKADE_VERSION_PATTERN,
-        failure="could not verify Kaskade Apicurio security support",
-    )
-    if not suffix and version >= _KASKADE_APICURIO_SECURITY_MIN_VERSION:
-        return
-    raise AdapterError(
-        f"kaskade {rendered} cannot map native Apicurio OAuth scopes; "
-        "install Kaskade 5.0.1 or newer"
-    )
-
-
-def _requires_new_kaskade_apicurio_security(connection: RegistryConnection) -> bool:
-    if connection.provider != "apicurio":
-        return False
-    if connection.auth_type != "oauth" or connection.oauth is None:
-        return False
-    return bool(connection.oauth.scopes)
-
-
-def _released_client_version(
-    executable: str,
-    environment: Mapping[str, str],
-    pattern: re.Pattern[str],
-    *,
-    failure: str,
-) -> tuple[tuple[int, int, int], str, str]:
-    resolved = shutil.which(executable, path=environment.get("PATH"))
-    if resolved is None:
-        raise AdapterError(missing_command_message(Path(executable).name))
-    try:
-        result = subprocess.run(
-            [resolved, "--version"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
-            check=False,
-            env=dict(environment),
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise AdapterError(failure) from error
-    match = pattern.search(f"{result.stdout}\n{result.stderr}")
-    if result.returncode != 0 or match is None:
-        raise AdapterError(failure)
-    version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
-    suffix = match.group(4)
-    rendered = ".".join(str(part) for part in version) + suffix
-    return version, suffix, rendered
-
-
-def _recognized_java_client_version(output: str) -> tuple[int, int] | None:
-    recognized: tuple[int, int] | None = None
-    for match in _CLIENT_VERSION_PATTERN.finditer(output):
-        version = int(match.group(1)), int(match.group(2))
-        if version[0] in {2, 3, 4, 5, 6, 7, 8}:
-            recognized = version
-    return recognized
-
-
-def _java_client_version(
-    executable: str,
-    environment: Mapping[str, str],
-    *,
-    capability: str,
-    probe: _JavaVersionProbe,
-) -> tuple[int, int]:
-    resolved = shutil.which(executable, path=environment.get("PATH"))
-    if resolved is None:
-        raise AdapterError(missing_command_message(Path(executable).name))
-    version = probe(resolved, environment)
-    if version is None:
-        raise AdapterError(f"could not verify {capability} support for {Path(executable).name}")
+    versions: VersionProbe | None = None,
+) -> ClientVersion:
+    """Return the installed release, rejecting one older than its mapping relies on."""
+    version, _ = _supported_version(executable, gate, versions or VersionProbe(environment))
     return version
 
 
-class _JavaVersionProbe:
-    """Run a Java client's `--version` once per install directory."""
+def _supported_version(
+    executable: str, gate: VersionGate, versions: VersionProbe
+) -> tuple[ClientVersion, str]:
+    name = Path(executable).name
+    resolved = shutil.which(executable, path=versions.environment.get("PATH"))
+    if resolved is None:
+        raise AdapterError(missing_command_message(name))
+    output = versions.output(gate, resolved)
+    version = gate.read(output) if output is not None else None
+    guidance = f"install {gate.requirement(name)}"
+    if version is None:
+        raise AdapterError(f"could not verify the installed {name} version; {guidance}")
+    if not gate.supports(name, version):
+        raise AdapterError(f"{name} {version} is not supported; {guidance}")
+    return version, output or ""
 
-    def __init__(self) -> None:
-        self._versions: dict[Path, tuple[int, int] | None] = {}
 
-    def __call__(self, resolved: str, environment: Mapping[str, str]) -> tuple[int, int] | None:
-        directory = Path(resolved).parent
-        if directory not in self._versions:
-            self._versions[directory] = _probe_java_client_version(resolved, environment)
-        return self._versions[directory]
+_VERSION_TIMEOUT_SECONDS = 10
+_VERSION_PROBE_WORKERS = 8
 
 
-def _probe_java_client_version(
-    resolved: str,
-    environment: Mapping[str, str],
-) -> tuple[int, int] | None:
+class VersionProbe:
+    """Run each installed client's version option once per launch.
+
+    Java CLIs in one install directory report one release, so they share a run.
+    """
+
+    def __init__(self, environment: Mapping[str, str]) -> None:
+        self.environment = environment
+        self._outputs: dict[tuple[str, Path], str | None] = {}
+
+    def output(self, gate: VersionGate, resolved: str) -> str | None:
+        """Return the version output, or None when the client could not report it."""
+        key = _probe_key(gate, resolved)
+        if key not in self._outputs:
+            self._outputs[key] = _version_output(resolved, gate.option, self.environment)
+        return self._outputs[key]
+
+    def prefetch(self, clients: Iterable[tuple[VersionGate, str]]) -> None:
+        """Probe several clients at once, so a shell waits for the slowest one only."""
+        pending: dict[tuple[str, Path], tuple[str, str]] = {}
+        for gate, resolved in clients:
+            key = _probe_key(gate, resolved)
+            if key not in self._outputs:
+                pending.setdefault(key, (resolved, gate.option))
+        if not pending:
+            return
+        with ThreadPoolExecutor(max_workers=min(len(pending), _VERSION_PROBE_WORKERS)) as pool:
+            outputs = pool.map(
+                lambda probe: _version_output(probe[0], probe[1], self.environment),
+                pending.values(),
+            )
+            self._outputs.update(zip(pending, outputs, strict=True))
+
+
+def _probe_key(gate: VersionGate, resolved: str) -> tuple[str, Path]:
+    path = Path(resolved)
+    return gate.option, path.parent if gate.shared_by_directory else path
+
+
+def _version_output(resolved: str, option: str, environment: Mapping[str, str]) -> str | None:
     try:
         result = subprocess.run(
-            [resolved, "--version"],
+            [resolved, option],
             capture_output=True,
             text=True,
             errors="replace",
-            timeout=_JAVA_PEM_VERSION_TIMEOUT_SECONDS,
+            timeout=_VERSION_TIMEOUT_SECONDS,
             check=False,
             env=dict(environment),
         )
@@ -584,18 +671,7 @@ def _probe_java_client_version(
         return None
     if result.returncode != 0:
         return None
-    return _recognized_java_client_version(f"{result.stdout}\n{result.stderr}")
-
-
-def _java_client_supports_pem(version: tuple[int, int]) -> bool:
-    major, minor = version
-    if major == 2:
-        return minor >= 7
-    if major in {3, 4}:
-        return True
-    if major == 6:
-        return minor >= 1
-    return major in {7, 8}
+    return f"{result.stdout}\n{result.stderr}"
 
 
 __all__ = [
@@ -619,15 +695,18 @@ __all__ = [
     "AdapterError",
     "ClientAdapter",
     "ClientConfiguration",
+    "ClientVersion",
+    "JavaReleaseGate",
+    "KafkaNeeds",
+    "ReleaseGate",
     "VersionGate",
+    "VersionProbe",
     "client_adapter",
     "create_subshell_shims",
     "missing_command_message",
     "prepare_command",
     "prepare_command_environment",
+    "rendered_release",
     "require_adapter_capability",
-    "require_java_oauth_support",
-    "require_java_pem_support",
-    "require_kaskade_apicurio_security_support",
     "require_minimum_version",
 ]

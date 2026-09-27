@@ -98,7 +98,7 @@ from the executable user contract in `COMPATIBILITY.md`.
 | --- | --- | --- |
 | Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and connection-state ping |
 | PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | Supported by `add`, `edit`, `exec`, and `ping` |
-| Kafka OAuth | TLS-only client credentials with independent token trust | Native Java 4.0+ and librdkafka OIDC rendering, sessions, and ping |
+| Kafka OAuth | TLS-only client credentials with independent token trust | Native Java 4.1+ (Confluent 8.1+) and librdkafka OIDC rendering, sessions, and ping |
 | Registry | Independent TLS, Basic, token, mTLS, and OAuth | Provider-aware private client configuration and authenticated probes |
 | External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
 
@@ -167,9 +167,9 @@ A Registry remains an independent connection; Kafka and Registry credentials
 are never inherited across those boundaries.
 
 The adapter descriptors' capability matrix covers Apache/Confluent Java commands,
-kcat, and Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Java PEM profiles
-retain their installed-version gate; unsupported combinations fail before the
-requested client operation.
+kcat, and Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Every client
+has an installed-version floor, and Java PEM profiles add their own version check;
+unsupported combinations fail before the requested client operation.
 
 ## Schema evolution and maintenance
 
@@ -331,9 +331,9 @@ not native refresh evidence.
 Kaskade's native Apicurio mapping uses the official shared
 `apicurio.registry.tls.certificates` bundle for Registry and token endpoint, but
 keeps separate HTTP/TLS contexts so Registry client identity never reaches the
-IdP. Native Apicurio OAuth scopes require Kaskade 5.0.1 or newer, the first
-stable release that implements the official scope property. Profiles without
-scopes retain compatibility with earlier Kaskade releases.
+IdP. Kaskade 5.0.1, the first stable release that implements the official
+scope property, is Kaskade's minimum version, so no profile needs a separate
+check.
 Confluent Java likewise uses one official `ssl.*` trust configuration for both
 destinations. Distinct CA profiles are rejected for those shared contracts.
 
@@ -351,22 +351,30 @@ system stores, and later sessions remain unchanged.
 An adapter recognizes the executable, rejects connection overrides, and injects
 native configuration. Each client family is one `ClientAdapter` descriptor: its
 executables, its argument check, direct-command preparation, shim renderer, and
-missing-command hint, and its capability matrix (Kafka authentication, Registry
-providers, installed-version gates). Direct commands, shell shims, the shim-side
+missing-command hint, its capability matrix (Kafka authentication and Registry
+providers), and its installed-version checks. Direct commands, shell shims, the shim-side
 argument guard, and `doctor` dispatch through the descriptor instead of
 branching on client names, so a new client adds a descriptor and its own
 functions. Both paths invoke the same argument guard before launching the native
 client; shell quoting and process supervision remain separate. Direct commands,
-shims, and `doctor` also share one capability decision, which applies every
-installed-version gate the profile needs (Java PEM trust, Java OAuth, Kaskade
-Apicurio scopes) and runs a Java install directory's `--version` once. A
-descriptor's `minimum_version` also gates every launch on the oldest release
-whose native contract its mapping follows (kcl 0.20.0); a suffixed development
-or pre-release build never passes.
+shims, and `doctor` also share one capability decision. Every descriptor
+declares a `minimum_version`: a gate that names the version option, reads its
+output into a `ClientVersion`, and admits the oldest release whose native
+contract the mapping follows. `ReleaseGate` serves kcat, Kaskade, kaf, and kcl,
+and it rejects any suffixed development or pre-release build. `JavaReleaseGate`
+tells Apache Kafka (majors 2 to 4) from Confluent Platform (majors 5 to 8),
+accepts Confluent's `-ccs`/`-ce` release suffixes, and applies the Schema
+Registry consoles' own floor. The descriptor's `feature_checks` then apply the
+profile's needs to that same release: Java PEM trust (Kafka 2.7 / Confluent
+6.1), Java OAuth (Kafka 4.1 / Confluent 8.1), and kcat's linked librdkafka for
+an OAuth token-endpoint CA (2.11.0). A `VersionProbe` runs each client's
+version option once per launch, and once per Java install directory. Shim
+creation and `doctor` prefetch every installed client in parallel, so a session
+waits for the slowest probe, not the sum of all probes.
 
 | Module | Responsibility | I/O |
 | --- | --- | --- |
-| `adapters.py` | `ClientAdapter` descriptors and lookup; direct-command, shim, and capability dispatch; installed-version probes | Runs `--version` probes; creates the shim directory |
+| `adapters.py` | `ClientAdapter` descriptors and lookup; direct-command, shim, and capability dispatch; installed-version probes | Runs version probes in parallel; creates the shim directory |
 | `adapter_policy.py` | Executable names, the per-command Java option table, native argument grammars (kcat getopt clusters, Java and Kaskade long options, kaf and kcl pflag options), direct-command injection, per-client Registry compatibility | None |
 | `adapter_shims.py` | POSIX shim rendering and quoting | Writes mode-0700 shims |
 | `_adapter_guard.py` | Shim-side entry point that runs the descriptor's argument check | None |

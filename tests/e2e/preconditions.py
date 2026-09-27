@@ -12,7 +12,15 @@ import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from kantrip.adapters import ADAPTER_EXECUTABLES
+from kantrip.adapters import (
+    ADAPTER_EXECUTABLES,
+    JAVA_CLI_ADAPTER,
+    KAF_ADAPTER,
+    KASKADE_ADAPTER,
+    KCAT_ADAPTER,
+    KCL_ADAPTER,
+    VersionGate,
+)
 from kantrip.secret_store import load_secret_store, secret_reference
 from sandbox.__main__ import CA_FILE, STATE_FILE, STATE_ROOT
 
@@ -28,23 +36,25 @@ def check_preconditions(environment: Mapping[str, str]) -> None:
     """Fail with setup diagnostics before any product assertion runs."""
     versions = _versions()
     _require_commands(("kantrip", "kubectl", "helm", "kind", *sorted(ADAPTER_EXECUTABLES)))
-    _require_exact_version(
+    # CI installs each pin exactly; a local run accepts the pin or newer.
+    _require_pinned_version(
         "Apache Kafka",
-        ("kafka-topics.sh", "--version"),
+        "kafka-topics.sh",
+        JAVA_CLI_ADAPTER.minimum_version,
         versions["APACHE_KAFKA_VERSION"],
     )
-    _require_exact_version(
+    _require_pinned_version(
         "Confluent Platform",
-        ("kafka-topics", "--version"),
+        "kafka-topics",
+        JAVA_CLI_ADAPTER.minimum_version,
         versions["CONFLUENT_VERSION"],
     )
-    _require_exact_version("kaskade", ("kaskade", "--version"), versions["KASKADE_VERSION"])
-    _require_exact_version("kaf", ("kaf", "--version"), versions["KAF_VERSION"])
-    _require_exact_version("kcl", ("kcl", "--version"), versions["KCL_VERSION"])
-    kcat_version = (
-        versions["KCAT_MACOS_VERSION"] if sys.platform == "darwin" else versions["KCAT_VERSION"]
+    _require_pinned_version(
+        "kaskade", "kaskade", KASKADE_ADAPTER.minimum_version, versions["KASKADE_VERSION"]
     )
-    _require_exact_version("kcat", ("kcat", "-V"), kcat_version)
+    _require_pinned_version("kaf", "kaf", KAF_ADAPTER.minimum_version, versions["KAF_VERSION"])
+    _require_pinned_version("kcl", "kcl", KCL_ADAPTER.minimum_version, versions["KCL_VERSION"])
+    _require_pinned_version("kcat", "kcat", KCAT_ADAPTER.minimum_version, kcat_pin(versions))
     _require_librdkafka_version(versions["LIBRDKAFKA_MIN_VERSION"])
     _require_sandbox_files()
     _wait_for_workloads()
@@ -74,11 +84,25 @@ def _require_commands(commands: Sequence[str]) -> None:
         raise E2ESetupError("required released E2E executables are missing: " + ", ".join(missing))
 
 
-def _require_exact_version(name: str, command: Sequence[str], expected: str) -> None:
-    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=15)
-    output = f"{result.stdout}\n{result.stderr}"
-    if result.returncode != 0 or re.search(rf"(?<!\d){re.escape(expected)}(?!\d)", output) is None:
-        raise E2ESetupError(f"{name} {expected} is required by {VERSIONS_FILE}")
+def kcat_pin(versions: Mapping[str, str]) -> str:
+    """Return the kcat release pinned for this platform."""
+    return versions["KCAT_MACOS_VERSION"] if sys.platform == "darwin" else versions["KCAT_VERSION"]
+
+
+def _require_pinned_version(name: str, executable: str, gate: VersionGate, pin: str) -> None:
+    result = subprocess.run(
+        (executable, gate.option), capture_output=True, text=True, check=False, timeout=15
+    )
+    version = gate.read(f"{result.stdout}\n{result.stderr}") if result.returncode == 0 else None
+    if version is None or version.release < parse_pin(pin):
+        found = "an unreadable version" if version is None else str(version)
+        raise E2ESetupError(f"{name} {pin} or newer is required by {VERSIONS_FILE}; found {found}")
+
+
+def parse_pin(pin: str) -> tuple[int, int, int]:
+    """Read a `versions.env` release such as 4.3.1."""
+    major, minor, patch = (int(part) for part in pin.split("."))
+    return major, minor, patch
 
 
 def _require_librdkafka_version(minimum: str) -> None:
