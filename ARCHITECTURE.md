@@ -12,6 +12,31 @@ replacement for Kafka clients. Its responsibility ends at storing profiles,
 resolving secrets, generating temporary client configuration, and supervising
 the active execution.
 
+## Contents
+
+- [Product boundary](#product-boundary)
+- [Command surface](#command-surface)
+- [Design rules](#design-rules)
+- [Outside the product scope](#outside-the-product-scope)
+- [Current capability boundaries](#current-capability-boundaries)
+- [Data flow](#data-flow)
+- [Profiles and connection material](#profiles-and-connection-material)
+- [Schema evolution and maintenance](#schema-evolution-and-maintenance)
+- [Connection-only configuration](#connection-only-configuration)
+- [Profile lifecycle and input sources](#profile-lifecycle-and-input-sources)
+- [Session resolution and rendering](#session-resolution-and-rendering)
+- [Client adapters](#client-adapters)
+- [Process supervision and cleanup](#process-supervision-and-cleanup)
+  - [Execution sequence](#execution-sequence)
+  - [Session lifecycle](#session-lifecycle)
+  - [Process and terminal boundary](#process-and-terminal-boundary)
+  - [Runtime identity and liveness](#runtime-identity-and-liveness)
+  - [Recovery](#recovery)
+- [Sandbox verification topology](#sandbox-verification-topology)
+- [Diagnostics and output](#diagnostics-and-output)
+- [Architectural strengths](#architectural-strengths)
+- [Architectural limitations and tradeoffs](#architectural-limitations-and-tradeoffs)
+
 ## Product boundary
 
 For each command or subshell, the user selects a profile. Kantrip then:

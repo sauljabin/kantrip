@@ -3,6 +3,22 @@
 This guide describes the development environment and repository workflows. Run
 user-facing exploratory checks from [Manual Testing](MANUAL_TESTING.md).
 
+## Contents
+
+- [Documentation audiences](#documentation-audiences)
+- [Setup](#setup)
+- [Development scripts](#development-scripts)
+- [Schema and application environment](#schema-and-application-environment)
+- [Database migrations](#database-migrations)
+- [Credential store development](#credential-store-development)
+- [Sandbox services and E2E workflow](#sandbox-services-and-e2e-workflow)
+  - [Automated E2E acceptance matrix](#automated-e2e-acceptance-matrix)
+- [Build artifacts](#build-artifacts)
+- [Website](#website)
+  - [Recapture the terminal demo](#recapture-the-terminal-demo)
+- [Architecture and security](#architecture-and-security)
+- [Release](#release)
+
 ## Documentation audiences
 
 - End users: [Usage](USAGE.md) and [Compatibility](COMPATIBILITY.md). Show installed

@@ -28,6 +28,37 @@ SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth client credentials. Kafka
 authentication always requires verified TLS. OAuth token endpoints have
 independent identity, scopes, secret, and optional CA trust.
 
+## Contents
+
+- [Shell alias](#shell-alias)
+- [Local diagnostics](#local-diagnostics)
+- [Kafka and registry connectivity](#kafka-and-registry-connectivity)
+- [First profile](#first-profile)
+- [Profile workflow](#profile-workflow)
+- [Session supervision and recovery](#session-supervision-and-recovery)
+- [Displaying the active profile in your prompt](#displaying-the-active-profile-in-your-prompt)
+  - [Choose a display style](#choose-a-display-style)
+  - [Starship](#starship)
+  - [Zsh](#zsh)
+  - [Powerlevel10k](#powerlevel10k)
+  - [Bash](#bash)
+  - [Fish](#fish)
+  - [Verify the prompt](#verify-the-prompt)
+- [Supported command-line tools](#supported-command-line-tools)
+  - [kcat](#kcat)
+  - [Apache Kafka and Confluent Kafka commands](#apache-kafka-and-confluent-kafka-commands)
+  - [Additional Confluent Schema Registry console clients](#additional-confluent-schema-registry-console-clients)
+  - [Kaskade](#kaskade)
+  - [kaf](#kaf)
+  - [kcl](#kcl)
+- [Profile storage](#profile-storage)
+- [Application environment from `kantrip exec`](#application-environment-from-kantrip-exec)
+  - [Environment precedence](#environment-precedence)
+  - [Kafka variables](#kafka-variables)
+  - [Registry variables](#registry-variables)
+  - [Kantrip session metadata](#kantrip-session-metadata)
+- [Output and color](#output-and-color)
+
 ## Shell alias
 
 Kantrip doesn't install an alias, but if you want a shorter command, the
