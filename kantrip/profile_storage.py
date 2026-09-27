@@ -80,6 +80,16 @@ class ProfileStoreError(ValueError):
         super().__init__(message)
         self.exit_code = exit_code
 
+    @classmethod
+    def profile_not_found(cls, name: str) -> ProfileStoreError:
+        """Build the error for a profile name the database does not hold."""
+        return cls(f"profile '{name}' was not found")
+
+    @classmethod
+    def database_not_found(cls, path: Path) -> ProfileStoreError:
+        """Build the error for a profile database path that does not exist."""
+        return cls(f"profile database was not found: {path}")
+
 
 class ProfileInputError(ProfileStoreError):
     """Raised when requested profile values are invalid; nothing was changed (exit 2)."""
@@ -101,7 +111,7 @@ class ProfileCollection:
         try:
             return self.profiles[name]
         except KeyError as error:
-            raise ProfileStoreError(f"profile '{name}' was not found") from error
+            raise ProfileStoreError.profile_not_found(name) from error
 
     def revision(self, name: str) -> int:
         """Return one profile revision or raise an actionable profile error."""
@@ -141,7 +151,7 @@ def load_profiles(
     if not path_entry_exists(database_path):
         if missing_ok:
             return ProfileCollection(database_path, {})
-        raise ProfileStoreError(f"profile database was not found: {database_path}")
+        raise ProfileStoreError.database_not_found(database_path)
 
     validate_private_parent(database_path.parent)
     validate_database_file(database_path)
@@ -172,7 +182,7 @@ def inspect_profile_database(
     """Inspect migration state without modifying the database or its directory."""
     database_path = path if path is not None else resolve_database_path(environment)
     if not path_entry_exists(database_path):
-        raise ProfileStoreError(f"profile database was not found: {database_path}")
+        raise ProfileStoreError.database_not_found(database_path)
     validate_private_parent(database_path.parent)
     validate_database_file(database_path)
     try:
@@ -196,7 +206,7 @@ def migrate_profile_database(
     if not path_entry_exists(database_path):
         if missing_ok:
             return MigrationResult(0, 0)
-        raise ProfileStoreError(f"profile database was not found: {database_path}")
+        raise ProfileStoreError.database_not_found(database_path)
     validate_private_parent(database_path.parent)
     validate_database_file(database_path)
     lock = nullcontext() if lock_held else database_maintenance_lock(database_path)

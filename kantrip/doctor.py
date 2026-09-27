@@ -32,6 +32,7 @@ from kantrip.adapters import (
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
     VersionProbe,
+    rendered_release,
     require_adapter_capability,
     require_minimum_version,
 )
@@ -65,6 +66,11 @@ from kantrip.secret_store import (
 from kantrip.shells import ShellError, resolve_interactive_shell
 
 CheckStatus = Literal["success", "warning", "error"]
+
+# The supported range must match requires-python and the Python classifiers in
+# pyproject.toml; a unit test enforces it.
+PYTHON_MINIMUM = (3, 10)
+PYTHON_EXCLUSIVE_MAXIMUM = (3, 15)
 
 
 @dataclass(frozen=True)
@@ -333,9 +339,14 @@ def _check_platform() -> DoctorCheck:
 
 def _check_python() -> DoctorCheck:
     version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if (3, 10) <= sys.version_info[:2] < (3, 15):
+    if PYTHON_MINIMUM <= sys.version_info[:2] < PYTHON_EXCLUSIVE_MAXIMUM:
         return DoctorCheck("success", f"Python version is supported ({version})")
-    return DoctorCheck("error", f"Python version is not supported ({version})")
+    newest = (PYTHON_EXCLUSIVE_MAXIMUM[0], PYTHON_EXCLUSIVE_MAXIMUM[1] - 1)
+    return DoctorCheck(
+        "error",
+        f"Python version is not supported ({version}); "
+        f"use Python {rendered_release(PYTHON_MINIMUM)} through {rendered_release(newest)}",
+    )
 
 
 def _check_cli(environment: Mapping[str, str]) -> DoctorCheck:
@@ -391,7 +402,7 @@ def _check_profile_database(
         profile = profiles.profiles.get(profile_name)
         if profile is None:
             return None, [
-                DoctorCheck("error", f"profile '{profile_name}' was not found"),
+                DoctorCheck("error", str(ProfileStoreError.profile_not_found(profile_name))),
                 path_check,
             ]
         profiles = ProfileCollection(

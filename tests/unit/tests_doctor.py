@@ -1,13 +1,22 @@
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import unittest
+from collections import namedtuple
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from kantrip.doctor import run_doctor
+from kantrip.adapters import rendered_release
+from kantrip.doctor import (
+    PYTHON_EXCLUSIVE_MAXIMUM,
+    PYTHON_MINIMUM,
+    DoctorCheck,
+    _check_python,
+    run_doctor,
+)
 from kantrip.profile_auth import KafkaAuthInput, RegistryAuthInput
 from kantrip.profile_storage import DATABASE_BACKUP_PREFIX, load_profiles
 from kantrip.profiles import add_profile
@@ -23,6 +32,7 @@ from kantrip.secret_value import Secret
 from tests.unit.client_versions import SUPPORTED_VERSION_OUTPUT, use_supported_client_versions
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestDoctor(unittest.TestCase):
@@ -594,6 +604,42 @@ class TestDoctorSecretsAndSessions(unittest.TestCase):
         self.assertIn(
             f"Invalid session runtime entry: {invalid}; inspect it and remove it manually",
             messages,
+        )
+
+
+class TestDoctorPythonRange(unittest.TestCase):
+    def test_supported_range_matches_requires_python(self) -> None:
+        pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^requires-python = "(.+)"$', pyproject, re.MULTILINE)
+        minimum = rendered_release(PYTHON_MINIMUM)
+        maximum = rendered_release(PYTHON_EXCLUSIVE_MAXIMUM)
+
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(f">={minimum},<{maximum}", match.group(1))
+
+    def test_supported_range_matches_python_classifiers(self) -> None:
+        pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        classified = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', pyproject)
+        major = PYTHON_MINIMUM[0]
+        supported = [
+            rendered_release((major, minor))
+            for minor in range(PYTHON_MINIMUM[1], PYTHON_EXCLUSIVE_MAXIMUM[1])
+        ]
+
+        self.assertEqual(supported, classified)
+
+    def test_unsupported_python_names_supported_range(self) -> None:
+        version_info = namedtuple("version_info", "major minor micro releaselevel serial")
+        with patch("kantrip.doctor.sys.version_info", version_info(3, 9, 18, "final", 0)):
+            check = _check_python()
+
+        self.assertEqual(
+            DoctorCheck(
+                "error",
+                "Python version is not supported (3.9.18); use Python 3.10 through 3.14",
+            ),
+            check,
         )
 
 

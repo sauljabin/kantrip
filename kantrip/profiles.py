@@ -89,7 +89,7 @@ def resolve_profile_snapshot(
     storage.validate_profile_name(profile_name)
     database_path = path if path is not None else storage.resolve_database_path(environment)
     if not storage.path_entry_exists(database_path):
-        raise ProfileStoreError(f"profile '{profile_name}' was not found")
+        raise ProfileStoreError.profile_not_found(profile_name)
     storage.validate_private_parent(database_path.parent)
     storage.validate_database_file(database_path)
     try:
@@ -247,7 +247,7 @@ def remove_profile(
     storage.validate_profile_name(profile_name)
     database_path = path if path is not None else storage.resolve_database_path(environment)
     if not storage.path_entry_exists(database_path):
-        raise ProfileStoreError(f"profile '{profile_name}' was not found")
+        raise ProfileStoreError.profile_not_found(profile_name)
     mutation = MutationTracker(f"profile '{profile_name}' removal")
 
     try:
@@ -256,7 +256,7 @@ def remove_profile(
             profiles = storage.load_profile_rows(connection, revisions=revisions)
             profile = profiles.get(profile_name)
             if profile is None:
-                raise ProfileStoreError(f"profile '{profile_name}' was not found")
+                raise ProfileStoreError.profile_not_found(profile_name)
             current_revision = revisions[profile_name]
             before = read_profile_row_state(connection, profile_name)
             if before is None:
@@ -406,7 +406,7 @@ def edit_profile(
     )
     database_path = path if path is not None else storage.resolve_database_path(environment)
     if not storage.path_entry_exists(database_path):
-        raise ProfileStoreError(f"profile '{profile_name}' was not found")
+        raise ProfileStoreError.profile_not_found(profile_name)
     mutation = MutationTracker(f"profile '{profile_name}' update")
     try:
         with storage.writable_connection(database_path) as connection:
@@ -414,7 +414,7 @@ def edit_profile(
             profiles = storage.load_profile_rows(connection, revisions=revisions)
             current = profiles.get(profile_name)
             if current is None:
-                raise ProfileStoreError(f"profile '{profile_name}' was not found")
+                raise ProfileStoreError.profile_not_found(profile_name)
             current_revision = revisions[profile_name]
             before = read_profile_row_state(connection, profile_name)
             if before is None:
