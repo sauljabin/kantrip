@@ -402,7 +402,7 @@ STYLE_BY_COLOR = {
 DEFAULT_STYLES = frozenset({"default", "foreground"})
 SESSION_MARKER = "__KANTRIP_SITE_DEMO_{}__"
 # The session runs Zsh without global startup files and with this .zshrc: the
-# Oh My Zsh snippet from USAGE.md (Apache Kafka glyph, Arcana colors) in front of
+# Zsh snippet from USAGE.md (Apache Kafka glyph, Arcana colors) in front of
 # an existing "❯" prompt.
 DEMO_ZSHRC = """kantrip_prompt_info() {
   [[ -n ${KANTRIP_PROFILE:-} ]] || return
