@@ -349,8 +349,24 @@ pre {
   color: var(--muted);
 }
 
-.t-wand {
-  color: var(--wand);
+/* The wand is drawn like images/banner.svg's: fonts disagree on the length and
+   height of "-*". Two cells wide, centered on the lowercase letters. */
+.wand-mark {
+  width: 2ch;
+  height: 1em;
+  overflow: visible;
+  vertical-align: -0.185em;
+  fill: none;
+  stroke-width: 2;
+}
+
+.wand-handle {
+  stroke: var(--wand);
+}
+
+.wand-tip {
+  stroke: var(--warning);
+  stroke-linecap: round;
 }
 
 /* Hero */
@@ -369,6 +385,17 @@ pre {
   /* 44 columns fit the window from 320px phones upward. */
   font-size: clamp(0.5rem, calc((100vw - 4.5rem) / 26.5), 1.125rem);
   line-height: 1.25;
+}
+
+/* The frame is a border, not box-drawing glyphs: fallback fonts on Android and
+   Linux give those glyphs other widths and heights than the monospace cells.
+   It still takes one cell on each side, through the middle of that cell. */
+.banner-frame {
+  display: block;
+  margin: 0.625em 0.5ch;
+  padding: calc(0.625em - 2px) calc(0.5ch - 2px);
+  border: 2px solid var(--accent);
+  border-radius: 0.5ch;
 }
 
 .lede {

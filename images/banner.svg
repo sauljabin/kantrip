@@ -32,12 +32,9 @@
         font-family: arial;
     }
 
-    .kantrip-banner-r1 { fill: #60a5fa }
-.kantrip-banner-r2 { fill: #eff6ff }
-.kantrip-banner-r3 { fill: #3b82f6;font-weight: bold }
-.kantrip-banner-r4 { fill: #22d3ee }
-.kantrip-banner-r5 { fill: #a16207 }
-.kantrip-banner-r6 { fill: #fbbf24 }
+    .kantrip-banner-r1 { fill: #eff6ff }
+.kantrip-banner-r2 { fill: #3b82f6;font-weight: bold }
+.kantrip-banner-r3 { fill: #22d3ee }
     </style>
 
     <defs>
@@ -76,15 +73,18 @@
 
     <g transform="translate(9, 41)" clip-path="url(#kantrip-banner-clip-terminal)">
 
+    <rect fill="none" stroke="#60A5FA" stroke-width="2" x="6.1" y="13.7" width="524.6" height="170.8" rx="6.1"/>
+    <path fill="none" stroke="#A16207" stroke-width="2" d="M26.2 160.1H36.6"/>
+    <path fill="none" stroke="#FBBF24" stroke-width="2" stroke-linecap="round" d="M42.7 166.1L42.7 154.1M37.5 163.1L47.9 157.1M47.9 163.1L37.5 157.1"/>
     <g class="kantrip-banner-matrix">
-    <text class="kantrip-banner-r1" x="0" y="20" textLength="536.8" clip-path="url(#kantrip-banner-line-0)">╭──────────────────────────────────────────╮</text><text class="kantrip-banner-r2" x="536.8" y="20" textLength="12.2" clip-path="url(#kantrip-banner-line-0)">
-</text><text class="kantrip-banner-r1" x="0" y="44.4" textLength="12.2" clip-path="url(#kantrip-banner-line-1)">│</text><text class="kantrip-banner-r3" x="12.2" y="44.4" textLength="378.2" clip-path="url(#kantrip-banner-line-1)">&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;_</text><text class="kantrip-banner-r1" x="524.6" y="44.4" textLength="12.2" clip-path="url(#kantrip-banner-line-1)">│</text><text class="kantrip-banner-r2" x="536.8" y="44.4" textLength="12.2" clip-path="url(#kantrip-banner-line-1)">
-</text><text class="kantrip-banner-r1" x="0" y="68.8" textLength="12.2" clip-path="url(#kantrip-banner-line-2)">│</text><text class="kantrip-banner-r3" x="12.2" y="68.8" textLength="439.2" clip-path="url(#kantrip-banner-line-2)">&#160;&#160;&#160;&#160;|&#160;|&#160;____&#160;_&#160;_&#160;__&#160;|&#160;|_&#160;_&#160;__(_)_&#160;__</text><text class="kantrip-banner-r1" x="524.6" y="68.8" textLength="12.2" clip-path="url(#kantrip-banner-line-2)">│</text><text class="kantrip-banner-r2" x="536.8" y="68.8" textLength="12.2" clip-path="url(#kantrip-banner-line-2)">
-</text><text class="kantrip-banner-r1" x="0" y="93.2" textLength="12.2" clip-path="url(#kantrip-banner-line-3)">│</text><text class="kantrip-banner-r3" x="12.2" y="93.2" textLength="451.4" clip-path="url(#kantrip-banner-line-3)">&#160;&#160;&#160;&#160;|&#160;|/&#160;/&#160;_`&#160;|&#160;&#x27;_&#160;\|&#160;__|&#160;&#x27;__|&#160;|&#160;&#x27;_&#160;\</text><text class="kantrip-banner-r1" x="524.6" y="93.2" textLength="12.2" clip-path="url(#kantrip-banner-line-3)">│</text><text class="kantrip-banner-r2" x="536.8" y="93.2" textLength="12.2" clip-path="url(#kantrip-banner-line-3)">
-</text><text class="kantrip-banner-r1" x="0" y="117.6" textLength="12.2" clip-path="url(#kantrip-banner-line-4)">│</text><text class="kantrip-banner-r3" x="12.2" y="117.6" textLength="463.6" clip-path="url(#kantrip-banner-line-4)">&#160;&#160;&#160;&#160;|&#160;&#160;&#160;&lt;&#160;(_|&#160;|&#160;|&#160;|&#160;|&#160;|_|&#160;|&#160;&#160;|&#160;|&#160;|_)&#160;|</text><text class="kantrip-banner-r1" x="524.6" y="117.6" textLength="12.2" clip-path="url(#kantrip-banner-line-4)">│</text><text class="kantrip-banner-r2" x="536.8" y="117.6" textLength="12.2" clip-path="url(#kantrip-banner-line-4)">
-</text><text class="kantrip-banner-r1" x="0" y="142" textLength="12.2" clip-path="url(#kantrip-banner-line-5)">│</text><text class="kantrip-banner-r3" x="12.2" y="142" textLength="451.4" clip-path="url(#kantrip-banner-line-5)">&#160;&#160;&#160;&#160;|_|\_\__,_|_|&#160;|_|\__|_|&#160;&#160;|_|&#160;.__/</text><text class="kantrip-banner-r1" x="524.6" y="142" textLength="12.2" clip-path="url(#kantrip-banner-line-5)">│</text><text class="kantrip-banner-r2" x="536.8" y="142" textLength="12.2" clip-path="url(#kantrip-banner-line-5)">
-</text><text class="kantrip-banner-r1" x="0" y="166.4" textLength="12.2" clip-path="url(#kantrip-banner-line-6)">│</text><text class="kantrip-banner-r5" x="24.4" y="166.4" textLength="12.2" clip-path="url(#kantrip-banner-line-6)">-</text><text class="kantrip-banner-r6" x="36.6" y="166.4" textLength="12.2" clip-path="url(#kantrip-banner-line-6)">*</text><text class="kantrip-banner-r4" x="48.8" y="166.4" textLength="341.6" clip-path="url(#kantrip-banner-line-6)">&#160;switch&#160;kafka&#160;profiles&#160;like&#160;</text><text class="kantrip-banner-r3" x="390.4" y="166.4" textLength="36.6" clip-path="url(#kantrip-banner-line-6)">|_|</text><text class="kantrip-banner-r4" x="427" y="166.4" textLength="97.6" clip-path="url(#kantrip-banner-line-6)">&#160;magic&#160;&#160;</text><text class="kantrip-banner-r1" x="524.6" y="166.4" textLength="12.2" clip-path="url(#kantrip-banner-line-6)">│</text><text class="kantrip-banner-r2" x="536.8" y="166.4" textLength="12.2" clip-path="url(#kantrip-banner-line-6)">
-</text><text class="kantrip-banner-r1" x="0" y="190.8" textLength="536.8" clip-path="url(#kantrip-banner-line-7)">╰──────────────────────────────────────────╯</text><text class="kantrip-banner-r2" x="536.8" y="190.8" textLength="12.2" clip-path="url(#kantrip-banner-line-7)">
+    <text class="kantrip-banner-r1" x="536.8" y="20" textLength="12.2" clip-path="url(#kantrip-banner-line-0)">
+</text><text class="kantrip-banner-r2" x="12.2" y="44.4" textLength="378.2" clip-path="url(#kantrip-banner-line-1)">&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;_&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;_</text><text class="kantrip-banner-r1" x="536.8" y="44.4" textLength="12.2" clip-path="url(#kantrip-banner-line-1)">
+</text><text class="kantrip-banner-r2" x="12.2" y="68.8" textLength="439.2" clip-path="url(#kantrip-banner-line-2)">&#160;&#160;&#160;&#160;|&#160;|&#160;____&#160;_&#160;_&#160;__&#160;|&#160;|_&#160;_&#160;__(_)_&#160;__</text><text class="kantrip-banner-r1" x="536.8" y="68.8" textLength="12.2" clip-path="url(#kantrip-banner-line-2)">
+</text><text class="kantrip-banner-r2" x="12.2" y="93.2" textLength="451.4" clip-path="url(#kantrip-banner-line-3)">&#160;&#160;&#160;&#160;|&#160;|/&#160;/&#160;_`&#160;|&#160;&#x27;_&#160;\|&#160;__|&#160;&#x27;__|&#160;|&#160;&#x27;_&#160;\</text><text class="kantrip-banner-r1" x="536.8" y="93.2" textLength="12.2" clip-path="url(#kantrip-banner-line-3)">
+</text><text class="kantrip-banner-r2" x="12.2" y="117.6" textLength="463.6" clip-path="url(#kantrip-banner-line-4)">&#160;&#160;&#160;&#160;|&#160;&#160;&#160;&lt;&#160;(_|&#160;|&#160;|&#160;|&#160;|&#160;|_|&#160;|&#160;&#160;|&#160;|&#160;|_)&#160;|</text><text class="kantrip-banner-r1" x="536.8" y="117.6" textLength="12.2" clip-path="url(#kantrip-banner-line-4)">
+</text><text class="kantrip-banner-r2" x="12.2" y="142" textLength="451.4" clip-path="url(#kantrip-banner-line-5)">&#160;&#160;&#160;&#160;|_|\_\__,_|_|&#160;|_|\__|_|&#160;&#160;|_|&#160;.__/</text><text class="kantrip-banner-r1" x="536.8" y="142" textLength="12.2" clip-path="url(#kantrip-banner-line-5)">
+</text><text class="kantrip-banner-r3" x="12.2" y="166.4" textLength="378.2" clip-path="url(#kantrip-banner-line-6)">&#160;&#160;&#160;&#160;switch&#160;kafka&#160;profiles&#160;like&#160;</text><text class="kantrip-banner-r2" x="390.4" y="166.4" textLength="36.6" clip-path="url(#kantrip-banner-line-6)">|_|</text><text class="kantrip-banner-r3" x="427" y="166.4" textLength="97.6" clip-path="url(#kantrip-banner-line-6)">&#160;magic&#160;&#160;</text><text class="kantrip-banner-r1" x="536.8" y="166.4" textLength="12.2" clip-path="url(#kantrip-banner-line-6)">
+</text><text class="kantrip-banner-r1" x="536.8" y="190.8" textLength="12.2" clip-path="url(#kantrip-banner-line-7)">
 </text>
     </g>
     </g>
