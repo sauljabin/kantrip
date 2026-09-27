@@ -282,6 +282,31 @@ def kaskade_registry_properties(
     return properties
 
 
+def kaf_registry_fields(connection: RegistryConnection) -> dict[str, Any]:
+    """Render the Registry fields of one kaf v0.2.14 cluster entry.
+
+    kaf decodes and encodes Avro through Go's default HTTP transport, so it has
+    system trust only and no mapping for a custom CA, a token or a certificate.
+    """
+    if connection.provider != CONFLUENT_PROVIDER:
+        raise RegistryProfileError("kaf requires a Confluent-compatible Registry profile")
+    if connection.ca_certificates is not None:
+        raise RegistryProfileError("kaf reaches the Registry with system trust only")
+    fields: dict[str, Any] = {"schema-registry-url": connection.url}
+    if connection.auth_type == "basic":
+        if connection.username is None or connection.password is None:
+            raise RegistryProfileError("Registry Basic credentials are not resolved")
+        fields["schema-registry-credentials"] = {
+            "username": connection.username,
+            "password": connection.password.reveal(),
+        }
+    elif connection.auth_type != "none":
+        raise RegistryProfileError(
+            f"kaf does not support Registry authentication '{connection.auth_type}'"
+        )
+    return fields
+
+
 def confluent_console_properties(
     connection: RegistryConnection,
     *,
@@ -680,6 +705,7 @@ __all__ = [
     "RegistryProvider",
     "confluent_console_properties",
     "display_registry",
+    "kaf_registry_fields",
     "kaskade_registry_properties",
     "registry_connection",
     "resolve_registry_connection",

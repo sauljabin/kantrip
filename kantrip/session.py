@@ -50,6 +50,7 @@ from kantrip.registry import (
     RegistryProfileError,
     _UnresolvedRegistry,
     confluent_console_properties,
+    kaf_registry_fields,
     kaskade_registry_properties,
     registry_connection,
     resolve_registry_connection,
@@ -324,7 +325,7 @@ def _write_client_files(
     except KafkaProfileError as error:
         raise SessionError(str(error)) from error
     schema_registry_java_config_path = directory / "schema-registry-kafka.properties"
-    kaf_config = _write_kaf_config(directory, kafka, kafka_material)
+    kaf_config = _write_kaf_config(directory, kafka, kafka_material, registry)
     configuration = ClientConfiguration(
         bootstrap_servers=kcat_properties["bootstrap.servers"],
         java_config=directory / "kafka.properties",
@@ -362,10 +363,21 @@ def _write_client_files(
 
 
 def _write_kaf_config(
-    directory: Path, kafka: KafkaConnection, material: _KafkaMaterial
+    directory: Path,
+    kafka: KafkaConnection,
+    material: _KafkaMaterial,
+    registry: RegistryConnection | None,
 ) -> Path | None:
-    """Write kaf's one-cluster config; OAuth has no kaf mapping, so it gets none."""
+    """Write kaf's one-cluster config; a profile kaf cannot map gets none.
+
+    Kafka OAuth and a Registry beyond Confluent with system trust and Basic at
+    most have no kaf mapping; the capability gate refuses kaf before launch.
+    """
     if kafka.auth_type == "oauth":
+        return None
+    try:
+        registry_fields = kaf_registry_fields(registry) if registry is not None else {}
+    except RegistryProfileError:
         return None
     private_key = material.private_key
     if kafka.auth_type == "mtls" and kafka.private_key_password is not None:
@@ -384,7 +396,7 @@ def _write_kaf_config(
         raise SessionError(str(error)) from error
     document = {
         "current-cluster": KAF_CLUSTER_NAME,
-        "clusters": [{"name": KAF_CLUSTER_NAME, **cluster}],
+        "clusters": [{"name": KAF_CLUSTER_NAME, **cluster, **registry_fields}],
     }
     return _write_private(
         directory / KAF_CONFIG_FILENAME, yaml.safe_dump(document, sort_keys=False)

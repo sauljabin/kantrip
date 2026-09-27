@@ -49,7 +49,7 @@ ACL-independent Kafka connectivity checks.
 - Apache Kafka `.sh` commands and equivalent unsuffixed Confluent Platform commands
 - Confluent Avro, JSON Schema, and Protobuf console producers and consumers
 - Kaskade `admin` and `consumer`, including Confluent and native Apicurio decoding
-- kaf, with a private one-cluster configuration
+- kaf, with a private one-cluster configuration and Confluent Avro decoding
 - Private, profile-aware client configuration with connection overrides blocked
 - Consistent Bash, Zsh, and Fish subshells plus one-off command execution
 - Process-group and PTY supervision with child exit-status preservation
@@ -66,7 +66,7 @@ ACL-independent Kafka connectivity checks.
 
 Planned work is tracked in GitHub milestones:
 [v0.1](https://github.com/sauljabin/kantrip/milestone/1) (first release:
-hardening, final CLI contract, dedicated credential vault, kaf and kafkactl)
+hardening, final CLI contract, dedicated credential vault, kaf)
 and [v0.2](https://github.com/sauljabin/kantrip/milestone/2) (Strimzi and
 properties import, more clients). Current support is described in
 [Compatibility](COMPATIBILITY.md).

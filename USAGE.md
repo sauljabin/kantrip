@@ -801,7 +801,20 @@ Kantrip rejects `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and
 to `~/.kaf/config` whatever `--config` names, which would copy the profile's
 credentials there. As a second guard, kaf runs with `HOME=/dev/null`, so any
 save fails before a file exists. Your own `~/.kaf/config` is never read or
-changed. Registry decoding isn't configured for kaf yet.
+changed.
+
+When the profile has a Registry, kaf decodes Avro records in `consume` and
+encodes JSON input as Avro with `produce --avro-schema-id`:
+
+```bash
+echo '{"id":"42"}' | kantrip exec local -- kaf produce orders --avro-schema-id 7
+```
+
+kaf reaches the Registry with the system CA store, so it supports a
+Confluent-compatible Registry with no authentication or Basic, over HTTP or
+HTTPS that the system trusts. Any other Registry profile makes every kaf command
+fail before launch: Apicurio's native API, a custom Registry CA, fixed token,
+mTLS, or OAuth.
 
 ## Profile storage
 

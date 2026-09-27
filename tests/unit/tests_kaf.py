@@ -1,4 +1,4 @@
-"""The kaf adapter: private one-cluster config, argument policy, and shim (#39)."""
+"""The kaf adapter: private one-cluster config, Registry, argument policy, and shim (#39)."""
 
 import stat
 import subprocess
@@ -14,6 +14,7 @@ import yaml
 from kantrip.adapter_policy import AdapterError, check_kaf_arguments
 from kantrip.kafka import KafkaConnection
 from kantrip.oauth import OAuthConnection
+from kantrip.registry import RegistryConnection
 from kantrip.secret_value import Secret
 from kantrip.session import SessionError, run_profile_session
 from tests.unit.pki import KEY_PASSWORD, synthetic_pki
@@ -40,7 +41,10 @@ class KafSessionTestCase(unittest.TestCase):
         self.addCleanup(runtime_patch.stop)
 
     def run_kaf(
-        self, arguments: list[str], resolved: KafkaConnection | None = None
+        self,
+        arguments: list[str],
+        resolved: KafkaConnection | None = None,
+        registry: RegistryConnection | None = None,
     ) -> dict[str, Any]:
         observed: dict[str, Any] = {}
 
@@ -73,6 +77,7 @@ class KafSessionTestCase(unittest.TestCase):
                 arguments,
                 environment={"HOME": "/Users/someone"},
                 resolved_kafka=resolved,
+                resolved_registry=registry,
             )
         self.assertEqual(0, result)
         return observed
@@ -210,6 +215,96 @@ class TestKafSession(KafSessionTestCase):
                 "local", PROFILE, ["kaf", "-b", "other:9092", "topics"], environment={}
             )
         run.assert_not_called()
+
+
+class TestKafRegistry(KafSessionTestCase):
+    def test_unauthenticated_registry_sets_only_the_url(self) -> None:
+        registry = RegistryConnection("confluent", "http://registry.invalid:8081", "")
+
+        observed = self.run_kaf(["kaf", "consume", "orders"], registry=registry)
+
+        cluster = observed["config"]["clusters"][0]
+        self.assertEqual("http://registry.invalid:8081", cluster["schema-registry-url"])
+        self.assertNotIn("schema-registry-credentials", cluster)
+
+    def test_basic_registry_with_system_trust_writes_credentials_only_to_the_file(self) -> None:
+        registry = RegistryConnection(
+            "confluent",
+            "https://registry.invalid",
+            "",
+            "basic",
+            username="synthetic-user",
+            password=Secret("synthetic-password"),
+        )
+
+        observed = self.run_kaf(["kaf", "consume", "orders"], registry=registry)
+
+        cluster = observed["config"]["clusters"][0]
+        self.assertEqual("https://registry.invalid", cluster["schema-registry-url"])
+        self.assertEqual(
+            {"username": "synthetic-user", "password": "synthetic-password"},
+            cluster["schema-registry-credentials"],
+        )
+        self.assertEqual(0o600, observed["mode"])
+        self.assertNotIn("synthetic-password", " ".join(observed["arguments"]))
+
+    def test_registries_kaf_cannot_reach_safely_fail_before_launch(self) -> None:
+        pki = synthetic_pki()
+        cases = (
+            (
+                RegistryConnection("apicurio", "https://registry.invalid/apis/registry/v3", ""),
+                "kaf supports only Confluent-compatible registry profiles",
+            ),
+            (
+                RegistryConnection(
+                    "confluent",
+                    "https://registry.invalid",
+                    "",
+                    "basic",
+                    pki.ca,
+                    username="synthetic-user",
+                    password=Secret("synthetic-password"),
+                ),
+                "kaf trusts only the system CA store for the Registry",
+            ),
+            (
+                RegistryConnection(
+                    "confluent",
+                    "https://registry.invalid",
+                    "",
+                    "token",
+                    token=Secret("synthetic-token"),
+                ),
+                "kaf does not support Registry authentication 'token'",
+            ),
+            (
+                RegistryConnection(
+                    "confluent",
+                    "https://registry.invalid",
+                    "",
+                    "mtls",
+                    pki.ca,
+                    client_certificate=pki.client_certificate,
+                    private_key=Secret(pki.client_key),
+                ),
+                "kaf does not support Registry authentication 'mtls'",
+            ),
+        )
+        for registry, message in cases:
+            with (
+                self.subTest(message=message),
+                patch("kantrip.session.shutil.which", return_value="/opt/bin/kaf"),
+                patch("kantrip.session._run_child") as run,
+                self.assertRaisesRegex(SessionError, message),
+            ):
+                run_profile_session(
+                    "local",
+                    PROFILE,
+                    ["kaf", "topics"],
+                    environment={},
+                    resolved_registry=registry,
+                )
+            run.assert_not_called()
 
 
 class TestKafShim(KafSessionTestCase):
