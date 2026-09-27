@@ -328,10 +328,12 @@ demo's options or output style, and run `check` after site or CLI changes.
 Regenerate `images/banner.svg` with `uv run --locked python -m scripts.banner`
 when the banner, console theme, or SVG helper changes.
 
-Draw frames in the banner SVG, the social preview, and the site as shapes (SVG
-rectangles or CSS borders), never as box-drawing glyphs: Linux and Android take
-those glyphs from fallback fonts whose cells differ from the monospace grid,
-which splits borders and overflows the site banner on phones.
+Draw the frame and the slogan's `-*` wand in the banner SVG, the social
+preview, and the site as shapes (SVG paths and rectangles or CSS borders),
+never as glyphs: Linux and Android take them from fallback fonts whose cells,
+sizes, and heights differ from the monospace grid, which splits borders,
+overflows the site banner on phones, and misplaces the wand's star.
+`scripts.banner.wand_svg` holds the wand geometry.
 
 ## Releases and Contributions
 

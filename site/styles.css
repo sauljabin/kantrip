@@ -349,8 +349,24 @@ pre {
   color: var(--muted);
 }
 
-.t-wand {
-  color: var(--wand);
+/* The wand is drawn like images/banner.svg's: fonts disagree on the length and
+   height of "-*". Two cells wide, centered on the lowercase letters. */
+.wand-mark {
+  width: 2ch;
+  height: 1em;
+  overflow: visible;
+  vertical-align: -0.185em;
+  fill: none;
+  stroke-width: 2;
+}
+
+.wand-handle {
+  stroke: var(--wand);
+}
+
+.wand-tip {
+  stroke: var(--warning);
+  stroke-linecap: round;
 }
 
 /* Hero */

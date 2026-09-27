@@ -48,15 +48,12 @@ class TestScripts(unittest.TestCase):
         self.assertEqual(view_width, root.attrib["width"])
         self.assertEqual(view_height, root.attrib["height"])
         rendered_text = " ".join("".join(root.itertext()).split())
-        self.assertIn(" ".join(BANNER_SLOGAN.split()), rendered_text)
-        wand_handle = next(element for element in root.iter() if element.text == "-")
-        wand_handle_class = wand_handle.attrib["class"]
-        handle_fill = f".{wand_handle_class} {{ fill: {WAND_HANDLE_COLOR}"
-        self.assertIn(handle_fill.lower(), first.lower())
-        wand_tip = next(element for element in root.iter() if element.text == "*")
-        wand_tip_class = wand_tip.attrib["class"]
-        tip_fill = f".{wand_tip_class} {{ fill: {ARCANA_COLORS['warning']}"
-        self.assertIn(tip_fill.lower(), first.lower())
+        self.assertIn(" ".join(BANNER_SLOGAN.replace("-*", "").split()), rendered_text)
+        self.assertNotIn("-*", rendered_text)
+        strokes = [
+            element.attrib["stroke"] for element in root.iter() if element.tag.endswith("path")
+        ]
+        self.assertEqual([WAND_HANDLE_COLOR, ARCANA_COLORS["warning"]], strokes)
         descender = next(element for element in root.iter() if element.text == "|_|")
         descender_class = descender.attrib["class"]
         primary_fill = f".{descender_class} {{ fill: {ARCANA_COLORS['primary']}"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import math
 from pathlib import Path
 
 from rich.box import Box
@@ -31,6 +32,14 @@ SVG_FRAME_STROKE = 2
 # and Android, so the panel keeps blank border cells and the frame is drawn
 # as an SVG rectangle through their centers instead.
 BLANK_BOX = Box("    \n" * 8)
+# The wand's "-*" glyphs vary in length, size, and height across platform
+# fonts, so its two cells stay blank and the wand is drawn instead: a handle
+# through the first cell and a six-armed star centered in the second. Sizes
+# are fractions of the font size.
+WAND = "-*"
+WAND_HANDLE_START = 0.09
+WAND_TIP_RADIUS = 0.3
+WAND_STROKE = 0.1
 
 ARCANA_TERMINAL_THEME = TerminalTheme(
     background=(7, 20, 38),
@@ -69,14 +78,11 @@ def render_banner_svg() -> str:
     )
     title = Text(APP_BANNER[:-3].rstrip(), style="heading")
     slogan = Text(
-        BANNER_SLOGAN,
+        BANNER_SLOGAN.replace(WAND, " " * len(WAND)),
         style="secondary",
         justify="left",
         no_wrap=True,
     )
-    wand_start = BANNER_SLOGAN.index("-*")
-    slogan.stylize(WAND_HANDLE_COLOR, wand_start, wand_start + 1)
-    slogan.stylize("warning", wand_start + 1, wand_start + 2)
     descender_start = BANNER_SLOGAN.index("|_|")
     slogan.stylize("heading", descender_start, descender_start + 3)
     console.print(
@@ -94,7 +100,7 @@ def render_banner_svg() -> str:
         font_aspect_ratio=BANNER_FONT_ASPECT_RATIO,
         unique_id="kantrip-banner",
     )
-    return normalize_svg(_add_frame(svg, line_count))
+    return normalize_svg(_add_wand(_add_frame(svg, line_count), line_count))
 
 
 def _add_frame(svg: str, line_count: int) -> str:
@@ -111,6 +117,38 @@ def _add_frame(svg: str, line_count: int) -> str:
     )
     matrix = '<g class="kantrip-banner-matrix">'
     return svg.replace(matrix, frame + matrix, 1)
+
+
+def _add_wand(svg: str, line_count: int) -> str:
+    """Draw the wand in the blank cells before the slogan, above its bottom border."""
+    char_width = SVG_CHAR_HEIGHT * BANNER_FONT_ASPECT_RATIO
+    left = char_width * (1 + BANNER_SLOGAN.index(WAND))
+    center_y = SVG_LINE_OFFSET + SVG_LINE_HEIGHT * (line_count - 1.5)
+    matrix = '<g class="kantrip-banner-matrix">'
+    return svg.replace(matrix, wand_svg(left, center_y, char_width, SVG_CHAR_HEIGHT) + matrix, 1)
+
+
+def wand_svg(left: float, center_y: float, cell_width: float, font_size: float) -> str:
+    """Return SVG paths for the wand drawn over two cells starting at left."""
+    stroke = WAND_STROKE * font_size
+    radius = WAND_TIP_RADIUS * font_size
+    tip_x = left + cell_width * 1.5
+    handle = f"M{_n(left + WAND_HANDLE_START * font_size)} {_n(center_y)}H{_n(left + cell_width)}"
+    arms = []
+    for angle in (90, 30, 150):
+        dx = radius * math.cos(math.radians(angle))
+        dy = radius * math.sin(math.radians(angle))
+        arms.append(f"M{_n(tip_x - dx)} {_n(center_y + dy)}L{_n(tip_x + dx)} {_n(center_y - dy)}")
+    return (
+        f'<path fill="none" stroke="{WAND_HANDLE_COLOR}" stroke-width="{_n(stroke)}" '
+        f'd="{handle}"/>\n    '
+        f'<path fill="none" stroke="{ARCANA_COLORS["warning"]}" stroke-width="{_n(stroke)}" '
+        f'stroke-linecap="round" d="{"".join(arms)}"/>\n    '
+    )
+
+
+def _n(value: float) -> str:
+    return f"{round(value, 2):g}"
 
 
 def generate_banner(path: Path = BANNER_PATH) -> Path:
