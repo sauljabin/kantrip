@@ -63,6 +63,7 @@ class RegistryAuthCase:
     oauth_client_id_field: str | None = None
     certificate_field: str | None = None
     key_field: str | None = None
+    kaf_refusal: str = ""
 
 
 CASES = (
@@ -142,6 +143,7 @@ REGISTRY_CASES = (
         "basic",
         "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME",
         "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD",
+        kaf_refusal="kaf trusts only the system CA store for the Registry",
     ),
     RegistryAuthCase(
         "schema-registry-oauth",
@@ -150,6 +152,7 @@ REGISTRY_CASES = (
         "oauth",
         secret_field="KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET",
         oauth_client_id_field="KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID",
+        kaf_refusal="kaf does not support Registry authentication 'oauth'",
     ),
     RegistryAuthCase(
         "schema-registry-mtls",
@@ -158,6 +161,7 @@ REGISTRY_CASES = (
         "mtls",
         certificate_field="KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE",
         key_field="KANTRIP_SANDBOX_REGISTRY_MTLS_KEY",
+        kaf_refusal="kaf does not support Registry authentication 'mtls'",
     ),
     RegistryAuthCase(
         "apicurio-basic",
@@ -166,6 +170,7 @@ REGISTRY_CASES = (
         "basic",
         "KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
         "KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
+        kaf_refusal="kaf supports only Confluent-compatible registry profiles",
     ),
     RegistryAuthCase(
         "apicurio-oauth",
@@ -174,6 +179,7 @@ REGISTRY_CASES = (
         "oauth",
         secret_field="KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
         oauth_client_id_field="KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
+        kaf_refusal="kaf supports only Confluent-compatible registry profiles",
     ),
 )
 
@@ -218,6 +224,7 @@ def main() -> None:
                 _add_registry_profile(profile, registry_case, credentials, environment)
                 profiles.append(profile)
                 _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
+                _exercise_kaf_registry_refusal(profile, registry_case, environment)
             _exercise_invalid_credentials(credentials, environment, profiles)
             _exercise_invalid_registry_credentials(directory, credentials, environment, profiles)
             _exercise_invalid_mtls(directory, environment, profiles)
@@ -504,6 +511,17 @@ def _exercise_kaf(
         raise AuthSmokeFailure(f"{profile} kaf did not consume its smoke record")
     if kaf_user_config_state(environment) != user_config:
         raise AuthSmokeFailure(f"{profile} kaf changed the user's ~/.kaf/config")
+
+
+def _exercise_kaf_registry_refusal(
+    profile: str,
+    case: RegistryAuthCase,
+    environment: Mapping[str, str],
+) -> None:
+    """kaf has system trust and Basic at most, so these sandbox Registries refuse it first."""
+    output = _run((*_cli(), "exec", profile, "--", "kaf", "topics"), environment, accepted=(1,))
+    if case.kaf_refusal not in output:
+        raise AuthSmokeFailure(f"{profile} kaf did not fail before launch for its Registry")
 
 
 def _exercise_shell(

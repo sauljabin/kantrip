@@ -210,6 +210,10 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     # kaf saves $HOME/.kaf/config whatever --config names.
                     self.assertEqual("/dev/null", record["home"])
                     self.assertIn("current-cluster: kantrip\n", record["config_contents"])
+                    self.assertIn(
+                        "schema-registry-url: http://registry.invalid:8081\n",
+                        record["config_contents"],
+                    )
                     self.assertEqual("topics", record["argv"][-1])
                 if record["name"] == "kaskade" and "registry" in record["argv"]:
                     self.assertIn(

@@ -47,7 +47,7 @@ outside the supported lifecycle.
 | `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kcat` / `kafkacat` | kcat | kcat 1.7+; librdkafka 2.6.1+ for SCRAM against Kafka 4, 2.11.0+ for OAuth with custom HTTPS CA | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
-| `kaf` | kaf | kaf 0.2.14 | Topics, groups, produce, and consume | No | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. No OAuth. |
+| `kaf` | kaf | kaf 0.2.14 | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. No Kafka OAuth. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
 | `kaskade` | Kaskade | Kaskade 5.0+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed; other Kafka, config-file, and registry connection overrides are rejected. |
 
 “Profile-aware” means Kantrip maps the selected profile into the command. The
@@ -100,9 +100,9 @@ its owned values after shell startup; see [environment precedence](USAGE.md#envi
 
 | Provider / mode | Current support |
 | --- | --- |
-| Confluent-compatible HTTP/HTTPS, no auth | Confluent consoles, kcat Avro, Kaskade, and ping |
+| Confluent-compatible HTTP/HTTPS, no auth | Confluent consoles, kcat Avro, Kaskade, kaf Avro (system trust only), and ping |
 | Native Apicurio HTTP/HTTPS, no auth | Kaskade Registry deserializers and ping |
-| Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
+| Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. kaf maps Basic with system trust only. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
 | Native Apicurio Basic or mTLS | Private Kaskade INI and provider-aware ping. Kaskade supports private CA trust and unencrypted PEM mTLS keys; encrypted PEM keys are rejected. |
 | Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. Kaskade 5.0.1+ is required when OAuth scopes are configured; profiles without scopes retain compatibility with earlier releases. Kaskade keeps Registry and token HTTP/TLS contexts separate so Registry client identity does not reach the IdP. |
 | Confluent fixed bearer | Profile and probe support; clients without a safe fixed-token mapping reject it |

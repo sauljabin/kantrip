@@ -41,6 +41,7 @@ from kantrip.adapter_policy import (
     prepare_kaf_command,
     prepare_kaskade_command,
     prepare_kcat_command,
+    require_kaf_registry,
 )
 from kantrip.adapter_shims import (
     ShimInputs,
@@ -71,7 +72,8 @@ class ClientAdapter:
     commands and the shim guard, and may return a signal the shim acts on.
     `prepare_command` and `render_shim` inject the private configuration:
     options for Java tools and Kaskade, `KCAT_CONFIG` plus `-r` for kcat. The
-    remaining fields are the family's capability matrix and version gates.
+    remaining fields are the family's capability matrix and version gates;
+    `registry_check` gates a family that reads the profile's Registry on every run.
     """
 
     name: str
@@ -85,6 +87,7 @@ class ClientAdapter:
     pem_version_gate: bool = False
     oauth_version_gate: bool = False
     registry_version_gate: bool = False
+    registry_check: Callable[[RegistryConnection], object] | None = None
 
 
 def _missing_kcat(name: str) -> str:
@@ -158,7 +161,7 @@ KAF_ADAPTER = ClientAdapter(
     # kaf's token client uses Go's default trust store and cannot take the
     # profile's token-endpoint CA, so OAuth has no safe mapping.
     kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
-    registry_providers=frozenset(),
+    registry_check=require_kaf_registry,
 )
 CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER)
 _ADAPTERS_BY_EXECUTABLE = {
@@ -307,6 +310,8 @@ def _require_capability(
     # gate the profile needs applies, in this order.
     if auth_type not in adapter.kafka_authentication:
         raise AdapterError(f"{adapter.name} does not support Kafka authentication '{auth_type}'")
+    if registry is not None and adapter.registry_check is not None:
+        adapter.registry_check(registry)
     if custom_pem and adapter.pem_version_gate:
         require_java_pem_support(executable, environment=environment, probe=java_probe)
     if auth_type == "oauth" and adapter.oauth_version_gate:
