@@ -413,7 +413,6 @@ class TestKclShim(KclSessionTestCase):
 
 class TestKclMinimumVersion(KclSessionTestCase):
     def test_releases_from_the_minimum_on_are_accepted(self) -> None:
-        assert KCL_ADAPTER.minimum_version is not None
         for output in ("kcl version v0.20.0", "kcl version v0.20.1", "kcl version v1.0.0"):
             with (
                 self.subTest(output=output),

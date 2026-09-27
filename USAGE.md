@@ -64,7 +64,7 @@ Doctor groups local checks under System, Profiles, Credentials, Session, and
 Clients, names missing commands, and summarizes health. It validates the profile
 database, approved OS credential backend, Registry support, reconciliation
 state, active-session state, recoverable runtime artifacts, and installed
-clients. It reads every secret each profile references (Kafka and Registry,
+clients, including any client older than Kantrip supports. It reads every secret each profile references (Kafka and Registry,
 including OAuth client secrets) and reports it as stored, missing, or
 unavailable under its field name, such as `registry.auth.token`, without printing
 sensitive material. It also checks certificate/key validity and certificate
@@ -621,6 +621,12 @@ The profile should appear in the subshell and disappear after `exit`.
 Kantrip configures supported tools inside `kantrip exec` and blocks profile
 overrides. It reports missing clients but does not install them.
 
+Before each launch, Kantrip checks the installed client's version against its
+minimum, listed in [Compatibility](COMPATIBILITY.md#client-commands). A client
+that is too old, or whose version Kantrip can't read, stops before it starts.
+The error names the release to install. Session shims check every installed
+client in parallel when the session starts.
+
 ### kcat
 
 Each session sets `KCAT_CONFIG` to a private librdkafka properties file.
@@ -634,7 +640,7 @@ kantrip exec local -- kcat -P -t orders
 kantrip exec local -- kcat -C -t avro-orders -s value=avro
 ```
 
-For kcat 1.7+, `-s avro`, `-s key=avro`, and `-s value=avro` inject a
+`-s avro`, `-s key=avro`, and `-s value=avro` inject a
 Confluent-compatible registry URL through `-r`. Native Apicurio profiles are not
 supported by kcat. Kantrip rejects `-F`, `-r`, and
 `-X schema.registry.url=...` overrides. Other modes need no registry profile.
@@ -723,9 +729,7 @@ identically.
 Kaskade supports Avro, JSON Schema, and Protobuf decoding with Confluent Schema
 Registry and native Apicurio Registry through this adapter. Native Apicurio uses
 its default `contentId` framing because Kantrip currently configures only the
-registry URL. Native Apicurio OAuth profiles with scopes require Kaskade 5.0.1
-or newer; profiles without scopes retain compatibility with earlier releases.
-Kantrip sets no Kaskade-specific environment variable.
+registry URL. Kantrip sets no Kaskade-specific environment variable.
 
 ### kaf
 

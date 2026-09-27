@@ -12,20 +12,21 @@ from kantrip.adapters import (
     AdapterError,
     create_subshell_shims,
     require_adapter_capability,
-    require_kaskade_apicurio_security_support,
 )
 from kantrip.kafka import KafkaConnection
-from kantrip.oauth import OAuthConnection
 from kantrip.registry import RegistryConnection
 from kantrip.runtime import create_session_runtime
 from kantrip.secret_store import secret_reference
 from kantrip.secret_value import Secret
 from kantrip.session import SessionError, _oauth_trust_bundle, run_profile_session
+from tests.unit.client_versions import use_supported_client_versions
 from tests.unit.pki import synthetic_pki
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
 
+_UNVERIFIED_ERROR = "could not verify the installed"
+_FLOOR_ERROR = "is not supported; install Apache Kafka 2.6 or Confluent Platform 6.0 or newer"
 _PEM_ERROR = "does not support PEM trust stores"
 _OAUTH_ERROR = "does not support Kantrip's native OAuth mapping"
 
@@ -35,14 +36,23 @@ class TestJavaCapabilityParity(unittest.TestCase):
 
     # (custom CA, Kafka auth, client version, expected error or None)
     CASES = (
-        (False, "none", "unknown", None),
+        (False, "none", "unknown", _UNVERIFIED_ERROR),
+        (False, "none", "2.5.1", _FLOOR_ERROR),
+        (False, "none", "5.5.0-ccs", _FLOOR_ERROR),
+        (False, "none", "2.6.3", None),
+        (False, "none", "6.0.0-ccs", None),
         (True, "none", "2.6.3", _PEM_ERROR),
+        (True, "none", "6.0.0-ccs", _PEM_ERROR),
         (True, "none", "3.9.0", None),
         (False, "oauth", "3.9.0", _OAUTH_ERROR),
-        (False, "oauth", "4.0.0", None),
+        (False, "oauth", "4.0.0", _OAUTH_ERROR),
+        (False, "oauth", "7.9.0-ccs", _OAUTH_ERROR),
+        (False, "oauth", "8.0.0-ccs", _OAUTH_ERROR),
+        (False, "oauth", "4.1.0", None),
+        (False, "oauth", "8.1.0-ce", None),
         (True, "oauth", "2.6.3", _PEM_ERROR),
         (True, "oauth", "3.9.0", _OAUTH_ERROR),
-        (True, "oauth", "4.0.0", None),
+        (True, "oauth", "4.1.0", None),
     )
 
     def test_direct_and_shim_decisions_match(self) -> None:
@@ -56,7 +66,6 @@ class TestJavaCapabilityParity(unittest.TestCase):
                 for name in ("kafka-topics", "kafka-configs"):
                     _write_java_client(root_path / name, version, probes)
                 environment = {"PATH": root}
-                gated = custom_pem or auth_type == "oauth"
 
                 direct_errors: dict[str, str | None] = {}
                 for name in ("kafka-topics", "kafka-configs"):
@@ -72,8 +81,8 @@ class TestJavaCapabilityParity(unittest.TestCase):
                         direct_errors[name] = str(error)
                     else:
                         direct_errors[name] = None
-                    # PEM and OAuth gates share one `--version` run.
-                    self.assertEqual(int(gated), _probe_count(probes))
+                    # The floor, PEM, and OAuth gates share one `--version` run.
+                    self.assertEqual(1, _probe_count(probes))
                 probes.unlink(missing_ok=True)
 
                 shim_directory = create_subshell_shims(
@@ -89,7 +98,7 @@ class TestJavaCapabilityParity(unittest.TestCase):
                 )
 
                 # Two executables in one install directory share one probe.
-                self.assertEqual(int(gated), _probe_count(probes))
+                self.assertEqual(1, _probe_count(probes))
                 for name, direct_error in direct_errors.items():
                     result = subprocess.run(
                         [shim_directory / name, "--list"],
@@ -105,7 +114,7 @@ class TestJavaCapabilityParity(unittest.TestCase):
                     else:
                         assert direct_error is not None
                         self.assertIn(expected, direct_error)
-                        self.assertTrue(direct_error.startswith(f"{name} "), direct_error)
+                        self.assertIn(name, direct_error)
                         self.assertEqual(2, result.returncode)
                         self.assertIn(direct_error, result.stderr)
                         self.assertNotIn("CLIENT_LAUNCHED", result.stdout)
@@ -139,6 +148,7 @@ class TestProfileSession(unittest.TestCase):
         self.runtime_patch.start()
         self.addCleanup(self.runtime_patch.stop)
         self.addCleanup(self.runtime_directory.cleanup)
+        self.supported_versions = use_supported_client_versions(self)
         self.profile = {
             "id": PROFILE_ID,
             "kafka": {
@@ -182,38 +192,6 @@ class TestProfileSession(unittest.TestCase):
                 ),
             )
 
-    def test_kaskade_apicurio_scopes_reject_unsupported_releases(self) -> None:
-        connection = RegistryConnection(
-            "apicurio",
-            "https://registry.invalid/apis/registry/v3",
-            "apicurio.registry.url",
-            auth_type="oauth",
-            oauth=OAuthConnection(
-                "https://idp.invalid/token",
-                "registry-client",
-                ("registry.read",),
-                "secret-reference",
-            ),
-        )
-        for rendered in ("5.0.0", "5.0.1.dev5"):
-            version = subprocess.CompletedProcess(
-                ["kaskade", "--version"],
-                0,
-                stdout=f"kaskade, version {rendered}\n",
-                stderr="",
-            )
-            with (
-                self.subTest(version=rendered),
-                patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
-                patch("kantrip.adapters.subprocess.run", return_value=version),
-                self.assertRaisesRegex(AdapterError, "Kaskade 5.0.1 or newer"),
-            ):
-                require_kaskade_apicurio_security_support(
-                    "kaskade",
-                    connection,
-                    environment={"PATH": "/opt/bin"},
-                )
-
     def test_oauth_trust_bundle_uses_a_portable_system_path_not_environment(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -246,60 +224,6 @@ class TestProfileSession(unittest.TestCase):
             self.assertRaisesRegex(SessionError, "could not be located or read"),
         ):
             _oauth_trust_bundle("PROFILE ROOT\n")
-
-    def test_kaskade_apicurio_official_shared_ca_needs_no_new_release(self) -> None:
-        connection = RegistryConnection(
-            "apicurio",
-            "https://registry.invalid/apis/registry/v3",
-            "apicurio.registry.url",
-            auth_type="oauth",
-            ca_certificates="shared-ca",
-            oauth=OAuthConnection(
-                "https://idp.invalid/token",
-                "registry-client",
-                (),
-                "secret-reference",
-            ),
-        )
-
-        with patch("kantrip.adapters.subprocess.run") as run:
-            require_kaskade_apicurio_security_support(
-                "kaskade",
-                connection,
-                environment={"PATH": "/opt/bin"},
-            )
-
-        run.assert_not_called()
-
-    def test_kaskade_apicurio_scopes_accept_kaskade_5_0_1(self) -> None:
-        connection = RegistryConnection(
-            "apicurio",
-            "https://registry.invalid/apis/registry/v3",
-            "apicurio.registry.url",
-            auth_type="oauth",
-            oauth=OAuthConnection(
-                "https://idp.invalid/token",
-                "registry-client",
-                ("registry.read",),
-                "secret-reference",
-            ),
-        )
-        version = subprocess.CompletedProcess(
-            ["kaskade", "--version"],
-            0,
-            stdout="kaskade, version 5.0.1\n",
-            stderr="",
-        )
-
-        with (
-            patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.adapters.subprocess.run", return_value=version),
-        ):
-            require_kaskade_apicurio_security_support(
-                "kaskade",
-                connection,
-                environment={"PATH": "/opt/bin"},
-            )
 
     def test_runs_command_with_generated_kcat_configuration(self) -> None:
         observed: dict[str, object] = {}
@@ -518,7 +442,6 @@ class TestProfileSession(unittest.TestCase):
 
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/kafka/kafka-topics"),
-            patch("kantrip.adapters.require_java_pem_support"),
             patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(
@@ -541,6 +464,7 @@ class TestProfileSession(unittest.TestCase):
     def test_custom_ca_rejects_java_clients_older_than_kafka_2_7_before_operation(
         self,
     ) -> None:
+        self.supported_versions.stop()
         self.profile["kafka"].update(
             {
                 "transport": "tls",
@@ -571,6 +495,7 @@ class TestProfileSession(unittest.TestCase):
                 run.assert_not_called()
 
     def test_custom_ca_accepts_kafka_2_7_java_clients(self) -> None:
+        self.supported_versions.stop()
         self.profile["kafka"].update(
             {
                 "transport": "tls",
@@ -600,6 +525,7 @@ class TestProfileSession(unittest.TestCase):
                 run.assert_called_once()
 
     def test_custom_ca_subshell_shim_rejects_an_unverified_java_client(self) -> None:
+        self.supported_versions.stop()
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             client = root_path / "kafka-topics"
@@ -633,12 +559,13 @@ class TestProfileSession(unittest.TestCase):
         self.assertNotIn("CLIENT_LAUNCHED", result.stdout)
 
     def test_oauth_java_subshell_shim_preserves_only_owned_kafka_opts(self) -> None:
+        self.supported_versions.stop()
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             client = root_path / "kafka-topics"
             client.write_text(
                 "#!/bin/sh\n"
-                "if [ \"${1-}\" = --version ]; then printf '4.0.0\\n'; exit 0; fi\n"
+                "if [ \"${1-}\" = --version ]; then printf '4.1.0\\n'; exit 0; fi\n"
                 'printf \'%s|%s\\n\' "${KAFKA_OPTS-unset}" "${JAVA_TOOL_OPTIONS-unset}"\n',
                 encoding="utf-8",
             )
@@ -993,16 +920,8 @@ class TestProfileSession(unittest.TestCase):
             observed["ca_content"] = registry_ca.read_text(encoding="utf-8")
             return subprocess.CompletedProcess(arguments, 0)
 
-        version = subprocess.CompletedProcess(
-            ["kaskade", "--version"],
-            0,
-            stdout="kaskade, version 5.0.1\n",
-            stderr="",
-        )
         with (
             patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.adapters.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.adapters.subprocess.run", return_value=version),
             patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
             run_profile_session(

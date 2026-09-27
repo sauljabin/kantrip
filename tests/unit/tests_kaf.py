@@ -17,6 +17,7 @@ from kantrip.oauth import OAuthConnection
 from kantrip.registry import RegistryConnection
 from kantrip.secret_value import Secret
 from kantrip.session import SessionError, run_profile_session
+from tests.unit.client_versions import use_supported_client_versions
 from tests.unit.pki import KEY_PASSWORD, synthetic_pki
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000039"
@@ -39,6 +40,7 @@ class KafSessionTestCase(unittest.TestCase):
         )
         runtime_patch.start()
         self.addCleanup(runtime_patch.stop)
+        use_supported_client_versions(self)
 
     def run_kaf(
         self,
