@@ -18,6 +18,8 @@ from kantrip import APP_VERSION
 from kantrip.adapters import (
     ADAPTER_EXECUTABLES,
     CLIENT_ADAPTERS,
+    JAVA_CLI_ADAPTER,
+    KAF_ADAPTER,
     KAF_EXECUTABLES,
     KAFKA_ACLS_EXECUTABLES,
     KAFKA_BROKER_API_VERSIONS_EXECUTABLES,
@@ -26,11 +28,15 @@ from kantrip.adapters import (
     KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
+    KASKADE_ADAPTER,
     KASKADE_EXECUTABLES,
+    KCAT_ADAPTER,
     KCAT_EXECUTABLES,
+    KCL_ADAPTER,
     KCL_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
+    ClientAdapter,
     VersionProbe,
     rendered_release,
     require_adapter_capability,
@@ -185,8 +191,7 @@ def run_doctor(
         *_assign_section(
             "Clients",
             [
-                *_check_commands(env),
-                *_check_client_versions(env, versions),
+                *_check_commands(env, versions),
                 *_check_profile_clients(profiles, env, versions),
             ],
         ),
@@ -770,13 +775,33 @@ def _is_executable(path: Path) -> bool:
     return path.is_file() and os.access(path, os.X_OK)
 
 
-def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
+def _check_commands(environment: Mapping[str, str], versions: VersionProbe) -> list[DoctorCheck]:
+    """Report each client's commands, paths, and release as one group."""
     search_path = environment.get("PATH")
+    installed = {
+        adapter.name: executable
+        for adapter in CLIENT_ADAPTERS
+        if (executable := _find_first(adapter.executables, search_path)) is not None
+    }
+    versions.prefetch(
+        (adapter.minimum_version, installed[adapter.name])
+        for adapter in CLIENT_ADAPTERS
+        if adapter.name in installed
+    )
+
+    def release(adapter: ClientAdapter, label: str) -> list[DoctorCheck]:
+        executable = installed.get(adapter.name)
+        if executable is None:
+            return []
+        return [_check_client_version(adapter, label, executable, environment, versions)]
+
     return [
         _check_command_group("kcat", (KCAT_EXECUTABLES,), search_path),
         *_check_command_paths("kcat", (("executable", KCAT_EXECUTABLES),), search_path),
+        *release(KCAT_ADAPTER, "kcat"),
         _check_kafka_commands(search_path),
         *_check_command_paths("Kafka", _KAFKA_COMMAND_GROUPS, search_path),
+        *release(JAVA_CLI_ADAPTER, "Kafka CLI"),
         _check_command_group(
             "Schema Registry console", _SCHEMA_REGISTRY_COMMAND_GROUPS, search_path
         ),
@@ -787,39 +812,31 @@ def _check_commands(environment: Mapping[str, str]) -> list[DoctorCheck]:
         ),
         _check_command_group("Kaskade", (KASKADE_EXECUTABLES,), search_path),
         *_check_command_paths("Kaskade", (("executable", KASKADE_EXECUTABLES),), search_path),
+        *release(KASKADE_ADAPTER, "Kaskade"),
         _check_command_group("kaf", (KAF_EXECUTABLES,), search_path),
         *_check_command_paths("kaf", (("executable", KAF_EXECUTABLES),), search_path),
+        *release(KAF_ADAPTER, "kaf"),
         _check_command_group("kcl", (KCL_EXECUTABLES,), search_path),
         *_check_command_paths("kcl", (("executable", KCL_EXECUTABLES),), search_path),
+        *release(KCL_ADAPTER, "kcl"),
     ]
 
 
-def _check_client_versions(
-    environment: Mapping[str, str], versions: VersionProbe
-) -> list[DoctorCheck]:
-    """Report each installed client whose release Kantrip does not support."""
-    search_path = environment.get("PATH")
-    installed = [
-        (adapter, executable)
-        for adapter in CLIENT_ADAPTERS
-        if (executable := _find_first(adapter.executables, search_path)) is not None
-    ]
-    versions.prefetch((adapter.minimum_version, executable) for adapter, executable in installed)
-    checks: list[DoctorCheck] = []
-    for adapter, executable in installed:
-        try:
-            version = require_minimum_version(
-                executable, adapter.minimum_version, environment=environment, versions=versions
-            )
-        except AdapterError as error:
-            checks.append(DoctorCheck("warning", str(error)))
-        else:
-            checks.append(
-                DoctorCheck(
-                    "success", f"{Path(executable).name} {version} is supported", verbose_only=True
-                )
-            )
-    return checks
+def _check_client_version(
+    adapter: ClientAdapter,
+    label: str,
+    executable: str,
+    environment: Mapping[str, str],
+    versions: VersionProbe,
+) -> DoctorCheck:
+    """Report whether Kantrip supports the installed client release."""
+    try:
+        version = require_minimum_version(
+            executable, adapter.minimum_version, environment=environment, versions=versions
+        )
+    except AdapterError as error:
+        return DoctorCheck("warning", str(error))
+    return DoctorCheck("success", f"{label} version: {version}", verbose_only=True)
 
 
 def _check_profile_clients(
