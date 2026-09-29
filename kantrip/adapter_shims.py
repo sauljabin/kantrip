@@ -12,6 +12,7 @@ from kantrip._files import write_exclusive_text
 from kantrip.adapter_policy import (
     JAVA_COMMANDS,
     KAF_HOME,
+    KCAT_CONFIG_VARIABLE,
     KCAT_SCHEMA_REGISTRY_SIGNAL,
     KCL_CONFIG_PATH_VARIABLE,
     KCL_ENVIRONMENT_PREFIX,
@@ -163,7 +164,7 @@ def render_kcat_shim(name: str, executable: str, inputs: ShimInputs) -> str:
     registry_guard = _registry_guard(lambda: require_kcat_registry(name, registry))
     registry_url = shlex.quote(registry.url if registry is not None else "")
     return f"""#!/bin/sh
-export KCAT_CONFIG={shlex.quote(str(inputs.configuration.kcat_config))}
+export {KCAT_CONFIG_VARIABLE}={shlex.quote(str(inputs.configuration.kcat_config))}
 schema_deserializer="$({_adapter_guard_invocation(name)})" || exit $?
 if [ "$schema_deserializer" = {KCAT_SCHEMA_REGISTRY_SIGNAL} ]; then
   {registry_guard}  exec {shlex.quote(executable)} -r {registry_url} "$@"

@@ -24,6 +24,7 @@ KCL_EXECUTABLES = frozenset({"kcl"})
 KCL_ENVIRONMENT_PREFIX = "KCL_"
 KCL_CONFIG_PATH_VARIABLE = "KCL_CONFIG_PATH"
 KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
+KCAT_CONFIG_VARIABLE = "KCAT_CONFIG"
 KAFKA_CONSOLE_CONSUMER_EXECUTABLES = frozenset(
     {"kafka-console-consumer", "kafka-console-consumer.sh"}
 )
@@ -340,6 +341,13 @@ def prepare_kcl_command(
     if configuration.kcl_config is None:
         raise AdapterError("kcl requires a private configuration file")
     return prepared
+
+
+def prepare_kcat_environment(
+    environment: MutableMapping[str, str], configuration: ClientConfiguration
+) -> None:
+    """Select the private librdkafka configuration through kcat's `KCAT_CONFIG`."""
+    environment[KCAT_CONFIG_VARIABLE] = str(configuration.kcat_config)
 
 
 def prepare_kaf_environment(
@@ -730,6 +738,7 @@ __all__ = [
     "KAFKA_EXECUTABLES",
     "KAFKA_TOPICS_EXECUTABLES",
     "KASKADE_EXECUTABLES",
+    "KCAT_CONFIG_VARIABLE",
     "KCAT_EXECUTABLES",
     "KCAT_SCHEMA_REGISTRY_SIGNAL",
     "KCL_CONFIG_PATH_VARIABLE",
@@ -750,6 +759,7 @@ __all__ = [
     "prepare_kaf_environment",
     "prepare_kaskade_command",
     "prepare_kcat_command",
+    "prepare_kcat_environment",
     "prepare_kcl_command",
     "prepare_kcl_environment",
     "require_kaf_registry",
