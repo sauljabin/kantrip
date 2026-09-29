@@ -52,6 +52,7 @@ independent identity, scopes, secret, and optional CA trust.
   - [kaf](#kaf)
   - [kcl](#kcl)
 - [Profile storage](#profile-storage)
+- [Credential vault](#credential-vault)
 - [Application environment from `kantrip exec`](#application-environment-from-kantrip-exec)
   - [Environment precedence](#environment-precedence)
   - [Kafka variables](#kafka-variables)
@@ -100,8 +101,10 @@ including OAuth client secrets) and reports it as stored, missing, or
 unavailable under its field name, such as `registry.auth.token`, without printing
 sensitive material. It also checks certificate/key validity and certificate
 expiry. `doctor` is the only command that reads secret values to report this;
-`describe` only lists them as `configured`. Use `-v`/`--verbose` for paths,
-backend identity, and individual checks.
+`describe` only lists them as `configured`. On macOS it reports the
+[credential vault](#credential-vault) path and whether it is locked before it
+reads anything, and the vault's lock setting while it is unlocked. Use
+`-v`/`--verbose` for paths, backend identity, and individual checks.
 
 Doctor always lists the sessions on this machine: one line per session with
 its profile, revision, and age, plus the session ID, supervisor PID, and path
@@ -126,7 +129,8 @@ Profile-dependent commands automatically apply known SQLite migrations. A
 normal `doctor` run only reports pending work; it does not create or modify
 storage. Use `kantrip doctor --repair` for an explicit maintenance pass that
 migrates the profile database, reconciles exact pending credential cleanup,
-removes validated stale sessions, and then runs the diagnostics again. Kantrip
+removes a deleted credential vault from Keychain Access, removes validated stale
+sessions, and then runs the diagnostics again. Kantrip
 has no separate migration or cleanup command.
 Migration backups include their UTC creation time and a unique suffix, so later
 migrations preserve earlier recovery points. Unreleased databases without
@@ -142,8 +146,9 @@ mv ~/.local/share/kantrip/profiles.db ~/.local/share/kantrip/profiles.db.pre-rel
 
 Use the path reported by `kantrip doctor --verbose` if you set
 `KANTRIP_DATABASE` or `XDG_DATA_HOME`. The old credentials stay in the OS
-credential store under the service name `kantrip`; delete them with Keychain
-Access (macOS) or your Secret Service manager (Linux) once the new profiles work.
+credential store under the service name `kantrip`. Delete them once the new
+profiles work: on macOS, as [Credential vault](#credential-vault) describes; on
+Linux, with your Secret Service manager.
 
 ## Kafka and registry connectivity
 
@@ -260,8 +265,9 @@ actionable error when it cannot prove support. Kafka 2.6 and Confluent Platform
 6.0 can still use TLS with their default trust stores.
 
 Add password authentication over TLS. The password is collected without echo
-and stored in macOS Keychain or Linux Secret Service; it is never placed in the
-profile document or command arguments:
+and stored in the [credential vault](#credential-vault) on macOS or in Linux
+Secret Service; it is never placed in the profile document or command
+arguments:
 
 ```bash
 kantrip add production-scram \
@@ -889,6 +895,80 @@ For native Apicurio with Kaskade, use `--registry-provider apicurio` and the
 `/apis/registry/v3` endpoint. Create two profiles with the same Kafka connection
 when both APIs are needed. See [Compatibility](COMPATIBILITY.md) for the client
 and format requirements of each API.
+
+## Credential vault
+
+On macOS, Kantrip keeps passwords, private keys, tokens, and client secrets in
+its own keychain, `~/Library/Keychains/kantrip.keychain-db`, not in your login
+keychain. macOS owns the vault password: Kantrip never reads, stores, or passes
+it.
+
+The first command that stores a credential, `add` or `edit` with a secret,
+creates the vault. macOS asks for the new password twice on the terminal:
+
+```text
+Kantrip keeps credentials in its own keychain, ~/Library/Keychains/kantrip.keychain-db.
+Choose a password for it. Kantrip never sees or stores this password; macOS asks for it again after 15 idle minutes and after sleep.
+password for new keychain:
+retype password for new keychain:
+```
+
+Choose a password that differs from your login password. An empty password is
+refused and the new vault is removed. Kantrip adds the vault to Keychain Access,
+where each item is labeled like `Kantrip kafka/password (profile UUID)`. Long
+values, such as private keys, are split into several items marked `part 1 of 2`.
+
+The vault locks after 15 idle minutes and when the Mac sleeps. To change that,
+select the `kantrip` keychain in Keychain Access and choose Edit > Change
+Settings for Keychain "kantrip". `kantrip doctor` shows the current setting
+while the vault is unlocked.
+
+Only commands that need a credential open the vault: `add` and `edit` when they
+store a secret, `remove` of a profile with credentials, `exec`, `ping`, and
+`doctor`. `list`, `describe`, `current`, and `--help` never touch it. When the
+vault is locked, those commands ask for its password on the terminal:
+
+```text
+Kantrip vault ~/Library/Keychains/kantrip.keychain-db is locked.
+password to unlock /Users/you/Library/Keychains/kantrip.keychain-db:
+```
+
+You get three attempts; Ctrl-C cancels and leaves the vault locked. Without a
+terminal, such as in a script, a scheduled job, or CI, a locked vault fails at
+once with guidance instead of waiting. Unlock it beforehand from a terminal:
+
+```bash
+security unlock-keychain ~/Library/Keychains/kantrip.keychain-db
+```
+
+A running `kantrip exec` command or shell keeps working after the vault locks,
+because it already has its credentials.
+
+Delete the vault and every credential in it with:
+
+```bash
+security delete-keychain ~/Library/Keychains/kantrip.keychain-db
+```
+
+Profiles that stored credentials in it then fail with guidance until you store
+each credential again with `kantrip edit PROFILE --replace-secret FIELD`, which
+creates a new vault; `kantrip describe PROFILE` lists the fields. If the vault
+file disappears some other way, `kantrip doctor --repair` removes its leftover
+Keychain Access entry.
+
+Pre-release versions stored credentials in the login keychain under the service
+name `kantrip`, and Kantrip no longer reads them. After you add your profiles
+again, delete those items in Keychain Access (search the login keychain for
+`kantrip`), or run this command until it reports that the item could not be
+found:
+
+```bash
+security delete-generic-password -s kantrip ~/Library/Keychains/login.keychain-db
+```
+
+On Linux, credentials are stored in the default Secret Service collection
+(GNOME Keyring or KWallet) under the service name `kantrip` and follow that
+collection's locking.
 
 ## Application environment from `kantrip exec`
 

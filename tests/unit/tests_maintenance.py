@@ -10,12 +10,68 @@ from kantrip.profile_storage import inspect_pending_secret_cleanup, inspect_prof
 from kantrip.profiles import add_profile
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
-from kantrip.secret_store import SecretStoreError, secret_reference
+from kantrip.secret_store import SecretStoreError, VaultError, secret_reference
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
 
 class TestMaintenance(unittest.TestCase):
+    def setUp(self) -> None:
+        # Repair inspects the vault registration; never the developer's real one.
+        self.vault = _VaultRegistration()
+        patcher = patch("kantrip.maintenance.load_secret_store", return_value=self.vault)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_missing_vault_is_removed_from_the_keychain_search_list(self) -> None:
+        self.vault.forgotten = True
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "KANTRIP_DATABASE": str(Path(directory) / "profiles.db"),
+                "XDG_RUNTIME_DIR": directory,
+            }
+
+            report = run_repair(environment)
+
+        self.assertTrue(report.healthy)
+        self.assertIn(
+            "Removed the missing credential vault from the keychain search list",
+            [action.message for action in report.actions],
+        )
+
+    def test_vault_registration_failure_is_a_repair_error(self) -> None:
+        self.vault.error = VaultError("synthetic search list failure")
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {
+                "KANTRIP_DATABASE": str(Path(directory) / "profiles.db"),
+                "XDG_RUNTIME_DIR": directory,
+            }
+
+            report = run_repair(environment)
+
+        self.assertFalse(report.healthy)
+        self.assertIn(
+            "Credential vault registration could not be repaired",
+            [action.message for action in report.actions],
+        )
+
+    def test_unavailable_store_leaves_nothing_to_repair(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "kantrip.maintenance.load_secret_store",
+                side_effect=SecretStoreError("synthetic unavailable backend"),
+            ),
+        ):
+            report = run_repair(
+                {
+                    "KANTRIP_DATABASE": str(Path(directory) / "profiles.db"),
+                    "XDG_RUNTIME_DIR": directory,
+                }
+            )
+
+        self.assertTrue(report.healthy)
+
     def test_missing_database_and_runtime_are_not_created(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -107,6 +163,17 @@ class TestMaintenance(unittest.TestCase):
             self.assertFalse(report.healthy)
             self.assertEqual(1, len(inspect_pending_secret_cleanup(database)))
             self.assertTrue(any("failed 1" in action.message for action in report.actions))
+
+
+class _VaultRegistration:
+    def __init__(self) -> None:
+        self.forgotten = False
+        self.error: VaultError | None = None
+
+    def forget_missing_vault(self) -> bool:
+        if self.error is not None:
+            raise self.error
+        return self.forgotten
 
 
 class _RecordingSecretStore:

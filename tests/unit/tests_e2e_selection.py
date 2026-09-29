@@ -173,12 +173,14 @@ class TestE2ESelection(unittest.TestCase):
     def test_workflow_gate_and_exact_release_wheel_remain_visible(self) -> None:
         main = Path(".github/workflows/main.yml").read_text(encoding="utf-8")
         e2e = Path(".github/workflows/e2e.yml").read_text(encoding="utf-8")
+        candidate = Path(".github/actions/candidate-wheel/action.yml").read_text(encoding="utf-8")
         release = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
         self.assertIn("python3 scripts/tests.py --ci-event", main)
         self.assertIn("python3 scripts/tests.py --verify-e2e-result", main)
         self.assertIn("needs.e2e-selection.outputs.run_e2e == 'true'", main)
-        self.assertIn("if: inputs.candidate-artifact != ''", e2e)
-        self.assertIn('test "${#wheels[@]}" -eq 1', e2e)
+        self.assertEqual(2, e2e.count("candidate-artifact: ${{ inputs.candidate-artifact }}"))
+        self.assertIn("if: inputs.candidate-artifact != ''", candidate)
+        self.assertIn('test "${#wheels[@]}" -eq 1', candidate)
         self.assertIn("candidate-artifact: release-bundle", release)
         self.assertIn("if: always()", e2e)
 

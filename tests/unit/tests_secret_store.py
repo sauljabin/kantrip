@@ -1,7 +1,9 @@
 import unittest
+from pathlib import Path
 
 from keyring.errors import PasswordDeleteError, PasswordSetError
 
+from kantrip.macos_vault import MacOSVault
 from kantrip.secret_store import (
     SERVICE_NAME,
     SecretNotFoundError,
@@ -16,9 +18,17 @@ CREDENTIAL_ID = "018f8f13-7c21-7cee-8000-000000000011"
 
 
 class TestSecretStore(unittest.TestCase):
-    def test_approved_macos_backend_stores_reads_and_deletes_exact_references(self) -> None:
-        backend = _backend("keyring.backends.macOS")
-        store = load_secret_store(backend=backend, platform_name="darwin")
+    def test_macos_uses_the_dedicated_kantrip_vault(self) -> None:
+        store = load_secret_store(platform_name="darwin")
+
+        self.assertIsInstance(store, MacOSVault)
+        assert isinstance(store, MacOSVault)
+        self.assertEqual(Path.home() / "Library/Keychains/kantrip.keychain-db", store.path)
+        self.assertEqual("macOS keychain", store.info.display_name)
+
+    def test_approved_linux_backend_stores_reads_and_deletes_exact_references(self) -> None:
+        backend = _backend("keyring.backends.SecretService")
+        store = load_secret_store(backend=backend, platform_name="linux")
         reference = secret_reference(PROFILE_ID, "kafka/password")
 
         store.set(reference, "synthetic-secret")
@@ -38,8 +48,9 @@ class TestSecretStore(unittest.TestCase):
 
     def test_unapproved_null_chainer_and_platform_backends_are_rejected(self) -> None:
         cases = (
-            (_backend("keyring.backends.null", priority=-1), "darwin"),
+            (_backend("keyring.backends.null", priority=-1), "linux"),
             (_backend("keyring.backends.chainer"), "linux"),
+            (_backend("keyring.backends.macOS"), "linux"),
             (_backend("keyring.backends.Windows"), "win32"),
         )
         for backend, platform_name in cases:
@@ -50,11 +61,11 @@ class TestSecretStore(unittest.TestCase):
                 load_secret_store(backend=backend, platform_name=platform_name)
 
     def test_backend_with_invalid_priority_is_rejected(self) -> None:
-        backend = _backend("keyring.backends.macOS")
+        backend = _backend("keyring.backends.SecretService")
         backend.priority = "high"
 
         with self.assertRaises(SecretStoreError):
-            load_secret_store(backend=backend, platform_name="darwin")
+            load_secret_store(backend=backend, platform_name="linux")
 
     def test_references_are_limited_to_canonical_profile_keys(self) -> None:
         valid = secret_reference(
@@ -74,9 +85,9 @@ class TestSecretStore(unittest.TestCase):
                 validate_secret_reference(invalid)
 
     def test_backend_errors_never_echo_secret_values(self) -> None:
-        backend = _backend("keyring.backends.macOS")
+        backend = _backend("keyring.backends.SecretService")
         backend.set_error = PasswordSetError("synthetic-secret")
-        store = load_secret_store(backend=backend, platform_name="darwin")
+        store = load_secret_store(backend=backend, platform_name="linux")
         reference = secret_reference(PROFILE_ID, "kafka/oauth/client-secret")
 
         with self.assertRaises(SecretStoreError) as raised:

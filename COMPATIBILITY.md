@@ -146,13 +146,24 @@ cluster descriptions. Neither probe proves write authorization. `doctor PROFILE`
 `doctor` attributes sessions by profile UUID and revision. `kafkactl` has no automatic
 adapter, even though an arbitrary executable can run as a supervised child.
 
+## Credential storage
+
+| Platform | Where credentials live | Locking |
+| --- | --- | --- |
+| macOS | The Kantrip vault, a dedicated keychain at `~/Library/Keychains/kantrip.keychain-db`, read and written only through `/usr/bin/security` | Locks after 15 idle minutes and on sleep unless you change it in Keychain Access; unlocks on the terminal |
+| Linux | The default Secret Service collection of GNOME Keyring or KWallet | Follows the collection's own locking |
+| Windows, and other Linux backends (plaintext, encrypted-file, null, chained) | Unsupported | Not applicable |
+
+A locked macOS vault can be unlocked only from a terminal; without one, commands
+that need a credential fail at once. See [Credential vault](USAGE.md#credential-vault).
+
 ## File formats
 
 | Format | Current accepted input | Current generated output / role |
 | --- | --- | --- |
 | JSON / YAML observations | No profile import or round-trip export | `list` / `describe` safe observations |
 | Public PEM CA | Kafka, Registry, and OAuth CA file options | Validated public profile material; independent session-owned CA files |
-| Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the credential store and private session files |
+| Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the [credential store](#credential-storage) and private session files |
 | Java Kafka `.properties` | No file import | Private Java client session configuration |
 | librdkafka / kcat properties | No file import yet | Private librdkafka configuration selected through `KCAT_CONFIG` and documented file variables |
 | Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |

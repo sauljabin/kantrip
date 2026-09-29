@@ -21,6 +21,7 @@ the active execution.
 - [Current capability boundaries](#current-capability-boundaries)
 - [Data flow](#data-flow)
 - [Profiles and connection material](#profiles-and-connection-material)
+- [Credential vault](#credential-vault)
 - [Schema evolution and maintenance](#schema-evolution-and-maintenance)
 - [Connection-only configuration](#connection-only-configuration)
 - [Profile lifecycle and input sources](#profile-lifecycle-and-input-sources)
@@ -175,11 +176,13 @@ parent directories are created one level at a time and each parent entry is
 `fsync`ed before success is acknowledged.
 
 Long-lived secrets use immutable
-`profile/<profile-uuid>/<credential-uuid>/<field>` keys in macOS Keychain or a
-Linux Secret Service-compatible backend. The credential UUID changes on every
-replacement, so staging never overwrites the value referenced by the usable
-profile. Kantrip rejects unavailable, plaintext, encrypted-file, null, and
-unknown backends instead of weakening storage.
+`profile/<profile-uuid>/<credential-uuid>/<field>` keys in the dedicated
+[credential vault](#credential-vault) on macOS or a Linux Secret
+Service-compatible backend. The credential UUID changes on every replacement,
+so staging never overwrites the value referenced by the usable profile. Kantrip
+rejects unavailable, plaintext, encrypted-file, null, and unknown Linux
+backends instead of weakening storage, and never falls back to the macOS login
+keychain.
 
 The implemented connection model supports plaintext transport,
 server-authenticated TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mutual
@@ -195,6 +198,96 @@ The adapter descriptors' capability matrix covers Apache/Confluent Java commands
 kcat, and Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Every client
 has an installed-version floor, and Java PEM profiles add their own version check;
 unsupported combinations fail before the requested client operation.
+
+## Credential vault
+
+On macOS, `macos_vault.MacOSVault` implements `SecretStore` on one keychain file
+per user, `~/Library/Keychains/kantrip.keychain-db`, so credentials do not
+unlock with the login session. macOS owns its password: `security
+create-keychain` and `security unlock-keychain` prompt on the controlling
+terminal (`/dev/tty`), and Kantrip never reads, stores, or passes it. aws-vault
+uses the same dedicated-keychain model; Kantrip differs in how it writes items,
+sets the lock policy, and prompts.
+
+**Item I/O goes through `/usr/bin/security` only.** macOS stamps each keychain
+item with a partition taken from the creating binary's code signature.
+Homebrew and uv Pythons are ad-hoc signed, so items created in-process through
+Security.framework get a `cdhash:` partition that changes with every Python
+build; any other build then gets a password window, even with an
+any-application ACL, and changing the partition needs the vault password.
+Items written by `/usr/bin/security` get the stable `apple-tool:` partition
+instead. Writes send `add-generic-password -U … -X <hex>` lines to `security -i`
+on stdin, so values never reach argv; reads run `find-generic-password -g`,
+whose argv holds only the reference, and parse the value from stderr (printable
+text, or hex for anything else).
+
+`security -i` truncates input lines at about 4,094 bytes and runs the remainder
+as new commands, so a value is split into pieces sized from a 4,000-byte line
+budget that includes the vault path. The head item (`reference`) holds the
+first piece and the piece count in its generic attribute; the other pieces are
+`reference#1`, `reference#2`, and so on. One `security -i` batch writes the
+pieces first and the head last, then deletes stale pieces after a shrink, so a
+reader never sees a head whose pieces are not written. `security -i` exits 0
+even when a command fails, so any stderr line other than a deletion
+confirmation fails the write; credential staging also reads every value back.
+Deletion removes pieces from the highest down and the head last; without a
+head, it deletes the contiguous pieces an interrupted write left. Credential
+references are write-once in normal use, so an interrupted overwrite is not
+made atomic. Labels are readable (`Kantrip kafka/password (profile UUID)`,
+`part 2 of 3`) and, like accounts, carry no secret.
+
+**State checks never prompt.** Before any item access, Kantrip reads the vault
+state with `SecKeychainGetStatus` through ctypes, which neither prompts nor
+resets the idle timer. Reading a locked vault with `security` opens a macOS
+password window, so Kantrip never does it:
+
+| State | `get` / `delete` | `set` |
+| --- | --- | --- |
+| Missing | `get` fails with recovery guidance; `delete` succeeds, because no secret outlives its vault | Create on the terminal, or fail at once without one |
+| Locked | Unlock on the terminal, or fail at once without one | Same |
+| Unlocked | Proceed | Proceed |
+
+A missing vault cannot be told apart from missing items by item reads alone,
+which is why the state is checked first; a replaced vault reads as missing
+secrets. The vault path must not be a symbolic link.
+
+**Creation** writes a short explanation to the terminal and runs `security
+create-keychain` with the terminal as input and error output, so macOS's own
+mismatch message and retry loop stay visible. Kantrip then rejects an empty
+password (`unlock-keychain -p ""` succeeds only for an empty password and
+leaves an unlocked keychain unchanged otherwise) by deleting the new vault, sets
+`set-keychain-settings -l -u -t 900` because new keychains lock after five
+minutes, and adds the vault to the user search list, which macOS 27 does not do,
+so it appears in Keychain Access.
+
+**Unlocking** runs `security unlock-keychain` on the terminal with captured
+output. Each run is one attempt; exit status 51 is a wrong password and Kantrip
+allows three. Ctrl-C reaches both processes, the vault stays locked, and
+Kantrip reports a cancellation instead of a traceback. A refused or cancelled
+unlock is remembered for the rest of the process, so reconciling several
+credentials never prompts again. Without a controlling terminal, a locked or
+missing vault fails at once.
+
+The vault's errors are `VaultError`, a `SecretStoreError` whose message is user
+guidance. Kafka and Registry resolution, credential staging, and doctor pass it
+through instead of their generic credential errors. `doctor` reports the vault
+path and state (missing, locked, or unlocked) without unlocking it. A missing
+vault is normal until a profile stores a credential and an error afterwards,
+because its credentials are gone. While the
+vault is unlocked it also reads the lock policy through `SecKeychainCopySettings`
+with user interaction disabled (a locked vault fails instead of prompting, so
+there is no race with the idle timer) and warns about an empty password. A
+missing vault that the search list still names is a warning, and
+`doctor --repair` removes that entry.
+
+Vault prompts run where the store is first used, inside the maintenance lock
+that makes staging and snapshot resolution coherent. Another Kantrip command
+started while the user types the password waits the usual five seconds for that
+lock and then reports that maintenance is busy. A vault that times out between
+the state check and an item read still opens a macOS password window; the
+interval is milliseconds. File keychains and the
+`SecKeychain*` APIs are deprecated but work on macOS 27. The macOS CI job
+exercises them against the real `security` tool.
 
 ## Schema evolution and maintenance
 
@@ -601,10 +694,16 @@ cache misses before and after token expiry, confirm new IdP issuance, then revok
 the client and require token-acquisition failure without decoding the final
 record. TUI clients are observed through parsed terminal state.
 
+The macOS credential vault needs no laboratory, so a separate CI job on a macOS
+runner runs `python -m scripts.tests --suite vault` against the candidate
+wheel. It creates a disposable vault with a random password (`create-keychain
+-p`), stores and removes a split 4096-bit private key through the CLI, and
+locks the vault to prove that commands without a terminal fail at once.
+
 ## Diagnostics and output
 
-`doctor` checks global or profile-scoped migration/profile state, exact
-credential availability, certificate/key validity and expiry, reconciliation,
+`doctor` checks global or profile-scoped migration/profile state, the credential
+vault, exact credential availability, certificate/key validity and expiry, reconciliation,
 runtime sessions, and installed commands. `doctor PROFILE --sessions` attributes
 validated runtime markers to the immutable profile UUID and captured revision.
 Its default mode is read-only; `--repair` explicitly enables only the
@@ -655,6 +754,9 @@ meaning.
   not forensic erasure.
 - SQLite and credential-store updates are recoverable, not atomic. Loss of both
   journal and referenced state can leave undiscoverable orphans.
+- The macOS vault depends on deprecated file-keychain APIs and on the
+  `security -i` line limit staying where it is; the macOS CI job would show a
+  change.
 - Schema migrations are forward-only. An older Kantrip binary cannot open a
   database containing migrations it does not recognize.
 - Compatibility depends on external client interfaces and tested versions.

@@ -115,13 +115,19 @@ def _run(*command: str, cwd: Path, environment: dict[str, str] | None = None) ->
     subprocess.run(command, cwd=cwd, env=environment, check=True)
 
 
+# The vault suite needs no sandbox: it runs only the macOS vault acceptance.
+_SUITE_COMMANDS = {
+    "unit": "python -m unittest discover -v -s tests/unit -t .",
+    "e2e": "python -m unittest discover -v -s tests/e2e -t .",
+    "vault": "python -m unittest -v tests.e2e.vault_acceptance",
+}
+
+
 def _run_suite(suite: str) -> None:
     # Keep project imports out of the stdlib-only selection path.
     from scripts import CommandProcessor
 
-    CommandProcessor(
-        {f"executing {suite} tests": f"python -m unittest discover -v -s tests/{suite} -t ."}
-    ).run()
+    CommandProcessor({f"executing {suite} tests": _SUITE_COMMANDS[suite]}).run()
 
 
 def sandbox_state_dir(repository: Path) -> Path:
@@ -199,7 +205,7 @@ def _run_staged_wheel() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--suite", choices=("unit", "e2e"))
+    mode.add_argument("--suite", choices=tuple(_SUITE_COMMANDS))
     mode.add_argument("--staged-wheel", action="store_true")
     mode.add_argument("--ci-event", choices=("workflow_dispatch", "pull_request", "push"))
     mode.add_argument("--verify-e2e-result", nargs=2, metavar=("SELECTED", "RESULT"))

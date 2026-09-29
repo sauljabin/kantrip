@@ -65,7 +65,7 @@ The hook calls `python3 scripts/tests.py --staged-wheel` directly. This mode
 uses only Python's standard library until it selects E2E, then uses uv and the
 project's locked Python to build and test the staged wheel. The same script
 owns CI selection (`--ci-event`) and result validation
-(`--verify-e2e-result`); `--suite unit|e2e` runs a suite directly.
+(`--verify-e2e-result`); `--suite unit|e2e|vault` runs a suite directly.
 
 Run the editable CLI directly from the checkout:
 
@@ -166,23 +166,52 @@ upgrade fixture.
 
 ## Credential store development
 
-Kantrip uses Python `keyring` only as an adapter to approved native stores:
-macOS Keychain on macOS and Secret Service-compatible backends on Linux. Null,
-plaintext, encrypted-file, chained, and unknown backends must fail closed.
+On macOS, `kantrip/macos_vault.py` stores credentials in the dedicated vault,
+`~/Library/Keychains/kantrip.keychain-db`, through `/usr/bin/security`; see
+[Credential vault](ARCHITECTURE.md#credential-vault) for the design. On Linux,
+Kantrip uses Python `keyring` only as an adapter to approved Secret
+Service-compatible backends. Null, plaintext, encrypted-file, chained, and
+unknown backends must fail closed.
 
-Inspect the backend selected by the development environment with:
+Inspect the store the development environment uses with:
 
 ```bash
-uv run --locked keyring diagnose
 uv run --locked kantrip doctor --verbose
+# Linux only: the backend the keyring library selected
+uv run --locked keyring diagnose
 ```
 
 Offline unit tests inject synthetic in-memory implementations of Kantrip's narrow
 `SecretStore` protocol. They must not read or modify a developer's real
-credential store. The separate E2E suite intentionally exercises an approved
-native backend: macOS Keychain locally or a real Secret Service session on
-Linux CI. Its temporary credentials and profiles are owned and cleaned by the
-suite; it does not substitute a fake keyring.
+credential store. The vault's tests replace its operating-system layer
+(`KeychainSystem`) with an in-memory `security` tool that enforces the
+`security -i` line limit and fails any item access to a locked vault; they cover
+creation, locking, wrong and cancelled passwords, no terminal, and missing or
+replaced vaults. Tests that reach `load_secret_store` patch it.
+
+The separate E2E suite intentionally exercises an approved native backend: a
+real Secret Service session on Linux CI, or the developer's own Kantrip vault on
+macOS, which prompts on the terminal when it is locked. Its temporary
+credentials and profiles are owned and cleaned by the suite; it does not
+substitute a fake keyring.
+
+`--suite vault` runs the macOS vault acceptance without the sandbox, against the
+candidate wheel in `KANTRIP_E2E_KANTRIP`. It locks and unlocks the real vault,
+so it needs the vault password in `KANTRIP_E2E_VAULT_PASSWORD` and belongs on a
+disposable machine: the macOS CI job creates a throwaway vault for it. To try it
+locally without touching your vault, set `KANTRIP_E2E_KANTRIP` as for E2E and
+give the run its own home directory. The project's Python runs directly because
+uv keeps its cache below `HOME`:
+
+```bash
+vault_home="$(mktemp -d)"
+mkdir -p "$vault_home/Library/Keychains"
+security create-keychain -p vault-e2e \
+  "$vault_home/Library/Keychains/kantrip.keychain-db" < /dev/null
+security set-keychain-settings -l -u -t 3600 "$vault_home/Library/Keychains/kantrip.keychain-db"
+HOME="$vault_home" KANTRIP_E2E_VAULT_PASSWORD=vault-e2e \
+  .venv/bin/python -m unittest -v tests.e2e.vault_acceptance
+```
 
 Secret-bearing profile changes use the transaction engine in
 `kantrip/credential_mutations.py`. Each replacement receives a new credential
@@ -354,7 +383,8 @@ own that lifecycle. It holds a non-blocking lock while mutating shared OAuth
 clients, creates isolated profiles and exact test-owned topics/schemas/artifacts,
 and leaves the sandbox running. CI runs the same command on Ubuntu with a real
 DBus Secret Service/GNOME Keyring session and always collects sanitized resource
-diagnostics before removing its CI-owned sandbox.
+diagnostics before removing its CI-owned sandbox. A second job in the same
+workflow runs `--suite vault` on macOS against a disposable vault.
 The same path classification drives local staged checks and `main` push CI:
 
 | Change or event | Local staged hook | Hosted E2E |
@@ -392,6 +422,7 @@ avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs
 | Schema formats | Confluent Avro, JSON Schema, and Protobuf console producer/consumer pairs with decoded markers and exact topic cleanup |
 | Registry security | Confluent Basic, OAuth, and mTLS plus native Apicurio Basic and OAuth profile probes; kaf rejected before launch for each (custom CA, OAuth, mTLS, Apicurio); kcl subject listing through Basic and mTLS with the custom CA, rejected before launch for OAuth and Apicurio; invalid credentials/identity/CA/hostname and anonymous-access controls |
 | OAuth lifetime | Native Kafka Java/librdkafka clients survive expiry; Confluent Java, Kaskade Confluent, and Kaskade native Apicurio consumers stay alive across fresh schema cache misses, show new IdP issuance, then fail token acquisition after client revocation without decoding the final record |
+| macOS credential vault | Real `/usr/bin/security` with the candidate wheel: a 4096-bit mTLS key split across two items, resolved by `doctor` and `exec`, removed with the profile; a locked vault makes `exec` and `doctor` without a terminal fail at once and stay locked |
 | Ping boundary | Kafka proves broker protocol/authentication without topic APIs; Registry uses the documented read endpoint and requires anonymous denial for authenticated profiles; successful ping is followed by denied resource operations for no-ACL identities |
 
 Unsupported or conditional combinations remain explicit in `COMPATIBILITY.md`;

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import uuid
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import keyring
 from keyring.errors import KeyringLocked, PasswordDeleteError
@@ -24,15 +24,17 @@ SECRET_FIELDS = frozenset(
         "registry/tls/private-key-password",
     }
 )
-_APPROVED_BACKENDS = {
-    "darwin": frozenset({"keyring.backends.macOS.Keyring"}),
-    "linux": frozenset(
-        {
-            "keyring.backends.SecretService.Keyring",
-            "keyring.backends.libsecret.Keyring",
-        }
-    ),
-}
+_APPROVED_LINUX_BACKENDS = frozenset(
+    {
+        "keyring.backends.SecretService.Keyring",
+        "keyring.backends.libsecret.Keyring",
+    }
+)
+
+if TYPE_CHECKING:
+    from kantrip.macos_vault import MacOSVault
+
+VaultState = Literal["missing", "locked", "unlocked"]
 
 
 class SecretStoreError(RuntimeError):
@@ -41,6 +43,15 @@ class SecretStoreError(RuntimeError):
 
 class SecretNotFoundError(SecretStoreError):
     """Raised when a referenced secret does not exist."""
+
+
+class VaultError(SecretStoreError):
+    """Raised when the vault itself, not one secret, is unavailable.
+
+    Its message is user guidance (missing, locked without a terminal, unlock
+    refused or cancelled) and never contains a secret, so callers show it
+    instead of a generic credential error.
+    """
 
 
 class SecretStore(Protocol):
@@ -62,6 +73,24 @@ class SecretStoreInfo:
 
     backend: str
     display_name: str
+
+
+@dataclass(frozen=True)
+class LockPolicy:
+    """When the operating system locks the vault by itself."""
+
+    lock_on_sleep: bool
+    idle_seconds: int | None
+
+
+@dataclass(frozen=True)
+class VaultStatus:
+    """Vault identity and state, read without unlocking or prompting."""
+
+    location: str
+    state: VaultState
+    lock_policy: LockPolicy | None
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -122,15 +151,26 @@ class KeyringSecretStore:
                 "credential store could not delete the requested secret"
             ) from error
 
+    def vault_status(self) -> VaultStatus | None:
+        """Report no dedicated vault: the keyring library uses the default store."""
+        return None
+
+    def forget_missing_vault(self) -> bool:
+        """Report that no vault registration needed repair."""
+        return False
+
 
 def load_secret_store(
     *,
     backend: object | None = None,
     platform_name: str | None = None,
-) -> KeyringSecretStore:
-    """Load the configured keyring only when its concrete backend is approved."""
-    selected_platform = platform_name or sys.platform
-    platform_family = _platform_family(selected_platform)
+) -> KeyringSecretStore | MacOSVault:
+    """Load the Kantrip vault on macOS or an approved Secret Service keyring on Linux."""
+    platform_family = _platform_family(platform_name or sys.platform)
+    if platform_family == "darwin":
+        from kantrip.macos_vault import MacOSVault
+
+        return MacOSVault()
     try:
         selected_backend = keyring.get_keyring() if backend is None else backend
         identifier = _backend_identifier(selected_backend)
@@ -140,11 +180,10 @@ def load_secret_store(
     if (
         type(priority) not in (int, float)
         or priority < 1
-        or identifier not in _APPROVED_BACKENDS[platform_family]
+        or identifier not in _APPROVED_LINUX_BACKENDS
     ):
         raise SecretStoreError("configured credential store backend is not approved")
-    display_name = "macOS Keychain" if platform_family == "darwin" else "Secret Service"
-    return KeyringSecretStore(selected_backend, SecretStoreInfo(identifier, display_name))
+    return KeyringSecretStore(selected_backend, SecretStoreInfo(identifier, "Secret Service"))
 
 
 def secret_reference(
@@ -214,11 +253,15 @@ __all__ = [
     "SECRET_FIELDS",
     "SERVICE_NAME",
     "KeyringSecretStore",
+    "LockPolicy",
     "SecretNotFoundError",
     "SecretReference",
     "SecretStore",
     "SecretStoreError",
     "SecretStoreInfo",
+    "VaultError",
+    "VaultState",
+    "VaultStatus",
     "load_secret_store",
     "parse_secret_reference",
     "secret_reference",

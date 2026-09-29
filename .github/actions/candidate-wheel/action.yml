@@ -1,0 +1,37 @@
+name: Install the candidate wheel
+description: Build the checkout's wheel, or select the release bundle's, and install it in its own environment
+inputs:
+  candidate-artifact:
+    description: Existing distribution bundle from this workflow run; empty builds the checkout
+    required: false
+    default: ""
+  python-version:
+    description: Python version for the candidate environment
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download exact release distribution bundle
+      if: inputs.candidate-artifact != ''
+      uses: actions/download-artifact@v8.0.1
+      with:
+        name: ${{ inputs.candidate-artifact }}
+    - name: Build or select and install candidate wheel
+      shell: bash
+      env:
+        CANDIDATE_ARTIFACT_NAME: ${{ inputs.candidate-artifact }}
+        CANDIDATE_PYTHON_VERSION: ${{ inputs.python-version }}
+      run: |
+        set -euo pipefail
+        candidate_root="$RUNNER_TEMP/kantrip-candidate"
+        if [[ -n "$CANDIDATE_ARTIFACT_NAME" ]]; then
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          test "${#wheels[@]}" -eq 1
+        else
+          uv build --wheel --out-dir "$candidate_root/dist"
+          wheels=("$candidate_root"/dist/*.whl)
+        fi
+        uv venv --python "$CANDIDATE_PYTHON_VERSION" "$candidate_root/venv"
+        uv pip install --python "$candidate_root/venv/bin/python" "${wheels[0]}"
+        echo "KANTRIP_E2E_KANTRIP=$candidate_root/venv/bin/kantrip" >> "$GITHUB_ENV"

@@ -17,7 +17,7 @@ from kantrip.profile_storage import (
 )
 from kantrip.reconciliation import ReconciliationError
 from kantrip.runtime import SessionRuntimeError, scan_sessions
-from kantrip.secret_store import SecretStore, SecretStoreError
+from kantrip.secret_store import SecretStore, SecretStoreError, load_secret_store
 
 RepairStatus = Literal["success", "cleanup", "error"]
 
@@ -47,13 +47,14 @@ def run_repair(
     *,
     secret_store: SecretStore | None = None,
 ) -> RepairReport:
-    """Migrate profiles, reconcile credentials, and clean stale sessions."""
+    """Migrate profiles, reconcile credentials, fix the vault registration, and clean sessions."""
     database_path = resolve_database_path(environment)
     actions: list[RepairAction] = []
     if not _exists(database_path):
         actions.append(
             RepairAction("success", "Profile database was not found; no migration was needed")
         )
+        actions.extend(_repair_vault())
         actions.append(_repair_sessions(environment))
         return RepairReport(tuple(actions))
 
@@ -73,13 +74,13 @@ def run_repair(
                     message = f"Applied database migrations: {sequences}"
                 else:
                     message = (
-                        "Profile database schema is current "
-                        f"(sequence {DATABASE_SCHEMA_VERSION})"
+                        f"Profile database schema is current (sequence {DATABASE_SCHEMA_VERSION})"
                     )
                 actions.append(RepairAction("success", message))
                 actions.append(
                     _repair_credentials(database_path, environment, secret_store=secret_store)
                 )
+            actions.extend(_repair_vault())
             actions.append(_repair_sessions(environment))
     except ProfileStoreError as error:
         actions.append(RepairAction("error", str(error)))
@@ -109,6 +110,25 @@ def _repair_credentials(
     if result.removed:
         return RepairAction("cleanup", f"Credential reconciliation: removed {result.removed}")
     return RepairAction("success", "Credential reconciliation: no pending entries")
+
+
+def _repair_vault() -> list[RepairAction]:
+    try:
+        store = load_secret_store()
+    except SecretStoreError:
+        # Doctor reports an unavailable store; there is no vault to repair.
+        return []
+    try:
+        forgotten = store.forget_missing_vault()
+    except SecretStoreError:
+        return [RepairAction("error", "Credential vault registration could not be repaired")]
+    if not forgotten:
+        return []
+    return [
+        RepairAction(
+            "cleanup", "Removed the missing credential vault from the keychain search list"
+        )
+    ]
 
 
 def _repair_sessions(environment: Mapping[str, str] | None) -> RepairAction:
