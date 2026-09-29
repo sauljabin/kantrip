@@ -303,10 +303,20 @@ milliseconds.
 
 ## Sessions and rendering
 
-`session.py` writes the private Kafka and Registry key and CA files (mode
-`0600`), renders each client's configuration, builds the scrubbed child
-environment, and prepares the direct command or shell shims through the
-adapters. All generated material stays in the private session directory.
+`session.py` plans the private Kafka and Registry key and CA files, renders
+each client's configuration, builds the scrubbed child environment, and prepares
+the direct command or shell shims through the adapters. All generated material
+stays in the private session directory, written with mode `0600`.
+
+- **Only the files a launch reads.** Each planned configuration names the key
+  and CA files it points at. A one-off supported client gets the files its
+  prepared arguments and environment name, plus those dependencies, and no
+  `*_CONFIG_FILE` variables; `kaskade --version` gets none. Custom commands and
+  interactive shells get every file and variable, because they can't be
+  inspected. Keys and derived bundles render only when written, so an encrypted
+  key is decrypted only for kaf or kcl. On macOS, `$TMPDIR` is on disk, so a
+  one-off command leaves one or two secret-bearing files there instead of every
+  client's.
 
 - **Custom CAs.** A selected CA bundle is validated and copied into the profile
   as public material, then materialized per session. librdkafka uses native PEM

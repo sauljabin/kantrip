@@ -1,4 +1,5 @@
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -20,7 +21,7 @@ from kantrip.secret_store import secret_reference
 from kantrip.secret_value import Secret
 from kantrip.session import SessionError, _oauth_trust_bundle, run_profile_session
 from tests.unit.client_versions import use_supported_client_versions
-from tests.unit.pki import synthetic_pki
+from tests.unit.pki import KEY_PASSWORD, synthetic_pki
 
 PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
 
@@ -346,9 +347,7 @@ class TestProfileSession(unittest.TestCase):
                     _observed: dict[str, object] = observed,
                     **options: object,
                 ) -> subprocess.CompletedProcess:
-                    environment = options["env"]
-                    assert isinstance(environment, dict)
-                    config_path = Path(environment["KAFKA_JAVA_CONFIG_FILE"])
+                    config_path = Path(arguments[4])
                     _observed["arguments"] = arguments
                     _observed["contents"] = config_path.read_text(encoding="utf-8")
                     _observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
@@ -406,10 +405,10 @@ class TestProfileSession(unittest.TestCase):
             return subprocess.CompletedProcess(arguments, 0)
 
         with (
-            patch("kantrip.session.shutil.which", return_value="/usr/bin/kcat"),
+            patch("kantrip.session.shutil.which", return_value="/opt/bin/orders-app"),
             patch("kantrip.session._run_child", side_effect=inspect_run),
         ):
-            run_profile_session("production", self.profile, ["kcat", "-L"], environment={})
+            run_profile_session("production", self.profile, ["orders-app"], environment={})
 
         self.assertIn("security.protocol=SSL\n", observed["kcat"])
         self.assertIn("enable.ssl.certificate.verification=true\n", observed["kcat"])
@@ -422,7 +421,7 @@ class TestProfileSession(unittest.TestCase):
         self.assertEqual(0o600, observed["ca_mode"])
         self.assertEqual("SSL", observed["security_protocol"])
 
-    def test_mtls_java_configuration_escapes_pem_and_keeps_private_files(self) -> None:
+    def test_mtls_java_configuration_escapes_pem_and_writes_no_key_file(self) -> None:
         pki = synthetic_pki()
         resolved = KafkaConnection(
             ("localhost:9095",),
@@ -438,12 +437,10 @@ class TestProfileSession(unittest.TestCase):
             environment = options["env"]
             assert isinstance(environment, dict)
             session = Path(environment["KANTRIP_SESSION_DIR"])
-            java_path = Path(environment["KAFKA_JAVA_CONFIG_FILE"])
+            java_path = Path(arguments[4])
             observed["java"] = java_path.read_text(encoding="utf-8")
-            observed["certificate_mode"] = stat.S_IMODE(
-                (session / "kafka-client.crt").stat().st_mode
-            )
-            observed["key_mode"] = stat.S_IMODE((session / "kafka-client.key").stat().st_mode)
+            observed["java_mode"] = stat.S_IMODE(java_path.stat().st_mode)
+            observed["files"] = {path.name for path in session.iterdir()}
             return subprocess.CompletedProcess(arguments, 0)
 
         with (
@@ -464,8 +461,9 @@ class TestProfileSession(unittest.TestCase):
         self.assertIn("ssl.keystore.certificate.chain=-----BEGIN CERTIFICATE-----\\n", java)
         self.assertIn("ssl.keystore.key=-----BEGIN PRIVATE KEY-----\\n", java)
         self.assertNotIn("\nMI", java)
-        self.assertEqual(0o600, observed["certificate_mode"])
-        self.assertEqual(0o600, observed["key_mode"])
+        self.assertEqual(0o600, observed["java_mode"])
+        self.assertNotIn("kafka-client.crt", observed["files"])
+        self.assertNotIn("kafka-client.key", observed["files"])
 
     def test_custom_ca_rejects_java_clients_older_than_kafka_2_7_before_operation(
         self,
@@ -694,13 +692,11 @@ class TestProfileSession(unittest.TestCase):
                 ) -> subprocess.CompletedProcess:
                     environment = options["env"]
                     assert isinstance(environment, dict)
-                    registry_config = Path(environment["SCHEMA_REGISTRY_CONFIG_FILE"])
                     java_registry_config = Path(arguments[4])
                     _observed["arguments"] = arguments
                     _observed["environment"] = environment
-                    _observed["contents"] = registry_config.read_text(encoding="utf-8")
                     _observed["java_contents"] = java_registry_config.read_text(encoding="utf-8")
-                    _observed["mode"] = stat.S_IMODE(registry_config.stat().st_mode)
+                    _observed["mode"] = stat.S_IMODE(java_registry_config.stat().st_mode)
                     return subprocess.CompletedProcess(arguments, 0)
 
                 with (
@@ -736,10 +732,7 @@ class TestProfileSession(unittest.TestCase):
                 environment = observed["environment"]
                 assert isinstance(environment, dict)
                 self.assertEqual("http://registry.invalid:8081", environment["SCHEMA_REGISTRY_URL"])
-                self.assertEqual(
-                    "provider=confluent\nurl=http://registry.invalid:8081\n",
-                    observed["contents"],
-                )
+                self.assertNotIn("SCHEMA_REGISTRY_CONFIG_FILE", environment)
                 self.assertIn(
                     "schema.registry.url=http://registry.invalid:8081\n",
                     observed["java_contents"],
@@ -1299,9 +1292,7 @@ class TestProfileSession(unittest.TestCase):
             environment = options["env"]
             assert isinstance(environment, dict)
             config_path = Path(arguments[3])
-            registry_config_path = Path(environment["APICURIO_REGISTRY_CONFIG_FILE"])
             observed["contents"] = config_path.read_text(encoding="utf-8")
-            observed["registry_contents"] = registry_config_path.read_text(encoding="utf-8")
             observed["environment"] = environment
             return subprocess.CompletedProcess(arguments, 0)
 
@@ -1321,11 +1312,6 @@ class TestProfileSession(unittest.TestCase):
             "provider=apicurio\n",
             observed["contents"],
         )
-        self.assertEqual(
-            "apicurio.registry.url=http://registry.invalid/apis/registry/v3\n"
-            "provider=apicurio\n",
-            observed["registry_contents"],
-        )
         environment = observed["environment"]
         assert isinstance(environment, dict)
         self.assertEqual(
@@ -1333,6 +1319,7 @@ class TestProfileSession(unittest.TestCase):
             environment["APICURIO_REGISTRY_URL"],
         )
         self.assertNotIn("SCHEMA_REGISTRY_URL", environment)
+        self.assertNotIn("APICURIO_REGISTRY_CONFIG_FILE", environment)
 
     def test_confluent_only_adapters_reject_native_apicurio_profiles(self) -> None:
         self.profile["registry"] = {
@@ -1803,6 +1790,262 @@ class TestProfileSession(unittest.TestCase):
         self.assertEqual(0, result)
         store.get.assert_called_once()
         run.assert_called_once()
+
+
+_RUNTIME_FILES = {"session.json", "session.lock"}
+_KAFKA_MATERIAL = {"kafka-ca.pem", "kafka-client.crt", "kafka-client.key"}
+_REGISTRY_MATERIAL = {"registry-ca.pem", "registry-client.crt", "registry-client.key"}
+
+
+class TestSessionFiles(unittest.TestCase):
+    """A one-off client gets only its own files; custom commands get them all."""
+
+    def setUp(self) -> None:
+        runtime_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(runtime_directory.cleanup)
+        runtime_patch = patch(
+            "kantrip.runtime.tempfile.gettempdir", return_value=runtime_directory.name
+        )
+        runtime_patch.start()
+        self.addCleanup(runtime_patch.stop)
+        use_supported_client_versions(self)
+        pki = synthetic_pki()
+        self.profile = {"id": PROFILE_ID}
+        self.kafka = KafkaConnection(
+            ("broker.invalid:9095",),
+            "tls",
+            pki.ca,
+            "mtls",
+            client_certificate=pki.client_certificate,
+            private_key=Secret(pki.encrypted_client_key),
+            private_key_password=Secret(KEY_PASSWORD),
+        )
+        self.registry = RegistryConnection(
+            "confluent",
+            "https://registry.invalid",
+            "schema.registry.url",
+            "mtls",
+            pki.ca,
+            client_certificate=pki.client_certificate,
+            private_key=Secret(pki.encrypted_client_key),
+            private_key_password=Secret(KEY_PASSWORD),
+        )
+
+    def run_session(
+        self, command: list[str], registry: RegistryConnection | None
+    ) -> tuple[set[str], dict[str, str]]:
+        observed: dict[str, object] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            session = Path(environment["KANTRIP_SESSION_DIR"])
+            observed["files"] = {path.name for path in session.iterdir()}
+            observed["environment"] = environment
+            self.assert_references_are_closed(session, [*arguments, *environment.values()])
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.shutil.which", return_value=f"/opt/bin/{command[0]}"),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "files",
+                self.profile,
+                command,
+                environment={},
+                resolved_kafka=self.kafka,
+                resolved_registry=registry,
+            )
+        files = observed["files"]
+        environment = observed["environment"]
+        assert isinstance(files, set) and isinstance(environment, dict)
+        return files - _RUNTIME_FILES, environment
+
+    def assert_references_are_closed(self, session: Path, values: list[str]) -> None:
+        """Every session path a launch names exists, and every key or CA is named."""
+        written = [path for path in session.iterdir() if path.is_file()]
+        texts = [*values, *(path.read_text(encoding="utf-8") for path in written)]
+        pattern = re.compile(re.escape(str(session)) + r"/([\w.-]+)")
+        referenced = {name for text in texts for name in pattern.findall(text)}
+        self.assertLessEqual(referenced, {path.name for path in session.iterdir()})
+        material = {path.name for path in written if path.suffix in {".pem", ".crt", ".key"}}
+        self.assertLessEqual(material, referenced)
+
+    def test_one_off_clients_write_only_the_files_they_read(self) -> None:
+        unencrypted_keys = {"client-unencrypted.key", "registry-client-unencrypted.key"}
+        cases = {
+            ("kcat", "-L"): {"kcat.conf", *_KAFKA_MATERIAL},
+            ("kafkacat", "-C", "-t", "orders"): {"kcat.conf", *_KAFKA_MATERIAL},
+            # Java properties carry the client certificate and key inline.
+            ("kafka-topics", "--list"): {"kafka.properties", "kafka-ca.pem"},
+            ("kafka-console-consumer.sh", "--topic", "orders"): {
+                "kafka.properties",
+                "kafka-ca.pem",
+            },
+            ("kafka-avro-console-consumer", "--topic", "orders"): {
+                "schema-registry-kafka.properties",
+                "kafka-ca.pem",
+                "registry-ca.pem",
+            },
+            ("kaskade", "admin"): {"kaskade.ini", *_KAFKA_MATERIAL},
+            ("kaskade", "consumer", "-t", "orders", "-v", "registry"): {
+                "kaskade-registry.ini",
+                *_KAFKA_MATERIAL,
+                *_REGISTRY_MATERIAL,
+            },
+            ("kaskade", "--version"): set(),
+            ("kcl", "metadata"): {
+                "kcl.toml",
+                "kafka-ca.pem",
+                "kafka-client.crt",
+                "registry-ca.pem",
+                "registry-client.crt",
+                *unencrypted_keys,
+            },
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                files, environment = self.run_session(list(command), self.registry)
+
+                self.assertEqual(expected, files)
+                self.assertFalse(
+                    {name for name in environment if name.endswith("_CONFIG_FILE")},
+                    "a supported client reads no documented file variable",
+                )
+
+    def test_kaf_writes_only_its_config_and_unencrypted_key(self) -> None:
+        # kaf maps no mTLS Registry, so this case runs without one.
+        files, _ = self.run_session(["kaf", "topics"], None)
+
+        self.assertEqual(
+            {"kaf.yaml", "kafka-ca.pem", "kafka-client.crt", "client-unencrypted.key"}, files
+        )
+
+    def test_kcat_reads_its_configuration_through_kcat_config(self) -> None:
+        files, environment = self.run_session(["kcat", "-L"], self.registry)
+
+        self.assertIn(Path(environment["KCAT_CONFIG"]).name, files)
+        self.assertNotIn("KAFKA_LIBRDKAFKA_CONFIG_FILE", environment)
+
+    def test_custom_commands_receive_every_documented_variable_and_file(self) -> None:
+        files, environment = self.run_session(["orders-app"], self.registry)
+
+        self.assertEqual(
+            {
+                "kcat.conf",
+                "kafka.properties",
+                "kaskade.ini",
+                "kaskade-registry.ini",
+                "kcl.toml",
+                "registry.properties",
+                "schema-registry-kafka.properties",
+                "client-unencrypted.key",
+                "registry-client-unencrypted.key",
+                *_KAFKA_MATERIAL,
+                *_REGISTRY_MATERIAL,
+            },
+            files,
+        )
+        variables = {
+            "KAFKA_JAVA_CONFIG_FILE": "kafka.properties",
+            "KAFKA_LIBRDKAFKA_CONFIG_FILE": "kcat.conf",
+            "KCAT_CONFIG": "kcat.conf",
+            "SCHEMA_REGISTRY_CONFIG_FILE": "registry.properties",
+            "SCHEMA_REGISTRY_KAFKA_CONFIG_FILE": "schema-registry-kafka.properties",
+        }
+        for name, filename in variables.items():
+            with self.subTest(variable=name):
+                path = Path(environment[name])
+                self.assertEqual(filename, path.name)
+                self.assertEqual(environment["KANTRIP_SESSION_DIR"], str(path.parent))
+        self.assertEqual("broker.invalid:9095", environment["KAFKA_BOOTSTRAP_SERVERS"])
+        self.assertEqual("SSL", environment["KAFKA_SECURITY_PROTOCOL"])
+        self.assertEqual("https://registry.invalid", environment["SCHEMA_REGISTRY_URL"])
+
+    def test_custom_commands_read_the_provider_registry_file(self) -> None:
+        registries = {
+            "SCHEMA": RegistryConnection(
+                "confluent", "http://registry.invalid:8081", "schema.registry.url"
+            ),
+            "APICURIO": RegistryConnection(
+                "apicurio",
+                "http://registry.invalid/apis/registry/v3",
+                "apicurio.registry.url",
+            ),
+        }
+        expected = {
+            "SCHEMA": "provider=confluent\nurl=http://registry.invalid:8081\n",
+            "APICURIO": (
+                "apicurio.registry.url=http://registry.invalid/apis/registry/v3\n"
+                "provider=apicurio\n"
+            ),
+        }
+        for prefix, registry in registries.items():
+            with self.subTest(provider=registry.provider):
+                observed: dict[str, str] = {}
+
+                def inspect_run(
+                    arguments: list[str],
+                    *,
+                    _observed: dict[str, str] = observed,
+                    _prefix: str = prefix,
+                    **options: object,
+                ) -> subprocess.CompletedProcess:
+                    environment = options["env"]
+                    assert isinstance(environment, dict)
+                    path = Path(environment[f"{_prefix}_REGISTRY_CONFIG_FILE"])
+                    _observed["contents"] = path.read_text(encoding="utf-8")
+                    _observed["mode"] = oct(stat.S_IMODE(path.stat().st_mode))
+                    return subprocess.CompletedProcess(arguments, 0)
+
+                with (
+                    patch("kantrip.session.shutil.which", return_value="/opt/bin/orders-app"),
+                    patch("kantrip.session._run_child", side_effect=inspect_run),
+                ):
+                    run_profile_session(
+                        "files",
+                        self.profile,
+                        ["orders-app"],
+                        environment={},
+                        resolved_kafka=KafkaConnection(("localhost:9092",), "plaintext"),
+                        resolved_registry=registry,
+                    )
+
+                self.assertEqual(expected[prefix], observed["contents"])
+                self.assertEqual(oct(0o600), observed["mode"])
+
+    def test_no_registry_sets_no_registry_file_variable(self) -> None:
+        files, environment = self.run_session(["orders-app"], None)
+
+        self.assertNotIn("SCHEMA_REGISTRY_KAFKA_CONFIG_FILE", environment)
+        self.assertNotIn("schema-registry-kafka.properties", files)
+
+    def test_an_interactive_shell_writes_every_file(self) -> None:
+        observed: dict[str, set[str]] = {}
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            environment = options["env"]
+            assert isinstance(environment, dict)
+            session = Path(environment["KANTRIP_SESSION_DIR"])
+            observed["files"] = {path.name for path in session.iterdir()}
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with (
+            patch("kantrip.session.resolve_interactive_shell", return_value="/bin/bash"),
+            patch("kantrip.session._run_child", side_effect=inspect_run),
+        ):
+            run_profile_session(
+                "files",
+                self.profile,
+                [],
+                environment={"PATH": ""},
+                resolved_kafka=self.kafka,
+                resolved_registry=self.registry,
+            )
+
+        custom_files, _ = self.run_session(["orders-app"], self.registry)
+        self.assertLessEqual(custom_files, observed["files"])
 
 
 if __name__ == "__main__":
