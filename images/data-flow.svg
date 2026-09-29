@@ -1,49 +1,66 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="670" viewBox="0 0 1100 670" role="img" aria-labelledby="title desc">
   <title id="title">Kantrip connection data flow</title>
   <desc id="desc">Profile metadata and operating-system secrets become one validated connection model, which native renderers place inside a private supervised session for the selected Kafka or Registry client.</desc>
   <style>
     :root { color-scheme: light dark; }
     .background { fill: #ffffff; }
-    .source { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
-    .model { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
-    .renderer { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
-    .session { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
-    .client { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
-    .connector { fill: none; stroke: #475569; stroke-width: 2; }
+    .node { fill: #f8fafc; stroke: #64748b; stroke-width: 2; }
+    .core { fill: #eef2ff; stroke: #4f46e5; stroke-width: 2; }
+    .action { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; }
+    .decision { fill: #fefce8; stroke: #ca8a04; stroke-width: 2; }
+    .ok { fill: #f0fdf4; stroke: #16a34a; stroke-width: 2; }
+    .warn { fill: #fff7ed; stroke: #ea580c; stroke-width: 2; }
+    .error { fill: #fef2f2; stroke: #dc2626; stroke-width: 2; }
+    .activation { fill: #e0e7ff; stroke: #4f46e5; stroke-width: 1.5; }
+    .boundary { fill: none; stroke: #16a34a; stroke-width: 1.5; stroke-dasharray: 8 6; }
     .line { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
-    .label { fill: #0f172a; font: 600 17px system-ui, sans-serif; text-anchor: middle; }
+    .connector { fill: none; stroke: #475569; stroke-width: 2; }
+    .return { fill: none; stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+    .lifeline { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 7 7; }
+    .title { fill: #0f172a; font: 700 24px system-ui, sans-serif; }
+    .section { fill: #475569; font: 600 13px system-ui, sans-serif; text-anchor: middle; letter-spacing: .08em; }
+    .label { fill: #0f172a; font: 600 16px system-ui, sans-serif; text-anchor: middle; }
     .detail { fill: #475569; font: 14px system-ui, sans-serif; text-anchor: middle; }
-    .group { fill: #475569; font: 600 13px system-ui, sans-serif; text-anchor: middle; letter-spacing: .08em; }
+    .edge { fill: #475569; font: 600 13px system-ui, sans-serif; text-anchor: middle; }
+    .boundary-label { fill: #15803d; font: 600 13px system-ui, sans-serif; }
     @media (prefers-color-scheme: dark) {
       .background { fill: #0f172a; }
-      .source { fill: #1e293b; stroke: #94a3b8; }
-      .model { fill: #312e81; stroke: #818cf8; }
-      .renderer { fill: #172554; stroke: #60a5fa; }
-      .session { fill: #052e16; stroke: #4ade80; }
-      .client { fill: #431407; stroke: #fb923c; }
-      .connector, .line { stroke: #cbd5e1; }
-      .label { fill: #f8fafc; }
-      .detail, .group { fill: #cbd5e1; }
+      .node { fill: #1e293b; stroke: #94a3b8; }
+      .core { fill: #312e81; stroke: #818cf8; }
+      .action { fill: #172554; stroke: #60a5fa; }
+      .decision { fill: #422006; stroke: #facc15; }
+      .ok { fill: #052e16; stroke: #4ade80; }
+      .warn { fill: #431407; stroke: #fb923c; }
+      .error { fill: #450a0a; stroke: #f87171; }
+      .activation { fill: #312e81; stroke: #818cf8; }
+      .boundary { stroke: #4ade80; }
+      .line, .connector, .return { stroke: #cbd5e1; }
+      .lifeline { stroke: #64748b; }
+      .title, .label { fill: #f8fafc; }
+      .section, .detail, .edge { fill: #cbd5e1; }
+      .boundary-label { fill: #4ade80; }
     }
   </style>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="context-stroke"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8"/>
     </marker>
   </defs>
-  <rect class="background" width="1100" height="620"/>
+  <rect class="background" width="1100" height="670"/>
+  <text class="title" x="40" y="42">How a profile becomes a client connection</text>
+  <g transform="translate(0 50)">
 
-  <text class="group" x="145" y="55">SOURCES</text>
-  <rect class="source" x="35" y="80" width="220" height="82" rx="12"/>
+  <text class="section" x="145" y="55">SOURCES</text>
+  <rect class="node" x="35" y="80" width="220" height="82" rx="12"/>
   <text class="label" x="145" y="113">Profile database</text>
   <text class="detail" x="145" y="138">metadata + secret references</text>
 
-  <rect class="source" x="35" y="205" width="220" height="82" rx="12"/>
-  <text class="label" x="145" y="238">OS credential store</text>
+  <rect class="node" x="35" y="205" width="220" height="82" rx="12"/>
+  <text class="label" x="145" y="238">Kantrip vault</text>
   <text class="detail" x="145" y="263">long-lived secrets</text>
 
-  <text class="group" x="430" y="55">RESOLUTION</text>
-  <rect class="model" x="315" y="125" width="230" height="118" rx="12"/>
+  <text class="section" x="430" y="55">RESOLUTION</text>
+  <rect class="core" x="315" y="125" width="230" height="118" rx="12"/>
   <text class="label" x="430" y="163">Validate and resolve</text>
   <text class="detail" x="430" y="189">allowlisted connection fields</text>
   <text class="detail" x="430" y="213">fail closed</text>
@@ -51,22 +68,22 @@
   <path class="line" d="M255 121 H285 Q300 121 300 136 V169 H315"/>
   <path class="line" d="M255 246 H285 Q300 246 300 231 V199 H315"/>
 
-  <rect class="model" x="625" y="125" width="240" height="118" rx="12"/>
+  <rect class="core" x="625" y="125" width="240" height="118" rx="12"/>
   <text class="label" x="745" y="163">Connection model</text>
   <text class="detail" x="745" y="189">provider-neutral</text>
   <text class="detail" x="745" y="213">in memory</text>
   <path class="line" d="M545 184 H625"/>
 
-  <text class="group" x="115" y="394">NATIVE RENDERERS</text>
-  <rect class="renderer" x="230" y="350" width="190" height="76" rx="12"/>
+  <text class="section" x="115" y="394">NATIVE RENDERERS</text>
+  <rect class="action" x="230" y="350" width="190" height="76" rx="12"/>
   <text class="label" x="325" y="383">Java</text>
   <text class="detail" x="325" y="406">Kafka properties</text>
 
-  <rect class="renderer" x="455" y="350" width="190" height="76" rx="12"/>
+  <rect class="action" x="455" y="350" width="190" height="76" rx="12"/>
   <text class="label" x="550" y="383">librdkafka</text>
   <text class="detail" x="550" y="406">native properties</text>
 
-  <rect class="renderer" x="680" y="350" width="190" height="76" rx="12"/>
+  <rect class="action" x="680" y="350" width="190" height="76" rx="12"/>
   <text class="label" x="775" y="383">Registry</text>
   <text class="detail" x="775" y="406">Confluent or Apicurio</text>
 
@@ -74,7 +91,7 @@
   <path class="line" d="M745 243 V286 H550 V350"/>
   <path class="line" d="M745 243 V350"/>
 
-  <rect class="session" x="355" y="490" width="390" height="92" rx="12"/>
+  <rect class="ok" x="355" y="490" width="390" height="92" rx="12"/>
   <text class="label" x="550" y="526">Private supervised session</text>
   <text class="detail" x="550" y="551">temporary files + child environment</text>
 
@@ -82,8 +99,9 @@
   <path class="connector" d="M550 426 V456"/>
   <path class="line" d="M550 456 V490"/>
 
-  <rect class="client" x="815" y="490" width="250" height="92" rx="12"/>
+  <rect class="node" x="815" y="490" width="250" height="92" rx="12"/>
   <text class="label" x="940" y="526">Selected client</text>
   <text class="detail" x="940" y="551">owns remote protocols</text>
   <path class="line" d="M745 536 H815"/>
+  </g>
 </svg>

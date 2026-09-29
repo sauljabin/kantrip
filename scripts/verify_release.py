@@ -45,6 +45,7 @@ SDIST_REQUIRED = {
     "examples/profile.json",
     "examples/tls-profile.json",
     "images/banner.svg",
+    "images/credential-vault.svg",
     "images/data-flow.svg",
     "images/database-migration.svg",
     "images/exec-sequence.svg",
