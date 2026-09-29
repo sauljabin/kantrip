@@ -295,7 +295,9 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             environment = {"KANTRIP_DATABASE": str(database_path)}
-            add_profile("local", database_path, labels={"environment": "development"})
+            profile = add_profile(
+                "local", database_path, labels={"environment": "development"}
+            ).profile("local")
 
             as_json = self.runner.invoke(cli, ["list", "-o", "json"], env=environment)
             as_yaml = self.runner.invoke(cli, ["list", "--output", "yaml"], env=environment)
@@ -306,8 +308,12 @@ class TestCli(unittest.TestCase):
             )
 
         self.assertEqual(0, as_json.exit_code, as_json.output)
-        self.assertEqual("local", json.loads(as_json.output)[0]["name"])
+        listed = json.loads(as_json.output)[0]
+        self.assertEqual("local", listed["name"])
+        self.assertEqual(profile["id"], listed["id"])
+        self.assertNotIn("revision", listed)
         self.assertIn("name: local", as_yaml.output)
+        self.assertIn(f"id: {profile['id']}", as_yaml.output)
         self.assertEqual([], json.loads(empty.output))
 
     def test_describe_supports_safe_json_and_yaml_observations(self) -> None:

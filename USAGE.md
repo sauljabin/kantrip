@@ -435,7 +435,7 @@ kantrip list --label environment=development --label owner=platform
 ```
 
 Use `--output json` or `--output yaml` (`-o` for short) for a stable structured
-summary. On a colored TTY, Kantrip applies syntax highlighting; `--no-color` or
+summary that also includes each profile's immutable `id`. On a colored TTY, Kantrip applies syntax highlighting; `--no-color` or
 output redirection emits plain machine-readable content without ANSI escapes.
 Structured empty results are an empty sequence.
 
@@ -904,7 +904,15 @@ Kantrip keeps passwords, private keys, tokens, and client secrets in its own
 vault named `kantrip`, not in your login keychain or default keyring, so your
 login alone does not unlock them. The operating system owns the vault password:
 Kantrip never reads, stores, or passes it. Each item is labeled like
-`Kantrip kafka/password (profile UUID)`.
+`Kantrip kafka/password (profile UUID)`, where the UUID is the profile `id` that
+`kantrip describe PROFILE` and `kantrip list -o json` show:
+
+```bash
+kantrip list -o json | jq -r '.[] | select(.id == "PROFILE-UUID") | .name'
+```
+
+Delete credentials with `kantrip remove` or replace them with `kantrip edit`,
+not in the vault itself, or the profile can no longer connect.
 
 Only commands that need a credential open the vault: `add` and `edit` when they
 store a secret, `remove` of a profile with credentials, `exec`, `ping`, and
