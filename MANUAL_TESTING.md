@@ -55,7 +55,7 @@ uv run --locked python -m sandbox down
 
 ## 1. First run
 
-Why: a new user's first commands must work and must not create anything.
+A new user's first commands must work without creating any files.
 
 ```bash
 kantrip --help
@@ -75,35 +75,38 @@ Expect:
 
 ## 2. Credentials stay in the vault
 
-Why: a password must end up only in the Kantrip vault, never in the database or
-your login keychain or keyring.
+A password you type must never show on screen, and Kantrip must keep it only
+in its own vault, never in your login keychain or keyring.
 
 ```bash
 kantrip add qa-scram -b localhost:9094 --transport tls \
   --ca-file sandbox/.state/ca.crt --auth scram-sha-512 --username kantrip-scram
+kantrip describe qa-scram
+kantrip doctor qa-scram
 kantrip ping qa-scram
-(. sandbox/.state/credentials.env
- sqlite3 "$KANTRIP_DATABASE" .dump | grep -c -F "$KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD")
 ```
 
-Type the SCRAM password when asked. If you have no vault yet, `add` creates one
-first (see section 7 or 8).
+Paste the SCRAM password (see section 0) when `add` asks. If you have no vault
+yet, `add` creates one first (see section 7 or 8).
 
 Expect:
 
-- The password doesn't echo, and `ping` succeeds.
-- The `sqlite3` line prints `0`: the database holds a reference, never the
-  password. The subshell reads the password without showing it.
-- Keychain Access (macOS), Passwords and Keys (GNOME), or KDE Wallet Manager
-  (KDE) shows one item `Kantrip kafka/password (profile …)` in the `kantrip`
-  keychain, keyring, or wallet, and nothing new in `login` or `kdewallet`.
+- The password prompt shows nothing while you type or paste.
+- `describe` shows the profile `id` and `kafka.auth.password` as `configured`,
+  never the value.
+- `doctor qa-scram` reports `kafka.auth.password is stored`, and `ping`
+  succeeds.
+- Your vault manager shows one item, `Kantrip kafka/password (profile …)` with
+  the `id` from `describe`, in the `kantrip` keychain, keyring, or wallet:
+  Keychain Access (macOS), Passwords and Keys (GNOME, COSMIC), or KDE Wallet
+  Manager (KDE). `login` and `kdewallet` get nothing new.
 
 Keep `qa-scram` for the next sections.
 
 ## 3. Nothing leaks during a session
 
-Why: a running session must not expose the secret to other processes, and must
-clean up after itself.
+A running session must not reveal the secret to other processes, and it must
+leave nothing behind when it ends.
 
 Terminal A:
 
@@ -124,7 +127,8 @@ the `ls` again finds no session.
 
 ## 4. Shells and commands behave natively
 
-Why: a Kantrip shell has to feel like your own shell, with your dotfiles.
+A Kantrip shell must feel like your own, with your dotfiles, while every client
+in it connects through the profile.
 
 Run it once each for Bash, Zsh, and Fish:
 
@@ -151,10 +155,13 @@ kantrip exec local -- kcat -b other:9092 -L      # refused before launch
 
 Expect your prompt, aliases, and history to work inside the session, and the
 profile to show in the prompt if you set up an integration from `USAGE.md`.
+The sandbox lets `qa-scram` create only topics whose names start with
+`kantrip-auth-`; any other name fails with `Authorization failed`.
 
 ## 5. Output reads well
 
-Why: output must stay readable with and without color, and stay parseable.
+Output must read well in a color terminal, and stay free of color codes and
+easy to parse when piped.
 
 ```bash
 kantrip describe qa-scram
@@ -168,7 +175,7 @@ valid JSON; and no output for the missing profile, only exit status `1`.
 
 ## 6. Doctor finds and explains problems
 
-Why: every problem must come with the command that fixes it.
+Every problem `doctor` reports must tell you how to fix it.
 
 ```bash
 chmod 644 "$KANTRIP_DATABASE"
@@ -197,7 +204,7 @@ Record the wording if one does.
 V=~/Library/Keychains/kantrip.keychain-db
 ```
 
-**Create it.** Why: the first secret creates the vault and must refuse an
+**Create it.** The first stored secret creates the vault, which must refuse an
 empty password.
 
 ```bash
@@ -212,8 +219,8 @@ After the SCRAM password, press Enter at both vault prompts: `add` fails with
 shows `(unlocked)` and `Credential vault locks after 15 minutes idle and on
 sleep`.
 
-**Unlock it.** Why: a locked vault asks on the terminal, and only when a
-command needs a secret.
+**Unlock it.** A locked vault asks for its password in the terminal, and only
+when a command needs a secret.
 
 ```bash
 security lock-keychain "$V"
@@ -225,8 +232,8 @@ Type a wrong password once (`Incorrect password; 2 attempts left.`), then the
 right one: `ping` succeeds. Lock it again, run `kantrip ping qa-mac`, and press
 Ctrl-C: `Error: Kantrip vault unlock was cancelled`, with no traceback.
 
-**No terminal.** Why: scripts must fail at once instead of waiting for a
-prompt nobody sees.
+**No terminal.** A script must fail at once instead of waiting for a prompt
+nobody sees.
 
 ```bash
 security lock-keychain "$V"
@@ -236,7 +243,7 @@ python3 -c 'import subprocess; subprocess.run(["kantrip-qa", "ping", "qa-mac"], 
 Expect, at once and with no prompt: `is locked and there is no terminal to
 unlock it`.
 
-**Sleep.** Why: the vault must lock when the Mac sleeps. Unlock it with
+**Sleep.** The vault must lock when the Mac sleeps. Unlock it with
 `kantrip ping qa-mac`, sleep the Mac for a minute, wake it, and run
 `kantrip doctor`: it asks for the password and reports `(locked)`.
 
@@ -248,8 +255,8 @@ the terminal only explains them. Manage the vault in Passwords and Keys (GNOME,
 COSMIC; install `seahorse` if it's missing) or KDE Wallet Manager (KDE). "Lock"
 below means Lock in Passwords and Keys, or Close in KDE Wallet Manager.
 
-**Create it.** Why: the first secret creates the vault, and on KDE it must not
-become the default wallet.
+**Create it.** The first stored secret creates the vault, which on KDE must not
+replace your default wallet.
 
 Delete your `kantrip` keyring or wallet first if you have one and can recreate
 it. On KDE, note the default wallet in System Settings > KDE Wallet. Then:
@@ -272,8 +279,8 @@ window asks for a new password.
 Expect `kantrip doctor` to show `Credential vault: … (unlocked)` with no
 warning.
 
-**Unlock it.** Why: a locked vault opens in a desktop window that Kantrip
-explains, and never hangs.
+**Unlock it.** A locked vault opens in a desktop window that the terminal
+explains, and a command never waits forever for it.
 
 Lock `kantrip` in the vault manager, then:
 
@@ -288,7 +295,7 @@ kantrip ping qa-linux     # the terminal says a window is waiting; a window open
 - Lock it, run `ping`, and leave the window alone. After 60 seconds, expect
   `got no answer within 60 seconds`, with the window gone.
 
-**No terminal.** Why: scripts must fail at once instead of opening a window.
+**No terminal.** A script must fail at once instead of opening a window.
 
 ```bash
 setsid -w kantrip-qa ping qa-linux < /dev/null   # with the vault locked
@@ -297,8 +304,8 @@ setsid -w kantrip-qa ping qa-linux < /dev/null   # with the vault locked
 Expect, at once and with no window: `is locked and there is no terminal to
 unlock it`.
 
-**Locked screen.** Why: when the window can't be shown, the message must say
-why. GNOME and COSMIC only. With the vault locked:
+**Locked screen.** When the desktop can't show the password window, the error
+must say why. GNOME and COSMIC only. With the vault locked:
 
 ```bash
 sleep 10; kantrip ping qa-linux
@@ -307,8 +314,9 @@ sleep 10; kantrip ping qa-linux
 Lock the screen within 10 seconds, wait, then unlock it. Expect `window could
 not be shown; it needs an unlocked desktop session`.
 
-**Automatic unlock.** Why: this GNOME option lets your login open the vault, so
-Kantrip must warn about it. GNOME and COSMIC only.
+**Automatic unlock.** GNOME can open the vault with your login password, so
+Kantrip must warn that the vault no longer asks for its own. GNOME and COSMIC
+only.
 
 Lock the vault, run `kantrip ping qa-linux`, and tick "Automatically unlock
 this keyring whenever I'm logged in" before you unlock. Lock it again, then:
@@ -321,13 +329,14 @@ Expect no window and a warning that the vault `opened without asking for its
 password`. To undo it, delete `Unlock password for: kantrip` from the Login
 keyring in Passwords and Keys; the next locked command asks in a window again.
 
-**Default vault.** Why: other applications must not store their secrets in
-the Kantrip vault. Make `kantrip` the default keyring or wallet, then run
-`kantrip doctor`: it warns `Credential vault is the default keyring` (KDE:
-`wallet`). Set your previous default back.
+**Default vault.** Kantrip must warn when its vault becomes the default, because
+other applications would then store their secrets in it. Make `kantrip` the
+default keyring or wallet, then run `kantrip doctor`: it warns
+`Credential vault is the default keyring` (KDE: `wallet`). Set your previous
+default back.
 
-**Missing wallet file.** Why: KDE keeps listing a wallet whose file is gone, and
-Kantrip must not open it. KDE only.
+**Missing wallet file.** KDE keeps listing a wallet after its file is gone, and
+Kantrip must not open or recreate it. KDE only.
 
 ```bash
 mv ~/.local/share/kwalletd/kantrip.kwl ~/kantrip-qa.kwl
