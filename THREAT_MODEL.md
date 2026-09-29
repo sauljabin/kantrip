@@ -335,6 +335,12 @@ Controls:
 - Do not mutate the caller's environment.
 - Create session roots and directories with mode `0700` and files through
   exclusive, restrictive creation.
+- Write only what a one-off supported client reads: the configuration its
+  adapter passes and the key and CA files that configuration names. Java
+  clients carry client keys inline, so they get no key file, and an encrypted
+  key is decrypted to disk only for kaf or kcl. Custom commands and interactive
+  shells still get every generated file, because they rely on the documented
+  file variables.
 - Redact before presentation, independently of output styling.
 - Hold in-memory secrets in an opaque `Secret` type whose `repr()` is masked
   and whose text conversion and pickling fail, so tracebacks, debuggers,

@@ -46,6 +46,7 @@ from kantrip.adapter_policy import (
     prepare_kaf_environment,
     prepare_kaskade_command,
     prepare_kcat_command,
+    prepare_kcat_environment,
     prepare_kcl_command,
     prepare_kcl_environment,
     require_kaf_registry,
@@ -371,6 +372,7 @@ KCAT_ADAPTER = ClientAdapter(
         "kcat", re.compile(r"\bVersion (\d+)\.(\d+)\.(\d+)(\S*)"), (1, 7, 0), option="-V"
     ),
     feature_checks=(_librdkafka_oauth_ca_support,),
+    prepare_environment=prepare_kcat_environment,
 )
 KASKADE_ADAPTER = ClientAdapter(
     "Kaskade",

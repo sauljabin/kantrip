@@ -1052,8 +1052,12 @@ secret-tool clear service kantrip application 'Python keyring library'
 
 Kantrip exposes settings only to supervised children. Kafka has no
 cross-language environment standard, so applications must opt into the generic
-`KAFKA_*` values below; `KANTRIP_*` is reserved for session metadata. Adapters
-may instead pass generated client files directly.
+`KAFKA_*` values below; `KANTRIP_*` is reserved for session metadata.
+
+A supported client run directly, such as `kantrip exec local -- kcat -L`,
+instead gets only its own generated files through its native options or
+variables, and none of the `*_CONFIG_FILE` variables below. Other commands and
+interactive shells get all of them.
 
 ### Environment precedence
 

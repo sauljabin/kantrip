@@ -160,8 +160,8 @@ class TestKafSession(KafSessionTestCase):
         self.assertEqual(str(session / "kafka-client.crt"), cluster["TLS"]["clientfile"])
         self.assertEqual(str(session / "client-unencrypted.key"), cluster["TLS"]["clientkeyfile"])
         self.assertEqual(pki.client_key, observed["files"]["client-unencrypted.key"])
-        # librdkafka clients keep the encrypted key and read its password themselves.
-        self.assertEqual(pki.encrypted_client_key, observed["files"]["kafka-client.key"])
+        # Only librdkafka clients read the encrypted key, so kaf's session omits it.
+        self.assertNotIn("kafka-client.key", observed["files"])
 
     def test_mtls_without_a_key_password_reuses_the_session_key(self) -> None:
         pki = synthetic_pki()
