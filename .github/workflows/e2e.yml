@@ -32,7 +32,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             build-essential dbus-x11 fish gnome-keyring kafkacat libcurl4-openssl-dev liblz4-dev \
-            libsasl2-dev libsecret-1-0 libssl-dev libzstd-dev openjdk-21-jre-headless zsh
+            libsasl2-dev libssl-dev libzstd-dev openjdk-21-jre-headless zsh
       - name: Set up Python and locked dependencies
         uses: ./.github/actions/python-uv
         with:
@@ -64,7 +64,9 @@ jobs:
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
           python-version: "3.13"
-      - name: Run sandbox E2E with native Secret Service
+      - name: Pre-create the disposable Kantrip vault
+        uses: ./.github/actions/linux-vault
+      - name: Run sandbox E2E with the Kantrip vault
         env:
           CI: "1"
           E2E_SCRIPT: |
@@ -73,7 +75,6 @@ jobs:
             uv run --locked python -m scripts.tests --suite e2e
           KANTRIP_REQUIRED_SHELLS: bash,zsh,fish
           NO_COLOR: "1"
-          PYTHON_KEYRING_BACKEND: keyring.backends.SecretService.Keyring
         run: dbus-run-session -- bash -euo pipefail -c "$E2E_SCRIPT"
       - name: Collect sanitized E2E diagnostics
         if: always()
@@ -96,6 +97,41 @@ jobs:
       - name: Remove CI-owned sandbox
         if: always()
         run: uv run --locked python -m sandbox down
+
+  vault-linux:
+    name: E2E / Ubuntu / Kantrip vault
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install GNOME Keyring
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus gnome-keyring
+      - name: Set up Python and locked dependencies
+        uses: ./.github/actions/python-uv
+        with:
+          uv-version: ${{ env.UV_VERSION }}
+          python-version: "3.13"
+      - name: Build or select and install candidate wheel
+        uses: ./.github/actions/candidate-wheel
+        with:
+          candidate-artifact: ${{ inputs.candidate-artifact }}
+          python-version: "3.13"
+      - name: Pre-create the disposable Kantrip vault
+        uses: ./.github/actions/linux-vault
+      - name: Run the vault acceptance suite
+        env:
+          CI: "1"
+          NO_COLOR: "1"
+          VAULT_SCRIPT: |
+            eval "$(printf "%s" "kantrip-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets)"
+            uv run --locked python -m scripts.tests --suite vault
+        run: dbus-run-session -- bash -euo pipefail -c "$VAULT_SCRIPT"
 
   vault-macos:
     name: E2E / macOS / Kantrip vault

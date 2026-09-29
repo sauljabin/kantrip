@@ -18,9 +18,9 @@ These checks apply to the first stable release (v0.1.0), not to an
 intermediate alpha or beta. Pre-releases use the shared preparation and
 pre-release sections below; their exact-wheel release E2E remains mandatory.
 
-- [ ] Run every scenario in [Manual Testing](MANUAL_TESTING.md) against the
-  candidate wheel on macOS and one Linux distribution. Record actual results;
-  automated unit and E2E tests do not replace the human checks.
+- [ ] Run [Manual Testing](MANUAL_TESTING.md) against the candidate wheel on
+  macOS and on each Linux desktop its platform table lists. Record actual
+  results; automated unit and E2E tests do not replace the human checks.
 - [ ] Confirm every required CLI/protocol/authentication/input-format cell in
   [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
   conditional and unsupported cells explicitly, including ping proof limits.
@@ -58,7 +58,7 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
   `PRAGMA user_version` before publishing a schema change.
 - [ ] Verify lockfile consistency, code analysis, the offline unit suite, and the
   sandbox E2E suite using the workflows in
-  [Development](DEVELOPMENT.md#development-scripts). Confirm E2E used the
+  [Development](DEVELOPMENT.md#everyday-checks). Confirm E2E used the
   candidate wheel, pinned released clients, and the native platform credential
   store rather than Kantrip's development environment.
 - [ ] Confirm successful [CI](.github/workflows/main.yml) for the final candidate,
@@ -69,7 +69,7 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
   changes made during release preparation. The tag workflow always runs E2E
   against the exact release wheel, even for documentation-only changes.
 - [ ] Build and verify the wheel and source distribution using
-  [Build artifacts](DEVELOPMENT.md#build-artifacts). Install the wheel in an
+  [Build](DEVELOPMENT.md#build). Install the wheel in an
   isolated environment and smoke-test `kantrip --version`, `kantrip --help`, and
   `kantrip doctor`. An untagged candidate has a development version; the release
   workflow verifies the exact tag version.
@@ -136,9 +136,11 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
 ## Publishing and Post-release Verification
 
 - [ ] Present preparation results, resolve blockers, and confirm release
-  authorization before creating or pushing a tag. Follow
-  [Release](DEVELOPMENT.md#release) for a clean, current `main`, tag creation,
-  protected approvals, and failure recovery.
+  authorization before creating or pushing a tag. Tag only a clean, current,
+  passing `main`: `git switch main`, `git pull --ff-only origin main`,
+  `git status --short` (empty), `uv lock --check`, then the checks in
+  [Agent Instructions](AGENT.md#verification). Push an annotated tag; the
+  protected workflow waits for approval before publishing.
 - [ ] Follow the [release workflow](.github/workflows/release.yml) through tag
   validation, artifact verification, complete E2E against the exact built wheel,
   attestation, and protected publishing. Preserve its build-once distribution

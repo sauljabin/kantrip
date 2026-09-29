@@ -43,11 +43,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 class TestDoctor(unittest.TestCase):
     def setUp(self) -> None:
         store = unittest.mock.Mock(
-            info=SecretStoreInfo(
-                "keyring.backends.SecretService.Keyring",
-                "Secret Service",
-            ),
-            **{"vault_status.return_value": None},
+            info=SecretStoreInfo("Kantrip vault through the Secret Service", "Secret Service"),
+            **{"vault_status.return_value": None, "unlock_warnings.return_value": ()},
         )
         patcher = patch("kantrip.doctor.load_secret_store", return_value=store)
         patcher.start()
@@ -433,7 +430,7 @@ class TestDoctor(unittest.TestCase):
             )
         )
 
-    def test_unapproved_credential_backend_is_unhealthy(self) -> None:
+    def test_unsupported_credential_platform_is_unhealthy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             _create_profile_database(database_path)
@@ -447,7 +444,9 @@ class TestDoctor(unittest.TestCase):
             with (
                 patch(
                     "kantrip.doctor.load_secret_store",
-                    side_effect=SecretStoreError("unsafe backend"),
+                    side_effect=SecretStoreError(
+                        "credential storage is not supported on this platform"
+                    ),
                 ),
                 patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
             ):
@@ -456,7 +455,8 @@ class TestDoctor(unittest.TestCase):
         self.assertFalse(report.healthy)
         self.assertTrue(
             any(
-                "Credential store backend is unavailable or unsafe" in check.message
+                "Credential vault is unavailable: credential storage is not supported"
+                in check.message
                 for check in report.checks
             )
         )
@@ -736,6 +736,32 @@ class TestDoctorVault(unittest.TestCase):
             DoctorCheck("warning", "synthetic vault warning", "Credentials"), report.checks
         )
 
+    def test_warnings_learned_while_checking_credentials_follow_the_profile_checks(self) -> None:
+        store = _vault("locked")
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            add_profile(
+                "secure",
+                database_path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "scram-sha-512", username="app", password=Secret("synthetic-password")
+                ),
+                secret_store=store,
+            )
+            store.warnings = ("synthetic vault opened without a window",)
+            report = self._report(store, database_path, directory)
+
+        messages = self._text(report)
+        self.assertIn(
+            DoctorCheck("warning", "synthetic vault opened without a window", "Credentials"),
+            report.checks,
+        )
+        self.assertGreater(
+            messages.index("synthetic vault opened without a window"),
+            messages.index("Profile 'secure' Kafka credentials are usable"),
+        )
+
     def test_vault_that_cannot_be_inspected_is_an_error(self) -> None:
         store = _MemoryStore()
         store.status = VaultError("synthetic vault problem")
@@ -812,12 +838,16 @@ def _vault(
 
 
 class _MemoryStore:
-    info = SecretStoreInfo("keyring.backends.SecretService.Keyring", "Secret Service")
+    info = SecretStoreInfo("Kantrip vault through the Secret Service", "Secret Service")
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.status: VaultStatus | VaultError | None = None
         self.get_error: VaultError | None = None
+        self.warnings: tuple[str, ...] = ()
+
+    def unlock_warnings(self) -> tuple[str, ...]:
+        return self.warnings
 
     def vault_status(self) -> VaultStatus | None:
         if isinstance(self.status, VaultError):

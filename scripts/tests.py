@@ -115,7 +115,7 @@ def _run(*command: str, cwd: Path, environment: dict[str, str] | None = None) ->
     subprocess.run(command, cwd=cwd, env=environment, check=True)
 
 
-# The vault suite needs no sandbox: it runs only the macOS vault acceptance.
+# The vault suite needs no sandbox: it runs the vault acceptance of this platform.
 _SUITE_COMMANDS = {
     "unit": "python -m unittest discover -v -s tests/unit -t .",
     "e2e": "python -m unittest discover -v -s tests/e2e -t .",

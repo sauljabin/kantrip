@@ -1,12 +1,9 @@
 import unittest
 from pathlib import Path
 
-from keyring.errors import PasswordDeleteError, PasswordSetError
-
+from kantrip.linux_vault import LinuxVault
 from kantrip.macos_vault import MacOSVault
 from kantrip.secret_store import (
-    SERVICE_NAME,
-    SecretNotFoundError,
     SecretStoreError,
     load_secret_store,
     secret_reference,
@@ -26,46 +23,16 @@ class TestSecretStore(unittest.TestCase):
         self.assertEqual(Path.home() / "Library/Keychains/kantrip.keychain-db", store.path)
         self.assertEqual("macOS keychain", store.info.display_name)
 
-    def test_approved_linux_backend_stores_reads_and_deletes_exact_references(self) -> None:
-        backend = _backend("keyring.backends.SecretService")
-        store = load_secret_store(backend=backend, platform_name="linux")
-        reference = secret_reference(PROFILE_ID, "kafka/password")
+    def test_linux_uses_the_dedicated_secret_service_vault(self) -> None:
+        store = load_secret_store(platform_name="linux")
 
-        store.set(reference, "synthetic-secret")
+        self.assertIsInstance(store, LinuxVault)
+        self.assertEqual("Secret Service", store.info.display_name)
 
-        self.assertEqual("synthetic-secret", store.get(reference))
-        self.assertEqual({(SERVICE_NAME, reference): "synthetic-secret"}, backend.values)
-        store.delete(reference)
-        store.delete(reference)
-        with self.assertRaises(SecretNotFoundError):
-            store.get(reference)
-
-    def test_approved_linux_secret_service_backends_are_accepted(self) -> None:
-        for module in ("keyring.backends.SecretService", "keyring.backends.libsecret"):
-            with self.subTest(module=module):
-                store = load_secret_store(backend=_backend(module), platform_name="linux")
-                self.assertEqual("Secret Service", store.info.display_name)
-
-    def test_unapproved_null_chainer_and_platform_backends_are_rejected(self) -> None:
-        cases = (
-            (_backend("keyring.backends.null", priority=-1), "linux"),
-            (_backend("keyring.backends.chainer"), "linux"),
-            (_backend("keyring.backends.macOS"), "linux"),
-            (_backend("keyring.backends.Windows"), "win32"),
-        )
-        for backend, platform_name in cases:
-            with (
-                self.subTest(backend=type(backend).__module__, platform=platform_name),
-                self.assertRaises(SecretStoreError),
-            ):
-                load_secret_store(backend=backend, platform_name=platform_name)
-
-    def test_backend_with_invalid_priority_is_rejected(self) -> None:
-        backend = _backend("keyring.backends.SecretService")
-        backend.priority = "high"
-
-        with self.assertRaises(SecretStoreError):
-            load_secret_store(backend=backend, platform_name="linux")
+    def test_other_platforms_are_rejected(self) -> None:
+        for platform_name in ("win32", "cygwin", "freebsd14"):
+            with self.subTest(platform=platform_name), self.assertRaises(SecretStoreError):
+                load_secret_store(platform_name=platform_name)
 
     def test_references_are_limited_to_canonical_profile_keys(self) -> None:
         valid = secret_reference(
@@ -83,44 +50,6 @@ class TestSecretStore(unittest.TestCase):
         ):
             with self.subTest(reference=invalid), self.assertRaises(SecretStoreError):
                 validate_secret_reference(invalid)
-
-    def test_backend_errors_never_echo_secret_values(self) -> None:
-        backend = _backend("keyring.backends.SecretService")
-        backend.set_error = PasswordSetError("synthetic-secret")
-        store = load_secret_store(backend=backend, platform_name="linux")
-        reference = secret_reference(PROFILE_ID, "kafka/oauth/client-secret")
-
-        with self.assertRaises(SecretStoreError) as raised:
-            store.set(reference, "synthetic-secret")
-
-        self.assertNotIn("synthetic-secret", str(raised.exception))
-
-
-class _MemoryBackend:
-    priority = 5
-
-    def __init__(self) -> None:
-        self.values: dict[tuple[str, str], str] = {}
-        self.set_error: Exception | None = None
-
-    def get_password(self, service: str, username: str) -> str | None:
-        return self.values.get((service, username))
-
-    def set_password(self, service: str, username: str, password: str) -> None:
-        if self.set_error is not None:
-            raise self.set_error
-        self.values[(service, username)] = password
-
-    def delete_password(self, service: str, username: str) -> None:
-        try:
-            del self.values[(service, username)]
-        except KeyError as error:
-            raise PasswordDeleteError("missing") from error
-
-
-def _backend(module: str, *, priority: float = 5) -> _MemoryBackend:
-    backend_type = type("Keyring", (_MemoryBackend,), {"__module__": module, "priority": priority})
-    return backend_type()
 
 
 if __name__ == "__main__":

@@ -1,767 +1,529 @@
 # Architecture
 
-This developer reference records the implemented architecture and its technical
-decisions. Planned work is tracked in the
+How Kantrip is built and why. This guide records the implemented design, its
+technical decisions, and its limits; [Compatibility](COMPATIBILITY.md) owns the
+exact client and version matrix, and [Threat Model](THREAT_MODEL.md) the
+security analysis. Planned work lives in the
 [v0.1](https://github.com/sauljabin/kantrip/milestone/1) and
 [v0.2](https://github.com/sauljabin/kantrip/milestone/2) milestones.
-The diagrams illustrate component boundaries; the capability limits in this
-text and [Compatibility](COMPATIBILITY.md) govern current behavior.
-
-Kantrip is not a persistent process manager, a global context selector, or a
-replacement for Kafka clients. Its responsibility ends at storing profiles,
-resolving secrets, generating temporary client configuration, and supervising
-the active execution.
 
 ## Contents
 
-- [Product boundary](#product-boundary)
-- [Command surface](#command-surface)
-- [Design rules](#design-rules)
-- [Outside the product scope](#outside-the-product-scope)
-- [Current capability boundaries](#current-capability-boundaries)
-- [Data flow](#data-flow)
-- [Profiles and connection material](#profiles-and-connection-material)
+- [Overview](#overview)
+  - [Design rules](#design-rules)
+  - [Out of scope](#out-of-scope)
+- [Code map](#code-map)
+- [Profiles and storage](#profiles-and-storage)
+  - [Schema migrations](#schema-migrations)
+  - [Profile mutations](#profile-mutations)
 - [Credential vault](#credential-vault)
-- [Schema evolution and maintenance](#schema-evolution-and-maintenance)
-- [Connection-only configuration](#connection-only-configuration)
-- [Profile lifecycle and input sources](#profile-lifecycle-and-input-sources)
-- [Session resolution and rendering](#session-resolution-and-rendering)
+  - [macOS keychain vault](#macos-keychain-vault)
+  - [Linux Secret Service vault](#linux-secret-service-vault)
+  - [Vault errors and diagnostics](#vault-errors-and-diagnostics)
+- [Sessions and rendering](#sessions-and-rendering)
 - [Client adapters](#client-adapters)
-- [Process supervision and cleanup](#process-supervision-and-cleanup)
-  - [Execution sequence](#execution-sequence)
-  - [Session lifecycle](#session-lifecycle)
+- [Process supervision](#process-supervision)
   - [Process and terminal boundary](#process-and-terminal-boundary)
-  - [Runtime identity and liveness](#runtime-identity-and-liveness)
-  - [Recovery](#recovery)
-- [Sandbox verification topology](#sandbox-verification-topology)
-- [Diagnostics and output](#diagnostics-and-output)
-- [Architectural strengths](#architectural-strengths)
-- [Architectural limitations and tradeoffs](#architectural-limitations-and-tradeoffs)
+  - [Runtime sessions and recovery](#runtime-sessions-and-recovery)
+- [Diagnostics](#diagnostics)
+- [Verification](#verification)
+- [Strengths and limitations](#strengths-and-limitations)
 
-## Product boundary
+## Overview
 
-For each command or subshell, the user selects a profile. Kantrip then:
+For each command or subshell, the user names a profile. Kantrip then:
 
-1. Loads one UUID/revision generation and resolves both Kafka and Registry
-   credentials through one store under the mutation lock.
-2. Builds the plaintext or verified-TLS connection model.
-3. Renders the native connection properties required by the client.
-4. Supervises the client in a bounded session.
-5. Removes session-owned connection material.
-
-The immutable resolved snapshot is released from the mutation lock before
-rendering or networking. Profile rotation or removal after that point cannot
-mix generations or invalidate credentials already held in memory. Adapters and
-shims never query SQLite or the credential store again during that session.
-
-Kantrip prepares the connection for one execution; it does not perform the
-Kafka or Registry operation itself. It does not install or replace clients,
-manage topics, groups, or schemas, or keep a globally active profile. The
-selected client performs the requested operation using the connection material
-Kantrip supplies for that session.
-
-## Command surface
-
-The CLI follows one resource-oriented lifecycle. `add` creates a profile,
-`edit` changes it, `remove` deletes it, `list` selects profiles, and `describe`
-inspects one safely. `doctor`, `ping`, `exec`, and `current` retain their
-diagnostic, connectivity, execution, and session roles.
-
-The CLI accepts explicit profile fields and no-echo credential prompts; `edit`
-requires at least one option. It has no file import yet. Kantrip has no separate `import`, `secret`,
-`export`, `clone`, or `configure` command family. Human, JSON, and YAML
-inspection are observations rather than round-trip profile documents; they omit
-secret values and internal credential references. Planned CLI changes are
-tracked in milestone issues.
-
-`cli.py` defines commands and presents results. `cli_options.py` declares the
-`add` and `edit` options once per field (flags, type, parsing); each command
-supplies its own help text and defaults, and `edit` adds its clear, remove, and
-replace options. `cli_inputs.py` turns options into typed inputs: each command
-receives one frozen options dataclass whose fields match Click's parameter
-names, validates conflicting flags, collects no-echo secrets from the
-controlling terminal, and builds the Kafka and Registry authentication inputs
-passed to the profile lifecycle.
-
-## Design rules
-
-These rules bound every feature and are enforced before an operation starts:
-
-- **Explicit selection.** Every network command names `PROFILE`; there is no
-  ambient or globally active profile.
-- **No secret values in arguments.** Secrets enter only through no-echo
-  prompts or bounded private-key files. No flag accepts a literal password,
-  token, client secret, private key, or JAAS value.
-- **Verified TLS for authentication.** Authenticated Kafka, Registry, and
-  OAuth token endpoints require verified TLS, including on localhost; there is
-  no insecure test bypass. Plaintext is allowed only without authentication.
-- **Independent trust and credentials.** Kafka, Registry, and token-endpoint
-  trust and credentials are configured separately and never inherited from
-  one another.
-- **Capability checks name the gap.** An unsupported client/mechanism
-  combination fails before the operation with a message naming both. Support
-  in a library does not imply that a CLI built on it exposes the setting.
-
-## Outside the product scope
-
-Database downgrade; profile history or rollback; secret retrieval or
-round-trip export; detached or background sessions; Kubernetes discovery;
-arbitrary secret providers; Kafka fixed-token or refresh-token OAuth;
-client-side Strimzi OAuth callbacks; Windows; automatic JKS/PKCS12 conversion;
-HTTP proxy profiles; adapters without a versioned, tested safe contract; a
-hosted service, daemon, programmatic profile API, or interactive TUI. Amazon
-MSK IAM is tracked separately as a research item.
-
-## Current capability boundaries
-
-The bundled [profile schema](schemas/profile.schema.json) and
-[synthetic document](examples/profile.json) define internal validated storage,
-not a file-import interface. Profile documents omit application versions;
-SQLite has a separate schema version. Keep these internal capabilities separate
-from the executable user contract in `COMPATIBILITY.md`.
-
-| Capability | Internal model / rendering | Executable CLI |
-| --- | --- | --- |
-| Plaintext and verified Kafka TLS | Validated and rendered for supported clients | `add`, `edit`, sessions, and connection-state ping |
-| PLAIN, both SCRAM mechanisms, mTLS | TLS-only schema; exact secret references; mTLS key/certificate validation; Java/librdkafka renderers | Supported by `add`, `edit`, `exec`, and `ping` |
-| Kafka OAuth | TLS-only client credentials with independent token trust | Native Java 4.1+ (Confluent 8.1+) and librdkafka OIDC rendering, sessions, and ping |
-| Registry | Independent TLS, Basic, token, mTLS, and OAuth | Provider-aware private client configuration and authenticated probes |
-| External profile/file import | Bundled JSON schema validates stored documents only | No JSON/YAML, properties, Strimzi, or JKS/PKCS12 import |
-
-Each stored Registry declares `provider: confluent` with
-`schema.registry.url`, or `provider: apicurio` with `apicurio.registry.url`.
-The CLI selects and persists Confluent when a Registry URL is supplied without
-an explicit provider. Native Apicurio uses `/apis/registry/v3`; its
-`/apis/ccompat/v7` API requires a Confluent profile. Registry TLS,
-authentication, and token-endpoint trust are independent from Kafka. No arbitrary Java or librdkafka
-property maps are accepted; only typed connection fields reach renderers.
-Registry property namespaces follow the official
-[Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
-and [Apicurio](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-kafka-client-serdes.html)
-serializer/deserializer contracts.
-
-## Data flow
+1. Loads one profile generation (UUID and revision) and resolves its Kafka and
+   Registry credentials through one vault, under one maintenance lock.
+2. Builds a validated plaintext or verified-TLS connection model in memory.
+3. Renders the native configuration each client needs.
+4. Supervises the client in a private, bounded session.
+5. Removes the session's connection material.
 
 ![Kantrip connection data flow](images/data-flow.svg)
 
-Explicit profile fields enter a validated connection model. Each renderer
-translates that model into native client configuration. External input sources
-are not implemented yet.
+The resolved snapshot is released from the lock before rendering or any
+network call, so a later edit or removal cannot mix generations or invalidate
+credentials already in memory. Adapters and shims never read SQLite or the vault
+again during that session.
 
-## Profiles and connection material
+Kantrip prepares the connection; the selected client performs the Kafka or
+Registry operation. The CLI is resource-oriented: `add`, `edit`, `remove`,
+`list`, and `describe` manage profiles; `doctor`, `ping`, `exec`, and `current`
+diagnose, probe, run, and report sessions. Human, JSON, and YAML output are
+observations, never round-trip documents, and omit secret values and internal
+references.
 
-Profiles are schema-validated JSON documents stored one per row in a private
-SQLite database. Each has an immutable UUID, Kafka connection metadata, and at
-most one independent Registry connection. Documents contain non-secret values
-and opaque secret references, never credentials, bearer tokens, raw JAAS, or
-private keys.
+### Design rules
 
-Database lookup follows `KANTRIP_DATABASE`, `XDG_DATA_HOME`, then
-`~/.local/share/kantrip/profiles.db`. Its directory is user-owned mode `0700`;
-the database and SQLite sidecars are mode `0600`. Symlinks, unsafe ownership or
-permissions, corrupt schemas, and unsupported internal versions fail closed.
-WAL permits readers while writes are serialized with bounded
-`BEGIN IMMEDIATE` transactions. The profile document schema is independent of
-the internal database schema version. Every writable connection verifies WAL
-and FULL synchronization; supported macOS builds also verify `fullfsync`.
-Database and backup directory entries are synchronized before durable creation
-is acknowledged. This durability contract assumes a local filesystem, not a
-network or cloud-synchronized database directory.
+These rules bound every feature and are checked before an operation starts:
 
-Migration backups use SQLite's online backup API to create one consistent,
-private, immutable database file before migration. They are recovery snapshots,
-not live databases: they have no active WAL/sidecar policy of their own, and an
-out-of-band restore still requires explicit operator handling. Newly created
-parent directories are created one level at a time and each parent entry is
-`fsync`ed before success is acknowledged.
+- **Explicit selection.** Every network command names `PROFILE`; there is no
+  globally active profile.
+- **No secrets in arguments.** Secrets enter only through no-echo prompts or
+  bounded private-key files; no flag accepts a password, token, client secret,
+  private key, or JAAS value.
+- **Verified TLS for authentication.** Authenticated Kafka, Registry, and OAuth
+  token endpoints require verified TLS, including on localhost. Plaintext is
+  allowed only without authentication.
+- **Independent trust and credentials.** Kafka, Registry, and token-endpoint
+  trust and credentials are configured separately and never inherited.
+- **Typed fields only.** Profiles accept no arbitrary Java or librdkafka
+  property maps; only typed connection fields reach the renderers.
+- **Capability checks name the gap.** An unsupported client and mechanism
+  combination fails before the operation, naming both. Library support does not
+  imply that a CLI built on it exposes the setting.
 
-Long-lived secrets use immutable
-`profile/<profile-uuid>/<credential-uuid>/<field>` keys in the dedicated
-[credential vault](#credential-vault) on macOS or a Linux Secret
-Service-compatible backend. The credential UUID changes on every replacement,
-so staging never overwrites the value referenced by the usable profile. Kantrip
-rejects unavailable, plaintext, encrypted-file, null, and unknown Linux
-backends instead of weakening storage, and never falls back to the macOS login
-keychain.
+### Out of scope
 
-The implemented connection model supports plaintext transport,
-server-authenticated TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mutual
-TLS. Authentication always requires verified TLS. Passwords, private keys, and
-optional private-key passwords resolve from exact profile-owned references;
-public client certificate chains remain in the profile. Java and librdkafka
-render independently from the same resolved model, including internally escaped
-JAAS for Java password mechanisms and native OAuth client-credentials settings.
-A Registry remains an independent connection; Kafka and Registry credentials
-are never inherited across those boundaries.
+Profiles describe connections only: endpoints, transport security, server
+verification, client identity, and credential acquisition. They exclude
+producer, consumer, topic, group, serializer, retry, and schema-selection
+behavior.
 
-The adapter descriptors' capability matrix covers Apache/Confluent Java commands,
-kcat, and Kaskade for PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. Every client
-has an installed-version floor, and Java PEM profiles add their own version check;
-unsupported combinations fail before the requested client operation.
+Kantrip does not provide database downgrades, profile history, secret retrieval,
+round-trip export, detached or background sessions, Kubernetes discovery,
+arbitrary secret providers, Kafka fixed-token or refresh-token OAuth,
+client-side Strimzi OAuth callbacks, Windows, JKS/PKCS12 conversion, HTTP proxy
+profiles, a daemon, a programmatic profile API, or a TUI. Adapters exist only
+for clients with a versioned, tested contract.
 
-## Credential vault
+## Code map
 
-On macOS, `macos_vault.MacOSVault` implements `SecretStore` on one keychain file
-per user, `~/Library/Keychains/kantrip.keychain-db`, so credentials do not
-unlock with the login session. macOS owns its password: `security
-create-keychain` and `security unlock-keychain` prompt on the controlling
-terminal (`/dev/tty`), and Kantrip never reads, stores, or passes it. aws-vault
-uses the same dedicated-keychain model; Kantrip differs in how it writes items,
-sets the lock policy, and prompts.
-
-**Item I/O goes through `/usr/bin/security` only.** macOS stamps each keychain
-item with a partition taken from the creating binary's code signature.
-Homebrew and uv Pythons are ad-hoc signed, so items created in-process through
-Security.framework get a `cdhash:` partition that changes with every Python
-build; any other build then gets a password window, even with an
-any-application ACL, and changing the partition needs the vault password.
-Items written by `/usr/bin/security` get the stable `apple-tool:` partition
-instead. Writes send `add-generic-password -U … -X <hex>` lines to `security -i`
-on stdin, so values never reach argv; reads run `find-generic-password -g`,
-whose argv holds only the reference, and parse the value from stderr (printable
-text, or hex for anything else).
-
-`security -i` truncates input lines at about 4,094 bytes and runs the remainder
-as new commands, so a value is split into pieces sized from a 4,000-byte line
-budget that includes the vault path. The head item (`reference`) holds the
-first piece and the piece count in its generic attribute; the other pieces are
-`reference#1`, `reference#2`, and so on. One `security -i` batch writes the
-pieces first and the head last, then deletes stale pieces after a shrink, so a
-reader never sees a head whose pieces are not written. `security -i` exits 0
-even when a command fails, so any stderr line other than a deletion
-confirmation fails the write; credential staging also reads every value back.
-Deletion removes pieces from the highest down and the head last; without a
-head, it deletes the contiguous pieces an interrupted write left. Credential
-references are write-once in normal use, so an interrupted overwrite is not
-made atomic. Labels are readable (`Kantrip kafka/password (profile UUID)`,
-`part 2 of 3`) and, like accounts, carry no secret.
-
-**State checks never prompt.** Before any item access, Kantrip reads the vault
-state with `SecKeychainGetStatus` through ctypes, which neither prompts nor
-resets the idle timer. Reading a locked vault with `security` opens a macOS
-password window, so Kantrip never does it:
-
-| State | `get` / `delete` | `set` |
+| Area | Modules | Responsibility |
 | --- | --- | --- |
-| Missing | `get` fails with recovery guidance; `delete` succeeds, because no secret outlives its vault | Create on the terminal, or fail at once without one |
-| Locked | Unlock on the terminal, or fail at once without one | Same |
-| Unlocked | Proceed | Proceed |
+| CLI | `cli.py`, `cli_options.py`, `cli_inputs.py`, `console.py`, `profile_output.py`, `redaction.py` | Commands and presentation; `add`/`edit` options declared once per field; typed inputs and no-echo secret prompts; safe observations |
+| Profiles | `profiles.py`, `profile_storage.py`, `profile_auth.py`, `profile_documents.py` | Mutation orchestration and snapshot resolution; SQLite paths, locks, and loading; pure authentication and document planning |
+| Consistency | `credential_mutations.py`, `mutation_outcomes.py`, `reconciliation.py`, `migrations.py`, `maintenance.py` | Cross-store staging and retirement; commit classification; the cleanup journal; the migration chain; `doctor --repair` |
+| Credentials | `secret_store.py`, `macos_vault.py`, `linux_vault.py`, `secret_value.py` | The `SecretStore` protocol and its two vaults; `Secret`, which never renders itself |
+| Connections | `kafka.py`, `registry.py`, `oauth.py` | Validated connection models and canonical properties |
+| Sessions | `session.py`, `runtime.py`, `supervisor.py`, `shells.py`, `_files.py` | Session preparation, private runtime directories and cleanup, process and PTY supervision, shell setup |
+| Adapters | `adapters.py`, `adapter_policy.py`, `adapter_shims.py`, `_adapter_guard.py` | One descriptor per client family; native argument grammars; shims; the shim-side argument guard |
+| Diagnostics | `doctor.py`, `ping.py` | Read-only checks; bounded connectivity probes |
 
-A missing vault cannot be told apart from missing items by item reads alone,
-which is why the state is checked first; a replaced vault reads as missing
-secrets. The vault path must not be a symbolic link.
+## Profiles and storage
 
-**Creation** writes a short explanation to the terminal and runs `security
-create-keychain` with the terminal as input and error output, so macOS's own
-mismatch message and retry loop stay visible. Kantrip then rejects an empty
-password (`unlock-keychain -p ""` succeeds only for an empty password and
-leaves an unlocked keychain unchanged otherwise) by deleting the new vault, sets
-`set-keychain-settings -l -u -t 900` because new keychains lock after five
-minutes, and adds the vault to the user search list, which macOS 27 does not do,
-so it appears in Keychain Access.
+Profiles are schema-validated JSON documents, one per row in a private SQLite
+database. Each has an immutable UUID, a unique name, a revision, Kafka
+connection metadata, and at most one Registry. Documents hold non-secret values
+and opaque secret references, never credentials, tokens, raw JAAS, or private
+keys. The bundled [profile schema](schemas/profile.schema.json) and
+[example](examples/profile.json) define stored documents, not a file-import
+format; documents omit application versions, and SQLite has its own schema
+version.
 
-**Unlocking** runs `security unlock-keychain` on the terminal with captured
-output. Each run is one attempt; exit status 51 is a wrong password and Kantrip
-allows three. Ctrl-C reaches both processes, the vault stays locked, and
-Kantrip reports a cancellation instead of a traceback. A refused or cancelled
-unlock is remembered for the rest of the process, so reconciling several
-credentials never prompts again. Without a controlling terminal, a locked or
-missing vault fails at once.
+Each Registry names its provider explicitly: `confluent`
+(`schema.registry.url`) or `apicurio` (`apicurio.registry.url`, native
+`/apis/registry/v3`; its `/apis/ccompat/v7` API needs a Confluent profile).
+`add --registry-url` persists Confluent when no provider is given, so reads
+never infer one. Both follow the official
+[Confluent](https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html)
+and [Apicurio](https://www.apicur.io/registry/docs/apicurio-registry/3.3.x/getting-started/assembly-configuring-kafka-client-serdes.html)
+serializer contracts.
 
-The vault's errors are `VaultError`, a `SecretStoreError` whose message is user
-guidance. Kafka and Registry resolution, credential staging, and doctor pass it
-through instead of their generic credential errors. `doctor` reports the vault
-path and state (missing, locked, or unlocked) without unlocking it. A missing
-vault is normal until a profile stores a credential and an error afterwards,
-because its credentials are gone. While the
-vault is unlocked it also reads the lock policy through `SecKeychainCopySettings`
-with user interaction disabled (a locked vault fails instead of prompting, so
-there is no race with the idle timer) and warns about an empty password. A
-missing vault that the search list still names is a warning, and
-`doctor --repair` removes that entry.
+The database path is `KANTRIP_DATABASE`, then `XDG_DATA_HOME`, then
+`~/.local/share/kantrip/profiles.db`. The directory is user-owned mode `0700`;
+the database and its sidecars are `0600`. Symlinks, unsafe ownership or
+permissions, corrupt contents, and unsupported versions fail closed. WAL lets
+readers run while writes are serialized by bounded `BEGIN IMMEDIATE`
+transactions. Every writable connection verifies WAL and FULL synchronization
+(`fullfsync` on macOS), and new directory entries are `fsync`ed before success
+is acknowledged. This assumes a local filesystem, not a network or
+cloud-synchronized directory.
 
-Vault prompts run where the store is first used, inside the maintenance lock
-that makes staging and snapshot resolution coherent. Another Kantrip command
-started while the user types the password waits the usual five seconds for that
-lock and then reports that maintenance is busy. A vault that times out between
-the state check and an item read still opens a macOS password window; the
-interval is milliseconds. File keychains and the
-`SecKeychain*` APIs are deprecated but work on macOS 27. The macOS CI job
-exercises them against the real `security` tool.
-
-## Schema evolution and maintenance
+### Schema migrations
 
 ![Kantrip database migration flow](images/database-migration.svg)
 
-Kantrip owns a linear migration history inside the profile database. The engine
-executes immutable `SqlMigration` commands registered explicitly in one
-`MigrationChain`; it does not discover modules or files dynamically. Each
-command has one positive integer `sequence`, which is both its identity and
-order, plus an immutable name and SQL payload. Its checksum covers all three.
-The history records when it ran and which Kantrip version applied it, but
-product SemVer does not identify or order migrations. A release may contain
-zero, one, or several migration commands.
+The database carries a linear migration history. Each migration is an immutable
+`SqlMigration` registered explicitly in one `MigrationChain`, with no module or
+file discovery. Its positive integer `sequence` is both identity and order; its
+checksum covers the sequence, name, and SQL. The history also records when each
+migration ran and which Kantrip version applied it, but product versions never
+identify or order migrations, and a release may carry any number of them.
+Sequence `1` is the initial store and `2` adds the credential reconciliation
+journal.
 
-The initial SQLite profile store is migration sequence `1`; sequence `2` adds
-the credential reconciliation journal. New databases apply the complete bundled
-chain. Databases from published releases apply each pending migration in
-ascending order before a profile-dependent command continues. An unreleased
-database shape receives no compatibility path: every non-empty database without
-migration history fails closed. There is no YAML migration path and no
-user-facing migration command or script.
+`schema_migrations` is authoritative, and `PRAGMA user_version` mirrors its
+highest sequence. Gaps, duplicates, changed checksums, unknown or newer
+migrations, and pragma disagreement fail closed; corrections roll forward as new
+sequences. A database without history, or any former YAML store, is rejected:
+no unreleased format gets a compatibility path.
 
-`schema_migrations` is authoritative and `PRAGMA user_version` mirrors its
-highest applied sequence. Missing or duplicate sequences, an altered checksum,
-an unknown applied migration, a newer sequence, or disagreement with the pragma
-fails closed. Applied migrations are never edited or renumbered; corrections
-roll forward through a new sequence.
+Pending work takes the cross-process maintenance lock, writes a private backup
+named `profiles.db.pre-migration-<UTC timestamp>-<unique id>` through SQLite's
+online backup API (so no earlier recovery point is overwritten), and applies the
+chain in one bounded transaction that updates schema, history, and pragma
+together. Backups are recovery snapshots; restoring one is a manual operation.
+A normal `doctor` opens storage read-only and only reports pending work.
 
-Pending work acquires the cross-process maintenance lock and creates one private
-consistent backup before applying the pending chain. Its name is
-`profiles.db.pre-migration-<UTC timestamp>-<unique id>`, so a later migration
-never overwrites an earlier recovery point. Schema changes run inside a bounded
-`BEGIN IMMEDIATE` transaction. Kantrip updates the history and pragma only with
-the schema change, validates the result before commit, retains every backup, and
-never downgrades a database.
+### Profile mutations
 
-A normal `doctor` run opens storage read-only and reports pending work without
-creating files. `doctor --repair` is the single explicit operational workflow:
-under one lock it migrates, validates, reconciles exact credential-journal
-records, removes validated stale sessions, and diagnoses the resulting state.
-It never guesses how to repair corrupt, ambiguous, active, recent, or externally
-owned objects.
+SQLite and the vault cannot share one atomic transaction, so every
+secret-bearing change goes through the engine in `credential_mutations.py`,
+built on immutable references `profile/<profile-uuid>/<credential-uuid>/<field>`.
+The credential UUID changes on every replacement, so staging never overwrites
+the value the current profile uses:
 
-## Connection-only configuration
+1. Journal cleanup intent in `credential_reconciliation` before a vault write
+   can create an orphan. The journal never stores a value and never asks the
+   vault to enumerate entries.
+2. Stage new secrets under new references and read each back.
+3. Switch the profile document and its journal record in one SQLite
+   transaction, with an expected revision so a concurrent change is rejected.
+4. Delete superseded secrets only after the switch; failed deletions stay
+   journaled for a later mutation or `doctor --repair`.
 
-Profiles describe connections: endpoints, transport security, server
-verification, client identity, credential acquisition, and authentication
-routing. They exclude producer, consumer, topic, group, serializer, retry,
-cache, telemetry, schema-selection, and other application behavior.
+Each mutation ends in one explicit state: not committed (exit `1`), committed
+with cleanup or verification pending (`3`), or unknown (`4`). An exception is
+never taken as proof of rollback: if `COMMIT` raises, Kantrip keeps the lock,
+reopens the database read-only, and compares the exact name, UUID, revision,
+document, and owned journal records. A mutation reconciles only the records it
+created, after validating the whole journal against live references; older
+debt stays for repair.
 
-Every stored Registry connection names its provider explicitly. The CLI may
-select Confluent as a convenience default, but it persists that choice rather
-than relying on schema normalization or read-time inference.
+`edit` changes only explicit fields and keeps the UUID. Stored authentication
+fields carry over only while the authentication type is unchanged, and a
+Registry provider change keeps authentication only when the new provider
+supports it. Prompts and file reads happen before the lock. Backups hold
+references, not credentials, so restoring SQLite alone cannot restore retired
+vault values.
 
-Profiles reject arbitrary property maps. Current renderers produce Java and
-librdkafka connection configuration and provider-specific HTTP Registry URL
-settings. Registry TLS/authentication and Kafka/Registry OAuth render into
-client-specific private configuration. Property-file and Strimzi Secret
-import are planned for v0.2.
+## Credential vault
 
-## Profile lifecycle and input sources
+![Kantrip credential vault access](images/credential-vault.svg)
 
-Profile mutations share validation, cross-store locking, secret staging,
-transactional database updates, and reconciliation. `edit` may add or update a
-Registry; only an explicit removal deletes it. Authentication mutation helpers
-preserve omitted secrets and replace immutable references. The CLI exposes them
-through typed options; stored fields carry over only while the authentication
-type is unchanged, and a Registry provider change keeps authentication only when
-the new provider supports it. Secret values are never displayed or prefilled.
+Each platform keeps credentials in one dedicated vault named `kantrip`, which
+does not unlock with the login session. The operating system owns the vault
+password; Kantrip never reads, stores, or passes it. Both vaults implement the
+same `SecretStore` protocol, store each item under service `kantrip` and account
+(or attribute) equal to its reference, read the vault state before any item
+access without prompting, and open the vault only when a command needs a
+credential. Labels read `Kantrip kafka/password (profile UUID)`; labels and
+accounts never carry a secret.
 
-The reusable cross-store transaction engine lives in
-`kantrip/credential_mutations.py`. Authentication-specific profile fields and
-commands build on this engine; they do not implement their own keyring or
-journal sequence.
+A missing vault cannot be told from missing items by item reads, which is why
+the state is checked first, and a replaced vault reads as missing secrets.
+`delete` from a missing vault succeeds, because no secret outlives its vault.
+A refused, cancelled, or unanswered prompt is final for the process, so a
+command that resolves several credentials asks at most once.
 
-The profile layer is split by responsibility:
+### macOS keychain vault
 
-| Module | Responsibility | I/O |
-| --- | --- | --- |
-| `profiles.py` | `add`, `edit`, `remove` orchestration and coherent snapshot resolution; owns lock and transaction sequencing | Through the modules below |
-| `profile_storage.py` | Database path, private file and lock checks, connections, migration access, schema validation, loading | SQLite and filesystem |
-| `profile_auth.py` | Typed authentication input, Kafka and Registry authentication plans, stored authentication documents | None |
-| `profile_documents.py` | New profile documents and requested edits applied to a copy | None |
-| `mutation_outcomes.py` | Commit evidence and lost-acknowledgement classification | Read-only SQLite reopen |
-| `credential_mutations.py` | Cross-store staging, commit, and exact retirement engine | SQLite and credential store |
+The vault is `~/Library/Keychains/kantrip.keychain-db`, the same
+dedicated-keychain model as aws-vault. `security create-keychain` and
+`security unlock-keychain` prompt on the controlling terminal (`/dev/tty`).
 
-Other modules call storage functions through the module (`storage.connect(...)`)
-rather than importing them, so fault-injection tests replace a seam in one place.
+- **Items go through `/usr/bin/security` only.** macOS stamps each item with a
+  partition from the creating binary's signature. Homebrew and uv Pythons are
+  ad-hoc signed, so items created in-process would prompt after every Python
+  upgrade; items written by `security` get the stable `apple-tool:` partition.
+  Writes send `add-generic-password -U … -X <hex>` lines to `security -i` on
+  stdin, so values never reach argv; reads parse `find-generic-password -g`.
+- **Values are split.** `security -i` truncates lines at about 4,094 bytes and
+  runs the rest as new commands, so values are split below a 4,000-byte line
+  budget. The head item holds the first piece and the piece count; pieces are
+  `reference#1`, `reference#2`, and so on. One batch writes pieces first and the
+  head last, and any unexpected stderr fails the write, because `security -i`
+  exits 0 even when a command fails.
+- **State reads never prompt.** `SecKeychainGetStatus` (through ctypes) neither
+  prompts nor resets the idle timer. Reading a locked vault with `security`
+  would open a password window, so Kantrip never does it.
+- **Creation** refuses an empty password (deleting the new vault), sets
+  `-l -u -t 900` because new keychains lock after five minutes, and adds the
+  vault to the search list so Keychain Access shows it.
+- **Unlocking** allows three attempts (exit status 51 is a wrong password);
+  Ctrl-C leaves the vault locked and reports a cancellation.
 
-SQLite and the credential store cannot participate in one atomic transaction.
-Kantrip therefore stores non-secret exact-delete records in
-`credential_reconciliation` and uses immutable secret references to make
-partial failures recoverable. The journal never stores a value and never asks a
-backend to enumerate credentials:
+File keychains and `SecKeychain*` are deprecated but work on macOS 27; the macOS
+CI job would show their removal.
 
-- Commit cleanup intent before a credential-store write can create an orphan.
-- Stage new secrets under new references.
-- Atomically switch the profile document and advance its journal record in one
-  SQLite transaction.
-- On a failed database update, retain the old profile and durable cleanup intent
-  for every possibly written staged secret.
-- Delete superseded secrets only after the profile switch, retaining failed
-  cleanup work for idempotent retry by a mutation or `doctor --repair`; a normal
-  `doctor` run only reports the pending record.
+### Linux Secret Service vault
 
-Each mutation tracks one explicit durable state: not committed, committed, or
-unknown. If `COMMIT` raises, Kantrip rolls back any still-open transaction and,
-while retaining the maintenance lock, opens an independent read-only connection
-to compare the exact profile name, UUID, revision, canonical document, and
-operation-owned journal records. The same committed state governs later reload,
-connection-close, file-hardening, and CLI-output failures. Cleanup after a
-successful mutation processes only records created by that operation, while
-first validating the complete journal against all live references; older debt
-remains for `doctor --repair` and cannot change the new mutation's result.
+The vault is one Secret Service collection labeled `kantrip`, reached over D-Bus
+with `secretstorage`. Kantrip identifies the provider from the process that owns
+`org.freedesktop.secrets` and accepts only GNOME Keyring and KDE Wallet
+(`ksecretd`, `kwalletd5`, `kwalletd6`). It was measured on GNOME Keyring 50
+(Ubuntu 26.04), KDE Frameworks 6.24 (Kubuntu 26.04), and GNOME Keyring 46 under
+COSMIC (Pop!_OS 24.04).
 
-Mutation exit statuses distinguish definitely uncommitted (`1`), committed with
-cleanup or post-commit verification pending (`3`), and indeterminate commit
-outcomes (`4`). An exception is not treated as proof of rollback. Database
-backups contain references rather than credentials, so independently restoring
-SQLite cannot restore retired keyring values and is outside the supported
-recovery model.
+- **Lookup never prompts.** GNOME accepts only the `default` alias and derives
+  object paths from keyring file names, so the vault is
+  `/org/freedesktop/secrets/collection/kantrip` (from `kantrip.keyring`) with the
+  label `kantrip`; Kantrip refuses to guess between same-label keyrings. KDE is
+  found by the alias `kantrip` only, because a deleted wallet leaves a
+  same-label ghost until `ksecretd` restarts, and only while its
+  `kwalletd/kantrip.kwl` file exists: KDE keeps listing a wallet whose file is
+  gone, and unlocking it would start the create wizard and then read stale
+  items as empty secrets. Every read rejects empty secrets.
+- **Values are not split.** D-Bus has no line limit; 1 MB values round-trip.
+- **Windows are bounded.** The provider shows a window only when its prompt
+  runs. An unanswered window blocks forever and stays on screen, so Kantrip
+  waits at most 60 seconds, then calls `Prompt.Dismiss()`; Ctrl-C dismisses it
+  too. A prompt dismissed within a second was never shown (no display over SSH,
+  a locked GNOME screen), and Kantrip asks for an unlocked desktop session.
+- **No terminal, no window.** Without a controlling terminal, Kantrip still calls
+  `Unlock`: if no prompt is needed, the vault is used; otherwise the unshown
+  prompt is dismissed and the command fails at once.
+- **Opened without a window.** `Unlock` needs no prompt when the vault has an
+  empty password or GNOME's "Automatically unlock this keyring whenever I'm
+  logged in" stored its password in the login keyring. Kantrip warns when it
+  sees this while unlocking anyway, and never unlocks just to probe. GNOME
+  stores an empty-password keyring in plain text, so doctor detects that from
+  the file header, and creation removes such a keyring.
+- **KDE first use.** While `kwalletrc` lacks `First Use=false`, creating or
+  opening any wallet makes it the default. Kantrip reads the `default` alias
+  before each create or unlock and restores it afterwards.
+- **The desktop owns the lock policy.** GNOME Keyring and COSMIC lock only at
+  logout; KDE at logout or after its optional idle close. A Kantrip-scheduled
+  lock is [#100](https://github.com/sauljabin/kantrip/issues/100). KDE's `Lock`
+  is not idempotent, so any lock checks the state first.
 
-Each profile row has a stable UUID, a unique name, and a monotonically
-increasing revision. The revision is a generation and concurrency token, not
-retained history. The internal mutation API accepts an expected revision and
-rejects a concurrent change instead of overwriting it. Prompt and file
-collection occur before the maintenance lock. External file import is planned
-for v0.2 and will feed this same mutation path.
+### Vault errors and diagnostics
 
-## Session resolution and rendering
+Vault problems raise `VaultError`, a `SecretStoreError` whose message is user
+guidance. Kafka and Registry resolution, credential staging, and doctor show it
+instead of a generic credential error, and doctor reports it once rather than
+per field.
 
-The shared resolver builds one authenticated in-memory model from a single
-profile generation. The session path renders that model without independent
-keyring queries from adapters.
+Doctor reports the vault location and state without unlocking it. A missing
+vault is normal until a profile stores a credential, and an error afterwards.
+On macOS, doctor also reads the lock policy of an unlocked vault
+(`SecKeychainCopySettings` with interaction disabled) and warns about an empty
+password or a missing vault still in the search list, which `--repair`
+removes. On Linux, doctor warns when the vault is the default collection, has an
+empty password, or is a KDE wallet listed without its file; warnings learned
+while opening the vault follow the profile checks. `--repair` never moves the
+default collection, because it cannot know which one the user wants.
 
-`session.py` runs a session in order: write the private Kafka and Registry key
-and CA files (mode 0600), render every client configuration file, build the
-scrubbed child environment, then prepare the direct command or the shell shims
-through the adapters. Generated properties, custom CA bundles, adapter files,
-and shims live only in the private session directory. A selected Kafka CA bundle is validated and copied into the profile as public material, then
-materialized privately for Java and librdkafka clients. Secrets do not appear
-in child arguments, diagnostics, snapshots, or normal output.
+Prompts run inside the maintenance lock, so another Kantrip command waits the
+usual five seconds and then reports that maintenance is busy; the Linux
+60-second timeout bounds the wait. A macOS vault that times out between the
+state check and an item read can still open a password window; the interval is
+milliseconds.
 
-Custom CA profiles use native PEM properties in librdkafka. Java adapters first
-verify Apache Kafka 2.7+ or Confluent Platform 6.1+, the releases that introduced
-PEM trust-store support. Older or unidentifiable Java clients fail before the
-Kafka operation instead of attempting an incompatible or weaker configuration.
+## Sessions and rendering
 
-Kafka OAuth acquisition and refresh are delegated to the verified Apache Java
-callback or librdkafka OIDC support. Registry OAuth remains native to three
-distinct implementations: the Confluent Java client used by all Registry
-console wrappers, the Confluent Python `SchemaRegistryClient` used by Kaskade,
-and Kaskade's native `ApicurioClient`. Acceptance repeats expiry and revocation
-once per implementation and trust path, not once per equivalent shell or data
-format. A bounded Registry ping obtains one in-memory client-credentials token
-and discards it after the provider probe; it is initial acquisition evidence,
-not native refresh evidence.
+`session.py` writes the private Kafka and Registry key and CA files (mode
+`0600`), renders each client's configuration, builds the scrubbed child
+environment, and prepares the direct command or shell shims through the
+adapters. All generated material stays in the private session directory.
 
-Kaskade's native Apicurio mapping uses the official shared
-`apicurio.registry.tls.certificates` bundle for Registry and token endpoint, but
-keeps separate HTTP/TLS contexts so Registry client identity never reaches the
-IdP. Kaskade 5.0.1, the first stable release that implements the official
-scope property, is Kaskade's minimum version, so no profile needs a separate
-check.
-Confluent Java likewise uses one official `ssl.*` trust configuration for both
-destinations. Distinct CA profiles are rejected for those shared contracts.
-
-Confluent Python 2.15.1 applies `ssl.ca.location` only to Registry while its
-Authlib token client uses HTTPX environment trust. For Kaskade Registry OAuth,
-Kantrip supplies `SSL_CERT_FILE` only to that direct child or shim process. The
-mode-0600 session bundle contains platform default roots plus the profile IdP CA;
-inherited `SSL_CERT_FILE` and `SSL_CERT_DIR` cannot override it. This variable is
-process-scoped, not hostname-scoped, so every environment-aware HTTP client in
-that Kaskade process sees the same bundle. The parent shell, unrelated clients,
-system stores, and later sessions remain unchanged.
+- **Custom CAs.** A selected CA bundle is validated and copied into the profile
+  as public material, then materialized per session. librdkafka uses native PEM
+  properties; Java adapters first verify Apache Kafka 2.7+ or Confluent Platform
+  6.1+, which introduced PEM trust stores, and fail otherwise.
+- **Kafka OAuth** acquisition and refresh are delegated to the Apache Java
+  callback and librdkafka's OIDC support.
+- **Registry OAuth** stays native to three implementations: Confluent Java (all
+  Registry consoles), Confluent Python (Kaskade), and Kaskade's `ApicurioClient`.
+  Acceptance tests expiry and revocation once per implementation and trust path.
+  A Registry ping acquires one in-memory token and discards it: initial
+  acquisition, not refresh, evidence.
+- **Shared trust contracts.** Apicurio's `apicurio.registry.tls.certificates` and
+  Confluent Java's `ssl.*` each trust Registry and IdP with one bundle, so
+  profiles with distinct CAs are rejected for them. Kaskade 5.0.1, its minimum
+  version, keeps separate HTTP/TLS contexts so Registry client identity never
+  reaches the IdP.
+- **Confluent Python token trust.** Its token client ignores `ssl.ca.location`
+  and uses HTTPX environment trust, so for a Kaskade Registry OAuth child only,
+  Kantrip sets `SSL_CERT_FILE` to a private bundle of the platform roots plus the
+  IdP CA. The variable is process-wide, so every HTTP client in that Kaskade
+  process sees it; the parent shell and system trust stay unchanged.
 
 ## Client adapters
 
-An adapter recognizes the executable, rejects connection overrides, and injects
-native configuration. Each client family is one `ClientAdapter` descriptor: its
-executables, its argument check, direct-command preparation, shim renderer, and
-missing-command hint, its capability matrix (Kafka authentication and Registry
-providers), and its installed-version checks. Direct commands, shell shims, the shim-side
-argument guard, and `doctor` dispatch through the descriptor instead of
-branching on client names, so a new client adds a descriptor and its own
-functions. Both paths invoke the same argument guard before launching the native
-client; shell quoting and process supervision remain separate. Direct commands,
-shims, and `doctor` also share one capability decision. Every descriptor
-declares a `minimum_version`: a gate that names the version option, reads its
-output into a `ClientVersion`, and admits the oldest release whose native
-contract the mapping follows. `ReleaseGate` serves kcat, Kaskade, kaf, and kcl,
-and it rejects any suffixed development or pre-release build. `JavaReleaseGate`
-tells Apache Kafka (majors 2 to 4) from Confluent Platform (majors 5 to 8),
-accepts Confluent's `-ccs`/`-ce` release suffixes, and applies the Schema
-Registry consoles' own floor. The descriptor's `feature_checks` then apply the
-profile's needs to that same release: Java PEM trust (Kafka 2.7 / Confluent
-6.1), Java OAuth (Kafka 4.1 / Confluent 8.1), and kcat's linked librdkafka for
-an OAuth token-endpoint CA (2.11.0). A `VersionProbe` runs each client's
-version option once per launch, and once per Java install directory. Shim
-creation and `doctor` prefetch every installed client in parallel, so a session
-waits for the slowest probe, not the sum of all probes.
+Each client family is one `ClientAdapter` descriptor: its executables, argument
+check, direct-command preparation, shim renderer, missing-command hint,
+capability matrix (Kafka authentication and Registry providers), and version
+checks. Direct commands, shell shims, the shim-side guard, and doctor all
+dispatch through the descriptor, so a new client adds a descriptor instead of
+name branches, and both launch paths apply the same argument policy.
 
-| Module | Responsibility | I/O |
+- **Version floors.** Each descriptor has a `minimum_version` gate. `ReleaseGate`
+  serves kcat, Kaskade, kaf, and kcl and rejects development builds;
+  `JavaReleaseGate` tells Apache Kafka (majors 2–4) from Confluent Platform
+  (5–8). `feature_checks` add the profile's needs: Java PEM trust, Java OAuth
+  (Kafka 4.1 / Confluent 8.1), and kcat's librdkafka for an OAuth CA (2.11.0).
+  A `VersionProbe` runs each client's version option once, in parallel for shims
+  and doctor.
+- **Native injection.** Java tools get `--bootstrap-server` and their config-file
+  option (Registry consoles also `schema.registry.url`); kcat reads
+  `KCAT_CONFIG` and gets `-r` only for Avro; Kaskade gets `--config-file`; kaf gets
+  `--config` with `HOME=/dev/null`, because it saves its configuration to
+  `~/.kaf/config`; kcl reads a private TOML file through `KCL_CONFIG_PATH` with
+  inherited `KCL_*` variables removed, and its `${` is escaped as `$${`. kaf and
+  kcl can't decrypt PEM keys, so an encrypted mTLS key gets a decrypted private
+  session copy.
+
+| Client family | Rejected (the profile owns them) | Kept (runtime choices) |
 | --- | --- | --- |
-| `adapters.py` | `ClientAdapter` descriptors and lookup; direct-command, shim, and capability dispatch; installed-version probes | Runs version probes in parallel; creates the shim directory |
-| `adapter_policy.py` | Executable names, the per-command Java option table, native argument grammars (kcat getopt clusters, Java and Kaskade long options, kaf and kcl pflag options), direct-command injection, per-client Registry compatibility | None |
-| `adapter_shims.py` | POSIX shim rendering and quoting | Writes mode-0700 shims |
-| `_adapter_guard.py` | Shim-side entry point that runs the descriptor's argument check | None |
+| Apache and Confluent Java tools | Bootstrap, config files, alternate connection files, client-property overrides | `group.id`; topic, group, ACL, and broker operations |
+| Confluent Registry consoles | Kafka and Registry files and URLs, alternate formatter or reader files, profile-owned format properties | `group.id`, presentation properties |
+| `kcat`/`kafkacat` | `-b`, `-F`, `-r`, arbitrary `-X` | `-X group.id`, `-X broker.address.family` |
+| Kaskade | Bootstrap, Registry, config-file options, arbitrary `--kafka` | `--kafka group.id`, `--kafka broker.address.family` |
+| kaf | `--config`, `-b`, `-c`, `--schema-registry`, `kaf config` | Resource, format, and output options |
+| kcl | `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` keys, `KCL_*`, `kcl profile` | `-X` timeouts, `help`, `list`; resource, format, and output options |
 
-Configuration reaches each client natively: Java tools receive
-`--bootstrap-server` and their config-file option (Registry consoles also a
-formatter/reader config file and `schema.registry.url` property); kcat reads
-`KCAT_CONFIG` and receives `-r` only for Avro decoding; Kaskade `admin` and
-`consumer` receive `--config-file`; kaf receives `--config` and runs with
-`HOME=/dev/null`, because it saves its loaded configuration to `~/.kaf/config`;
-kcl reads a private TOML file through `KCL_CONFIG_PATH` after every inherited
-`KCL_*` variable is removed, because kcl reads each configuration key from the
-environment. A descriptor's `prepare_environment` makes such child-environment
-changes for direct commands, and its shim makes them in shells. kcl expands
-`${NAME}` in every configuration string, so its renderer writes each `${` as
-kcl's literal `$${`. kaf and kcl cannot decrypt PEM keys, so an encrypted mTLS
-key also gets one decrypted private session copy per service. Two session steps
-remain client-specific in `session.py`: kcat's `-F` rejection before secrets are
-resolved, and the Kaskade Registry-OAuth `SSL_CERT_FILE` described above.
+These are per-client grammars, not a passthrough policy: a new option is
+admitted only after checking the released tool's semantics and adding direct and
+Bash/Zsh/Fish regressions. An arbitrary executable the user runs is trusted with
+its child environment and not confined by adapters.
 
-| Client family | Profile-owned native inputs | Runtime inputs retained |
-| --- | --- | --- |
-| Apache/Confluent Java consoles and admin tools | Bootstrap and config files, alternate connection files, and client-property overrides | Consumer `group.id`; topic, group, ACL, and broker resource operations such as `kafka-configs --add-config` |
-| Confluent Registry consoles | Kafka and Registry files/URLs, alternate command/formatter/reader files, and profile-owned format properties | Consumer `group.id` and presentation properties that cannot replace a connection |
-| `kcat`/`kafkacat` | `-b`, `-F`, `-r`, and arbitrary `-X` configuration | `-X group.id` and `-X broker.address.family` only |
-| Kaskade | Bootstrap/Registry/config-file options and arbitrary `--kafka` properties | `--kafka group.id` and `--kafka broker.address.family` only |
-| kaf | `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands | Resource, format, and output options |
-| kcl | `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` configuration keys, `KCL_*` variables, and `kcl profile` commands | `-X` timeouts, `help`, and `list`; resource, format, and output options |
+Interactive Bash, Zsh, and Fish sessions keep the user's startup files and
+history, neutralize aliases, functions, and abbreviations that would bypass an
+adapter, and never make persistent changes.
 
-These are native-client grammars, not a generic passthrough policy. A future
-client option is admitted only after checking the released tool's semantics,
-adding direct and Bash/Zsh/Fish regressions, and showing that it cannot select
-another profile connection or disclose private configuration. Do not pre-create
-adapters for clients Kantrip does not currently support. A user-selected
-arbitrary executable remains trusted with its child environment and is not
-confined by these adapter guards.
-
-Current adapters cover Apache and Confluent Kafka commands, Confluent Schema
-Registry consoles, `kcat`/`kafkacat`, Kaskade, kaf, and kcl. The exact version and feature
-matrix lives in [COMPATIBILITY.md](COMPATIBILITY.md).
-
-Interactive Bash, Zsh, and Fish sessions use temporary shims. The shell keeps
-its startup files and history, while Kantrip neutralizes aliases, functions,
-and abbreviations that would bypass an adapter. No persistent shell or Kafka
-installation changes are made.
-
-## Process supervision and cleanup
-
-### Execution sequence
+## Process supervision
 
 ![Kantrip exec sequence](images/exec-sequence.svg)
 
-The profile and its credentials are validated before session files exist. Only
-the selected child receives rendered connection material, and the runtime is
-removed after supervision ends.
-
-### Session lifecycle
-
 ![Kantrip supervised session lifecycle](images/session-lifecycle.svg)
 
-Before starting a child, `exec` validates the request, runs the bounded janitor,
-creates and locks a private runtime session, renders configuration, and prepares
-the adapter. The marker changes from `preparing` to `running` only after
-preparation succeeds. Every exit path closes the lock and removes the owned
-session when possible.
+The profile and its credentials are validated before any session file exists.
+`exec` then runs the bounded janitor, creates and locks a private runtime
+session (marker `preparing`, then `running`), renders configuration, and starts
+the child. Every exit path releases the lock and removes the owned session when
+possible.
 
 ### Process and terminal boundary
 
-Direct commands run in a new POSIX session and process group, allowing Kantrip
-to signal descendants that remain within the managed boundary. Interactive
-Bash, Zsh, and Fish shells run in a PTY-owned child session; Kantrip bridges I/O
-and window-size changes while the PTY preserves job control.
+Direct commands run in a new POSIX session and process group, so Kantrip can
+signal their managed descendants. Interactive shells run in a PTY-owned child
+session; Kantrip bridges I/O and window size while the PTY keeps job control.
+Kantrip forwards SIGINT, SIGTERM, and SIGHUP; a second signal or five seconds
+send SIGKILL. Exit codes are preserved, and signal `N` maps to `128 + N`.
+Afterwards Kantrip restores signal handlers, terminal attributes, and foreground
+ownership; a supervisor SIGKILL or power loss can prevent that and leave the
+session for recovery.
 
-The supervisor forwards SIGINT, SIGTERM, and SIGHUP. The first signal starts a
-five-second grace period; another signal or expiration sends SIGKILL. Normal
-exit codes are preserved and signal `N` maps to `128 + N`.
-
-When control returns to Kantrip, it restores signal handlers, terminal
-attributes, and foreground ownership. A supervisor SIGKILL, host failure, or
-power loss can prevent restoration and leave the runtime session for recovery.
-
-The child starts from the parent environment after removing `KAFKA_*`,
+The child starts from the parent environment without `KAFKA_*`,
 `SCHEMA_REGISTRY_*`, `APICURIO_*`, `KANTRIP_SANDBOX_*`, and the four JVM option
-injection variables. Kantrip then injects only the selected snapshot's public
-values and private paths. Bash, Zsh, and Fish repeat this cleanup after user
-startup files and restore the owned environment and shims. The caller
-environment is unchanged.
+variables, then receives only the snapshot's public values and private paths.
+Shells repeat this after the user's startup files. The caller's environment is
+never changed.
 
-### Runtime identity and liveness
+### Runtime sessions and recovery
 
-Kantrip uses `$XDG_RUNTIME_DIR/kantrip/sessions` when the base directory is
-absolute, real, user-owned, and mode `0700`; otherwise it uses
-`<system-temp>/kantrip-<uid>/sessions`. An existing unsafe managed root blocks
-execution.
-
-Managed directories use mode `0700`. Each direct child is named
-`session-<32-lowercase-hex-id>` and contains owner-only connection material,
-`session.lock`, and `session.json`. The marker contains the session ID, owner
-UID, supervisor PID, creation time, lifecycle state, profile UUID, and captured
-profile revision. Generated files remain immutable snapshots for that session.
-
-Kantrip holds an exclusive `fcntl.flock` for the session lifetime. The kernel
-lock, not the recorded PID, establishes liveness. A crash releases the lock even
-when it leaves the directory behind.
-
-### Recovery
+Sessions live in `$XDG_RUNTIME_DIR/kantrip/sessions` when that base is
+absolute, real, user-owned, and `0700`, otherwise in
+`<system-temp>/kantrip-<uid>/sessions`; an unsafe existing root blocks
+execution. Each session is `session-<32 hex>` with owner-only material,
+`session.lock`, and `session.json` (session ID, owner UID, supervisor PID,
+creation time, state, profile UUID, and revision). An exclusive `fcntl.flock`,
+not the PID, proves liveness, and a crash releases it.
 
 ![Kantrip session cleanup decision](images/session-cleanup-decision.svg)
 
-Runtime entries are classified as follows:
-
-| State | Meaning | Cleanup action |
+| State | Meaning | Cleanup |
 | --- | --- | --- |
 | `active` | Valid and locked | Keep |
-| `recent` | Valid, unlocked, younger than five minutes | Keep |
-| `stale` | Valid, unlocked, at least five minutes old | Eligible |
-| `removed` | Stale and deleted | None |
+| `recent` | Valid, unlocked, under five minutes old | Keep |
+| `stale` | Valid, unlocked, five minutes or older | Eligible |
 | `invalid` | Failed structural or security validation | Report, never delete |
-| `failed` | Safe candidate could not be deleted | Report |
+| `failed` | A safe candidate could not be deleted | Report |
 
-The lock is authoritative; age only protects a newly unlocked or partially
-initialized session from immediate deletion. Invalid entries remain untouched.
+The age only protects a session that just unlocked or is still initializing. The
+automatic janitor scans at most 256 entries before `exec`; doctor previews the
+classification; `doctor --repair` removes every valid stale session and returns
+nonzero for unsafe roots, invalid entries, incomplete scans, or failed deletions.
+Deletion is descriptor-relative and revalidates name, owner, modes, marker,
+lock, age, contents, and inode, rejecting symlinks and path replacement. Nested
+sessions and processes that escape through `setsid` or daemonization are
+unsupported.
 
-The automatic janitor scans at most 256 direct entries before `exec`. A normal
-`doctor` run previews a bounded classification and reports truncation;
-`doctor --repair` removes every valid stale session it can safely process.
-Repair returns nonzero for unsafe roots, invalid entries, incomplete scans,
-deletion failures, or any other remaining error. Active and recent sessions are
-not errors.
+## Diagnostics
 
-Deletion is descriptor-relative. Before removing a direct child, Kantrip
-validates its name, owner, modes, marker, lock, age, contents, and inode; it
-rejects symlinks and path replacement. The same lock prevents concurrent
-cleaners from deleting an active session.
+`doctor` checks the profile database and migrations, the credential vault,
+every referenced credential, certificate and key validity and expiry,
+reconciliation, runtime sessions, and installed clients, globally or for one
+profile. It is read-only; `--repair` runs one non-interactive sequence under one
+lock: migrate, validate, reconcile exact journal entries, clean stale sessions,
+repair the macOS search list, and diagnose again. It never guesses how to fix
+corrupt, ambiguous, active, recent, or foreign state.
 
-The doctor scanner treats active sessions as valid, recent or stale entries as
-warnings, and unsafe state as errors. Runtime paths appear only with
-`--verbose`.
+Kafka `ping` polls librdkafka's statistics and error callbacks until an
+addressable broker reaches `UP` after the TLS and SASL exchange, without topic,
+group, or cluster APIs. Plaintext proves reachability, TLS proves server
+identity, and SASL or mTLS prove the configured exchange; none proves
+authorization. Registry ping reads Confluent-compatible `/subjects?limit=1` or
+Apicurio v3 `/search/versions?limit=1`, validates the response shape, and, for
+authenticated profiles, requires the same anonymous request to fail. It proves
+that listing is allowed, not access to a schema or write permission.
 
-Nested sessions and processes that escape through `setsid` or daemonization are
-unsupported. Kantrip exposes no persistent background-session API.
+Results go to stdout and diagnostics to stderr. Sensitive values are classified
+and redacted before presentation, and color never carries meaning.
 
-## Sandbox verification topology
+## Verification
 
-The local laboratory uses one Kind cluster with one operator-managed Strimzi
-Kafka cluster and one disposable persistent node pool. The cluster exposes
-plaintext, verified TLS, SCRAM-SHA-512, mTLS, OAuth, PLAIN over TLS, and
-SCRAM-SHA-256 over TLS on loopback ports 9092 through 9098. Registry processes
-and provisioning use a separate internal listener on port 9099 with TLS and
-SCRAM-SHA-512. `StandardAuthorizer` applies to the whole broker;
+Offline unit tests replace every operating-system layer with fakes. Acceptance
+runs against real infrastructure with the candidate wheel and pinned released
+clients, and distinguishes setup failures (missing tools, readiness, a missing
+or locked vault) from product failures. It never creates or removes the
+caller's sandbox.
+
+**Sandbox.** One Kind cluster runs one Strimzi Kafka cluster on a disposable
+persistent volume, with plaintext, verified TLS, SCRAM-SHA-512, mTLS, OAuth,
+PLAIN over TLS, and SCRAM-SHA-256 over TLS on loopback ports 9092–9098, plus an
+internal TLS/SCRAM-SHA-512 listener (9099) for Registry services and
+provisioning. `StandardAuthorizer` applies to the whole broker, and
 `sandbox-admin` is its only superuser.
 
-PLAIN identities come from the private runtime-generated
-`kafka-custom-users` Secret mounted through Kafka's file configuration
-provider. An idempotent in-cluster Job authenticates to the internal listener
-as `sandbox-admin` and provisions both SCRAM-SHA-256 credentials. It writes the
-credential update to a mode-restricted temporary properties file, passes only
-that path to `kafka-configs.sh --add-config-file`, and removes the file on exit;
-the password does not enter the container argument vector. There is no
-unauthenticated provisioning listener.
+- The Strimzi User Operator owns ACLs for authenticated clients, the OAuth
+  account, and the Registry identities; no-ACL twins prove that ping does not
+  imply resource authorization.
+- An idempotent in-cluster Job, authenticated as `sandbox-admin`, provisions
+  both SCRAM-SHA-256 identities from mounted files (the password never enters
+  argv) and owns the `ANONYMOUS` smoke ACL, limited to `kantrip-smoke-`
+  prefixes. The User Operator ignores these Job-owned principals.
+- Data and credentials survive broker restarts and disappear with the Kind
+  cluster. Both Apicurio variants use KafkaSQL with isolated topics and infinite
+  retention.
 
-The Strimzi User Operator owns ACLs for its authenticated clients, the OAuth
-service account, and the five Registry Kafka identities. PLAIN and OAuth
-principals also have unused SCRAM-SHA-512 `KafkaUser` credentials so the
-operator can reconcile their real ACL principals; their tested listeners still
-use their named mechanisms. The two SCRAM-SHA-256 identities are excluded from
-User Operator reconciliation, because the Job owns their 256-only credentials
-and the allowed identity's `kantrip-auth-` ACLs. Registry
-identities receive only their exact topic and consumer-group permissions.
-Allowed client fixtures receive the `kantrip-auth-` prefix, while matching
-authenticated no-ACL identities prove that ping does not imply resource
-authorization.
+**E2E.** OAuth mutations are serialized by a lock. Long-lived Registry consumers
+force schema-cache misses before and after token expiry, confirm new IdP
+issuance, then revoke the client and require token failure. TUI clients are
+read through parsed terminal state.
 
-The provisioning Job is also the sole owner of the unauthenticated smoke ACL:
-`ANONYMOUS` receives only topic and group prefixes `kantrip-smoke-` plus cluster
-Describe. It is never a superuser. The User Operator explicitly ignores these
-Job-owned principals so periodic reconciliation does not erase their credentials
-or rules. The
-OAuth service account is limited to `kantrip-oauth-`. This is a loopback-only,
-disposable test fixture, not a claim of Kubernetes network isolation or a
-production authorization design.
+**Vault CI.** The macOS job creates a disposable vault with a random password,
+stores and removes a split 4096-bit key, and locks the vault to prove that
+commands without a terminal fail at once. A Linux runner can't show GNOME
+Keyring's window, so the Ubuntu jobs pre-create an empty-password `kantrip.keyring`
+before `dbus-run-session` starts `gnome-keyring-daemon`; it loads as the real
+vault and unlocks without a window. Two GNOME behaviors shape that suite: an
+empty-password keyring stores newlines unescaped, so a PEM corrupts it once it
+reloads (tests that relock or move the vault store single-line passwords); and
+the keyring directory is rescanned only when its whole-second mtime changes, so
+the test touches it while waiting.
 
-The cluster retains broker data, ACLs, and SCRAM-SHA-256 credentials across
-broker pod restarts through its PVC and loses them when the Kind cluster is
-destroyed. `sandbox up` rejects the retired `Kafka/auth-kantrip` topology and
-requires an explicit `down` followed by `up`; it never silently deletes the old
-cluster. Acceptance forces a User Operator reconciliation, restarts the broker
-without rerunning provisioning, and performs a second idempotent `sandbox up`.
+## Strengths and limitations
 
-Infrastructure acceptance is deliberately separate from sandbox lifecycle.
-`python -m scripts.tests --suite e2e` validates an already-running laboratory
-and never creates or destroys it. The same suite runs locally and in CI against
-an installed candidate wheel plus separately installed, pinned released clients.
-Setup failures (missing executable, wrong version, workload/certificate/topic
-readiness, host endpoint, private state, or native credential store) are distinct
-from product assertion failures. A private non-blocking lock serializes mutation
-of shared OAuth clients. Long-lived Registry consumers force distinct schema
-cache misses before and after token expiry, confirm new IdP issuance, then revoke
-the client and require token-acquisition failure without decoding the final
-record. TUI clients are observed through parsed terminal state.
-
-The macOS credential vault needs no laboratory, so a separate CI job on a macOS
-runner runs `python -m scripts.tests --suite vault` against the candidate
-wheel. It creates a disposable vault with a random password (`create-keychain
--p`), stores and removes a split 4096-bit private key through the CLI, and
-locks the vault to prove that commands without a terminal fail at once.
-
-## Diagnostics and output
-
-`doctor` checks global or profile-scoped migration/profile state, the credential
-vault, exact credential availability, certificate/key validity and expiry, reconciliation,
-runtime sessions, and installed commands. `doctor PROFILE --sessions` attributes
-validated runtime markers to the immutable profile UUID and captured revision.
-Its default mode is read-only; `--repair` explicitly enables only the
-deterministic maintenance sequence described above.
-
-Kafka `ping` polls librdkafka's public statistics and error callbacks until a
-configured or learned, addressable broker reaches `UP` after the required
-TLS/SASL exchange. It does not call resource or cluster-description APIs.
-Plaintext proves reachability, server-only TLS proves server identity, SASL
-proves its configured exchange, and mTLS proves the configured client exchange;
-none proves application authorization. Registry profiles independently support
-HTTP or verified HTTPS plus Basic, fixed bearer, mTLS, or OAuth credentials.
-Their provider-specific read probe uses Confluent-compatible
-`/subjects?limit=1` or native Apicurio v3 `/search/versions?limit=1`, validates
-the provider response shape, and accepts an empty collection. Authenticated
-profiles repeat that exact URL without credentials to prove the gate rejects
-anonymous access. The result proves only that listing/search is permitted, not
-access to a particular schema or write authorization.
-
-Kantrip writes results to stdout and diagnostics to stderr. Sensitive values
-are classified and redacted before presentation, and color never carries
-meaning.
-
-## Architectural strengths
+Strengths:
 
 - Explicit profile selection prevents ambient context drift.
-- Long-lived secrets remain outside the profile database and are resolved only
-  for the selected execution.
+- Long-lived secrets stay in a dedicated vault and are resolved only for the
+  selected execution.
 - One typed model and native renderers prevent dialect mixing and arbitrary
-  configuration passthrough.
-- Capability checks fail before unsupported authentication can degrade.
-- Immutable references and reconciliation preserve a usable profile across
-  partial credential-store failures.
-- Ordered migrations, immutable checksums, backups, and fail-closed history
-  validation make local schema evolution auditable and recoverable.
-- Process boundaries, liveness locks, and recovery give temporary secrets a
-  bounded lifecycle.
-- Native clients retain protocol handling; Kantrip does not implement Kafka
-  wire protocols.
+  configuration passthrough; capability checks fail before authentication can
+  degrade.
+- Immutable references and reconciliation keep a usable profile across partial
+  vault failures; ordered, checksummed migrations with backups make schema
+  changes auditable.
+- Process boundaries, liveness locks, and recovery bound the life of temporary
+  secrets; native clients keep the Kafka protocol.
 
-## Architectural limitations and tradeoffs
+Limitations:
 
-- Kantrip is a credential-delivery boundary, not a sandbox. The selected client,
-  descendants, and shell startup code can read material supplied to them.
-- Same-user compromise, malicious executables, compromised credential stores,
-  kernel compromise, or administrator access defeat local controls.
-- Secrets temporarily exist in memory and sometimes private files; deletion is
-  not forensic erasure.
-- SQLite and credential-store updates are recoverable, not atomic. Loss of both
-  journal and referenced state can leave undiscoverable orphans.
+- Kantrip delivers credentials; it is not a sandbox. The client, its
+  descendants, and shell startup code can read what they receive, and
+  same-user, kernel, or administrator compromise defeats local controls.
+- Secrets live briefly in memory and private files; deletion is not forensic.
+- SQLite and vault updates are recoverable, not atomic; losing both the journal
+  and the referenced state can leave undiscoverable orphans.
 - The macOS vault depends on deprecated file-keychain APIs and on the
-  `security -i` line limit staying where it is; the macOS CI job would show a
-  change.
-- Schema migrations are forward-only. An older Kantrip binary cannot open a
-  database containing migrations it does not recognize.
-- Compatibility depends on external client interfaces and tested versions.
-- Profiles intentionally exclude application behavior and topic-dependent
-  schema configuration.
-- Linux and macOS are supported. Windows, Amazon MSK IAM, the Strimzi OAuth
-  module, HTTP proxy profiles, Kubernetes discovery, and managed background
-  sessions are outside the supported product boundary.
+  `security -i` line limit.
+- The Linux vault protects credentials only while locked, which by default is
+  only after logout. Its windows need an unlocked graphical session, and CI
+  covers GNOME Keyring only.
+- Migrations are forward-only: an older Kantrip cannot open a newer database.
+- Compatibility depends on external client interfaces and the tested versions.

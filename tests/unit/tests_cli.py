@@ -2099,8 +2099,8 @@ def _no_secret_store() -> Iterator[None]:
         for target in (
             "kantrip.profiles.load_secret_store",
             "kantrip.secret_store.load_secret_store",
-            "keyring.get_keyring",
-            "keyring.get_password",
+            "kantrip.linux_vault.LinuxVault",
+            "kantrip.macos_vault.MacOSVault",
         ):
             stack.enter_context(patch(target, side_effect=forbidden))
         yield

@@ -1,14 +1,15 @@
-"""Store profile secrets only in approved operating-system credential backends."""
+"""Store profile secrets only in the dedicated Kantrip vault of each platform."""
 
 from __future__ import annotations
 
+import os
 import sys
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
-
-import keyring
-from keyring.errors import KeyringLocked, PasswordDeleteError
+from pathlib import Path
+from typing import Literal, Protocol
 
 SERVICE_NAME = "kantrip"
 SECRET_FIELDS = frozenset(
@@ -24,21 +25,12 @@ SECRET_FIELDS = frozenset(
         "registry/tls/private-key-password",
     }
 )
-_APPROVED_LINUX_BACKENDS = frozenset(
-    {
-        "keyring.backends.SecretService.Keyring",
-        "keyring.backends.libsecret.Keyring",
-    }
-)
-
-if TYPE_CHECKING:
-    from kantrip.macos_vault import MacOSVault
 
 VaultState = Literal["missing", "locked", "unlocked"]
 
 
 class SecretStoreError(RuntimeError):
-    """Raised when an approved credential store cannot complete an operation."""
+    """Raised when the credential vault cannot complete an operation."""
 
 
 class SecretNotFoundError(SecretStoreError):
@@ -69,7 +61,7 @@ class SecretStore(Protocol):
 
 @dataclass(frozen=True)
 class SecretStoreInfo:
-    """Non-sensitive identity of one approved credential backend."""
+    """Non-sensitive identity of one platform's credential vault."""
 
     backend: str
     display_name: str
@@ -93,6 +85,21 @@ class VaultStatus:
     warnings: tuple[str, ...]
 
 
+class Vault(SecretStore, Protocol):
+    """The dedicated Kantrip vault of one platform."""
+
+    info: SecretStoreInfo
+
+    def vault_status(self) -> VaultStatus:
+        """Describe the vault without unlocking it or prompting."""
+
+    def unlock_warnings(self) -> tuple[str, ...]:
+        """Return warnings this process learned while opening the vault."""
+
+    def forget_missing_vault(self) -> bool:
+        """Repair what a missing vault left registered; return whether anything changed."""
+
+
 @dataclass(frozen=True)
 class SecretReference:
     """Validated identity encoded by one immutable credential reference."""
@@ -102,88 +109,54 @@ class SecretReference:
     field: str
 
 
-class KeyringSecretStore:
-    """Keyring adapter restricted to native approved backend implementations."""
+class Terminal(Protocol):
+    """The controlling terminal, used only around vault prompts."""
 
-    def __init__(self, backend: object, info: SecretStoreInfo) -> None:
-        self._backend = backend
-        self.info = info
+    fd: int
 
-    def get(self, reference: str) -> str:
-        validate_secret_reference(reference)
-        try:
-            value = self._backend.get_password(SERVICE_NAME, reference)  # type: ignore[attr-defined]
-        except KeyringLocked as error:
-            raise SecretStoreError("credential store is locked") from error
-        except Exception as error:
-            raise SecretStoreError(
-                "credential store could not read the requested secret"
-            ) from error
-        if value is None:
-            raise SecretNotFoundError("credential store entry was not found")
-        if not isinstance(value, str):
-            raise SecretStoreError("credential store returned an invalid secret value")
-        return value
-
-    def set(self, reference: str, value: str) -> None:
-        validate_secret_reference(reference)
-        if not isinstance(value, str) or not value:
-            raise SecretStoreError("secret value must be non-empty text")
-        try:
-            self._backend.set_password(SERVICE_NAME, reference, value)  # type: ignore[attr-defined]
-        except KeyringLocked as error:
-            raise SecretStoreError("credential store is locked") from error
-        except Exception as error:
-            raise SecretStoreError(
-                "credential store could not save the requested secret"
-            ) from error
-
-    def delete(self, reference: str) -> None:
-        validate_secret_reference(reference)
-        try:
-            self._backend.delete_password(SERVICE_NAME, reference)  # type: ignore[attr-defined]
-        except PasswordDeleteError:
-            return
-        except KeyringLocked as error:
-            raise SecretStoreError("credential store is locked") from error
-        except Exception as error:
-            raise SecretStoreError(
-                "credential store could not delete the requested secret"
-            ) from error
-
-    def vault_status(self) -> VaultStatus | None:
-        """Report no dedicated vault: the keyring library uses the default store."""
-        return None
-
-    def forget_missing_vault(self) -> bool:
-        """Report that no vault registration needed repair."""
-        return False
+    def write(self, text: str) -> None:
+        """Show one Kantrip message on the terminal."""
 
 
-def load_secret_store(
-    *,
-    backend: object | None = None,
-    platform_name: str | None = None,
-) -> KeyringSecretStore | MacOSVault:
-    """Load the Kantrip vault on macOS or an approved Secret Service keyring on Linux."""
-    platform_family = _platform_family(platform_name or sys.platform)
-    if platform_family == "darwin":
+class _TerminalDevice:
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
+
+    def write(self, text: str) -> None:
+        os.write(self.fd, text.encode())
+
+
+@contextmanager
+def controlling_terminal() -> Iterator[Terminal | None]:
+    """Yield the controlling terminal, or None in scripts, services, and CI."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        yield None
+        return
+    try:
+        yield _TerminalDevice(fd)
+    finally:
+        os.close(fd)
+
+
+def display_path(path: Path) -> str:
+    """Show a vault path below the home directory with ``~``."""
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
+def load_secret_store(*, platform_name: str | None = None) -> Vault:
+    """Load the dedicated Kantrip vault of this platform."""
+    if _platform_family(platform_name or sys.platform) == "darwin":
         from kantrip.macos_vault import MacOSVault
 
         return MacOSVault()
-    try:
-        selected_backend = keyring.get_keyring() if backend is None else backend
-        identifier = _backend_identifier(selected_backend)
-        priority = selected_backend.priority  # type: ignore[attr-defined]
-    except Exception as error:
-        raise SecretStoreError("credential store backend is unavailable") from error
-    if (
-        type(priority) not in (int, float)
-        or priority < 1
-        or identifier not in _APPROVED_LINUX_BACKENDS
-    ):
-        raise SecretStoreError("configured credential store backend is not approved")
-    return KeyringSecretStore(selected_backend, SecretStoreInfo(identifier, "Secret Service"))
+    from kantrip.linux_vault import LinuxVault
+
+    return LinuxVault()
 
 
 def secret_reference(
@@ -244,24 +217,22 @@ def _platform_family(platform_name: str) -> str:
     raise SecretStoreError("credential storage is not supported on this platform")
 
 
-def _backend_identifier(backend: object) -> str:
-    backend_type = type(backend)
-    return f"{backend_type.__module__}.{backend_type.__qualname__}"
-
-
 __all__ = [
     "SECRET_FIELDS",
     "SERVICE_NAME",
-    "KeyringSecretStore",
     "LockPolicy",
     "SecretNotFoundError",
     "SecretReference",
     "SecretStore",
     "SecretStoreError",
     "SecretStoreInfo",
+    "Terminal",
+    "Vault",
     "VaultError",
     "VaultState",
     "VaultStatus",
+    "controlling_terminal",
+    "display_path",
     "load_secret_store",
     "parse_secret_reference",
     "secret_reference",

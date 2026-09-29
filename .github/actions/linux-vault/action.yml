@@ -1,0 +1,18 @@
+name: Pre-create the disposable Linux Kantrip vault
+description: Write an empty-password GNOME keyring named kantrip before the keyring daemon starts
+runs:
+  using: composite
+  steps:
+    - name: Write the empty-password vault keyring
+      shell: bash
+      run: |
+        set -euo pipefail
+        # A runner has no display for GNOME Keyring's password window, so the
+        # vault cannot be created through the Secret Service. This keyring file
+        # loads as the real vault (its object path comes from the file name) and
+        # unlocks without a window. It keeps values in plain text: CI only.
+        keyrings="${XDG_DATA_HOME:-$HOME/.local/share}/keyrings"
+        install -d -m 0700 "$keyrings"
+        umask 077
+        printf '%s\n' '[keyring]' 'display-name=kantrip' 'ctime=0' 'mtime=0' \
+          'lock-on-idle=false' 'lock-after=false' > "$keyrings/kantrip.keyring"
