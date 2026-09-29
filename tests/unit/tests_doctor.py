@@ -691,7 +691,7 @@ class TestDoctorVault(unittest.TestCase):
         self.assertIn(
             DoctorCheck(
                 "warning",
-                "Credential vault: ~/Library/Keychains/kantrip.keychain-db (not created yet)",
+                "Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)",
                 "Credentials",
             ),
             report.checks,

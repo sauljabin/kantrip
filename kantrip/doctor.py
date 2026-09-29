@@ -240,7 +240,7 @@ def _check_vault(vault_status: Callable[[], VaultStatus | None]) -> list[DoctorC
         return []
     label = f"Credential vault: {status.location}"
     if status.state == "missing":
-        checks = [DoctorCheck("warning", f"{label} (not created yet)")]
+        checks = [DoctorCheck("warning", f"{label} (not found)")]
     else:
         checks = [DoctorCheck("success", f"{label} ({status.state})")]
     if status.lock_policy is not None:

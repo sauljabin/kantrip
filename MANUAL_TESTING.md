@@ -56,8 +56,10 @@ kantrip list
 
 Expect: help lists nine commands; `list` prints nothing and exits 0; `doctor`
 warns about the missing database and missing clients without errors and does
-not create the database; `add local` states the resulting connection and the
-database path.
+not create the database; on macOS without a vault it also warns
+`Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)` and
+creates nothing. `add local` stores no credential, so it creates no vault; it
+states the resulting connection and the database path.
 
 ## 2. Credentials live only in the OS store
 
@@ -183,41 +185,81 @@ Expect every message to name the problem and the next command to run.
 
 ## 10. Vault lock (macOS)
 
-Uses your real vault, `~/Library/Keychains/kantrip.keychain-db`; use a spare
-macOS account if you don't want to recreate it. Keep `qa-scram` from §2. No
-macOS window may appear in any step; every prompt is on the terminal.
+This uses your real vault, `~/Library/Keychains/kantrip.keychain-db`. Run it on
+a spare macOS account if you don't want to recreate yours. Keep `qa-scram` from
+§2. Throughout, no macOS window may appear: every prompt is on the terminal.
+`V` below is the vault path:
 
-1. Creation (an account without the vault): the first `kantrip add` with a
-   secret explains the vault and asks for a new password twice. A mismatch asks
-   again. Pressing Enter twice (empty password) fails with "must not be empty"
-   and leaves no vault file. Afterwards, Keychain Access lists a `kantrip`
-   keychain.
-2. `kantrip doctor` shows `Credential vault: ~/Library/Keychains/kantrip.keychain-db
-   (unlocked)` and `Credential vault locks after 15 minutes idle and on sleep`.
-3. Lock it: `security lock-keychain ~/Library/Keychains/kantrip.keychain-db`.
-   `kantrip list` and `kantrip describe qa-scram` do not prompt.
-   `kantrip doctor` prints the `(locked)` line, then asks for the vault password
-   on the terminal.
-4. Lock again and run `kantrip exec qa-scram -- true`. A wrong password prints
-   `Incorrect password; 2 attempts left.`; the right one runs the command.
-5. Lock again and run `kantrip ping qa-scram`; press Ctrl-C at the prompt.
-   Expect `Kantrip vault unlock was cancelled`, status 1, and no traceback.
-6. With the vault still locked, run without a terminal:
-   `python3 -c 'import subprocess; subprocess.run(["kantrip", "exec", "qa-scram", "--", "true"], start_new_session=True)'`.
-   It fails at once with "locked and there is no terminal" and the
-   `security unlock-keychain` command to run.
-7. Start `kantrip exec qa-scram`, then lock the vault from another terminal.
-   `kcat -L` inside the session still works.
-8. Leave the vault unlocked and unused for 16 minutes, then run `kantrip doctor`:
-   it shows `(locked)`. Unlock it, sleep the Mac for a minute, wake it: locked
-   again.
-9. In Keychain Access, select `kantrip` and choose Edit > Change Settings for
-   Keychain "kantrip". Set 5 minutes; with the vault unlocked, `kantrip doctor`
-   shows `locks after 5 minutes idle and on sleep`. Set it back to 15.
-10. Move the vault away:
-    `mv ~/Library/Keychains/kantrip.keychain-db ~/kantrip-qa.keychain-db`.
-    `kantrip doctor` warns `(not created yet)` and that Keychain Access still
-    lists the vault; `kantrip exec qa-scram -- true` fails with
-    `--replace-secret` guidance. `kantrip doctor --repair` removes the Keychain
-    Access entry. Move the file back; `kantrip exec qa-scram -- true` works
-    again after unlocking.
+```bash
+V=~/Library/Keychains/kantrip.keychain-db
+```
+
+1. **Creation.** On an account without the vault, run the §2 `kantrip add`.
+   After the SCRAM password, it prints what the vault is and asks for a new
+   vault password twice. Press Enter at both prompts: `add` fails with
+   `must not be empty`, `test ! -e "$V"` succeeds, and `kantrip list` shows no
+   `qa-scram`. Run the same `add` again and type two different vault passwords:
+   macOS says `passwords don't match` and asks again; then type the same
+   password twice. `add` prints `Created ~/Library/Keychains/kantrip.keychain-db.`
+   and adds the profile. Keychain Access now lists a `kantrip` keychain whose
+   item is labeled `Kantrip kafka/password (profile …)`.
+2. **Report.** `kantrip doctor` shows
+   `Credential vault: ~/Library/Keychains/kantrip.keychain-db (unlocked)` and
+   `Credential vault locks after 15 minutes idle and on sleep`.
+3. **Locked, read-only commands.** Run `security lock-keychain "$V"`.
+   `kantrip list` and `kantrip describe qa-scram` finish without a prompt.
+   `kantrip doctor` asks for the vault password before it prints anything;
+   after you enter it, the report shows `(locked)` (the state before doctor
+   unlocked it) and `Profile 'qa-scram' kafka.auth.password is stored`.
+4. **Wrong password.** Run `security lock-keychain "$V"`, then
+   `kantrip exec qa-scram -- true`. Type a wrong password: expect
+   `Incorrect password; 2 attempts left.` and a new prompt. Type the right one:
+   the command runs and exits 0.
+5. **Cancel.** Run `security lock-keychain "$V"`, then `kantrip ping qa-scram`,
+   and press Ctrl-C at the password prompt. Expect
+   `Error: Kantrip vault unlock was cancelled`, exit status 1, no traceback,
+   and the terminal still echoes what you type.
+6. **No terminal.** Scripts, scheduled jobs, and CI have no terminal, so
+   Kantrip cannot ask for the password and must fail at once instead of
+   waiting. A command started from your shell always has your terminal, even
+   with `< /dev/null`, so detach it: macOS has no `setsid` command, so
+   Python's `start_new_session` starts Kantrip without a controlling terminal.
+   Use the installed executable, because the `kantrip` alias from §0 does not
+   exist inside Python:
+
+   ```bash
+   security lock-keychain "$V"
+   python3 -c 'import subprocess; subprocess.run(["kantrip-qa", "exec", "qa-scram", "--", "true"], start_new_session=True)'
+   ```
+
+   Expect, within a second and with no prompt or window:
+   `Error: Kantrip vault ~/Library/Keychains/kantrip.keychain-db is locked and
+   there is no terminal to unlock it; run the command in a terminal, or first
+   run 'security unlock-keychain ~/Library/Keychains/kantrip.keychain-db'`.
+   Running that `security unlock-keychain` command, then the same Python line,
+   succeeds silently.
+7. **Running sessions survive a lock.** Start `kantrip exec qa-scram` (unlock
+   it if asked). From another terminal, run `security lock-keychain "$V"`.
+   Inside the session, `kcat -L` still works, because the session already has
+   its credentials.
+8. **Automatic lock.** Leave the vault unlocked and unused for 16 minutes, then
+   run `kantrip doctor`: it asks for the password, and the report shows
+   `(locked)`. Put the Mac to sleep for a minute, wake it, and run
+   `kantrip doctor` again: it asks again and shows `(locked)`.
+9. **User lock setting.** In Keychain Access, select the `kantrip` keychain and
+   choose Edit > Change Settings for Keychain "kantrip". Set 5 minutes. With the
+   vault unlocked, `kantrip doctor` shows
+   `Credential vault locks after 5 minutes idle and on sleep`. Set it back to
+   15 minutes.
+10. **Missing vault.** Move the vault away:
+    `mv "$V" ~/kantrip-qa.keychain-db`. `kantrip doctor` warns
+    `Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)` and
+    `Keychain Access still lists the missing credential vault; run 'kantrip
+    doctor --repair'`, and reports `Profile credentials were not checked: …
+    does not exist; restore it, or store the credential again with 'kantrip
+    edit PROFILE --replace-secret FIELD'`. `kantrip exec qa-scram -- true`
+    fails with the same guidance. `kantrip doctor --repair` prints `Removed the
+    missing credential vault from the keychain search list`, and a second
+    `kantrip doctor` no longer shows the Keychain Access warning. Move the file
+    back with `mv ~/kantrip-qa.keychain-db "$V"`; `kantrip exec qa-scram -- true`
+    works again after you unlock it.
