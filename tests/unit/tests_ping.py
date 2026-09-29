@@ -239,6 +239,34 @@ class TestPing(unittest.TestCase):
 
         self.assertIn("authentication failed", str(raised.exception.detail).lower())
 
+    def test_probe_keeps_authentication_cause_after_broker_summaries(self) -> None:
+        profile = {
+            "kafka": {
+                "bootstrapServers": ["localhost:9094"],
+                "transport": "plaintext",
+                "auth": {"type": "none"},
+            }
+        }
+
+        def rejected_admin(configuration: dict[str, object], **kwargs: object) -> Mock:
+            del kwargs
+            report = configuration["error_cb"]
+            report(KafkaError(KafkaError._AUTHENTICATION, "SASL authentication error: invalid"))
+            report(KafkaError(KafkaError._ALL_BROKERS_DOWN, "1/1 brokers are down"))
+            report(KafkaError(KafkaError._TRANSPORT, "Connect to ipv6#[::1]:9094 failed"))
+            report(KafkaError(KafkaError._ALL_BROKERS_DOWN, "1/1 brokers are down"))
+            return Mock()
+
+        with (
+            patch("kantrip.ping.AdminClient", side_effect=rejected_admin),
+            self.assertRaisesRegex(PingError, "Kafka authentication failed") as raised,
+        ):
+            ping_profile(profile, timeout=0.05)
+
+        self.assertEqual(
+            "_AUTHENTICATION: SASL authentication error: invalid", raised.exception.detail
+        )
+
     def test_unreachable_kafka_does_not_write_native_logs_to_stderr(self) -> None:
         script = """
 from kantrip.ping import PingError, ping_profile
