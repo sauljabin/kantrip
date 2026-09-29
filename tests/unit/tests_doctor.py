@@ -685,17 +685,53 @@ class TestDoctorVault(unittest.TestCase):
                     self._text(report),
                 )
 
-    def test_missing_vault_and_its_warnings_are_warnings(self) -> None:
-        report = self._report(_vault("missing", warnings=("synthetic vault warning",)))
+    def test_missing_vault_is_normal_until_a_profile_stores_a_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            _create_profile_database(database_path)
+            report = self._report(_vault("missing"), database_path, directory)
 
         self.assertIn(
             DoctorCheck(
-                "warning",
+                "success",
+                "Credential vault: ~/Library/Keychains/kantrip.keychain-db (not created yet)",
+                "Credentials",
+            ),
+            report.checks,
+        )
+        self.assertFalse(
+            any("vault" in check.message for check in report.checks if check.status != "success")
+        )
+
+    def test_missing_vault_is_an_error_when_a_profile_stores_a_credential(self) -> None:
+        store = _vault("missing")
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            add_profile(
+                "secure",
+                database_path,
+                transport="tls",
+                auth=KafkaAuthInput(
+                    "scram-sha-512", username="app", password=Secret("synthetic-password")
+                ),
+                secret_store=store,
+            )
+            store.get_error = VaultError("synthetic vault does not exist")
+            report = self._report(store, database_path, directory)
+
+        self.assertFalse(report.healthy)
+        self.assertIn(
+            DoctorCheck(
+                "error",
                 "Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)",
                 "Credentials",
             ),
             report.checks,
         )
+
+    def test_vault_warnings_are_warnings(self) -> None:
+        report = self._report(_vault("unlocked", warnings=("synthetic vault warning",)))
+
         self.assertIn(
             DoctorCheck("warning", "synthetic vault warning", "Credentials"), report.checks
         )

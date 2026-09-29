@@ -271,7 +271,9 @@ missing vault fails at once.
 The vault's errors are `VaultError`, a `SecretStoreError` whose message is user
 guidance. Kafka and Registry resolution, credential staging, and doctor pass it
 through instead of their generic credential errors. `doctor` reports the vault
-path and state (missing, locked, or unlocked) without unlocking it. While the
+path and state (missing, locked, or unlocked) without unlocking it. A missing
+vault is normal until a profile stores a credential and an error afterwards,
+because its credentials are gone. While the
 vault is unlocked it also reads the lock policy through `SecKeychainCopySettings`
 with user interaction disabled (a locked vault fails instead of prompting, so
 there is no race with the idle timer) and warns about an empty password. A

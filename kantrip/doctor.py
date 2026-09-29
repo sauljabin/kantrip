@@ -148,7 +148,7 @@ def run_doctor(
     profiles, profile_checks = _check_profile_database(env, profile_name=profile_name)
     # One version run per installed client serves both client sections.
     versions = VersionProbe(env)
-    credential_checks, store = _check_credentials(env)
+    credential_checks, store = _check_credentials(env, _stores_credentials(profiles))
     profile_credential_checks = _check_profile_credentials(profiles, store)
     profile_id = None
     # Profile ID → (name, current revision), to label sessions of every profile.
@@ -188,8 +188,16 @@ def run_doctor(
     return DoctorReport(tuple(checks))
 
 
+def _stores_credentials(profiles: ProfileCollection | None) -> bool:
+    """Return whether any profile keeps a credential in the store."""
+    if profiles is None:
+        return False
+    return any(credential_references(profile) for profile in profiles.profiles.values())
+
+
 def _check_credentials(
     environment: Mapping[str, str],
+    stores_credentials: bool,
 ) -> tuple[list[DoctorCheck], SecretStore | None]:
     checks: list[DoctorCheck] = []
     store: SecretStore | None = None
@@ -207,7 +215,7 @@ def _check_credentials(
                 verbose_only=True,
             )
         )
-        checks.extend(_check_vault(loaded.vault_status))
+        checks.extend(_check_vault(loaded.vault_status, stores_credentials))
     try:
         pending = inspect_pending_secret_cleanup(environment=environment)
     except ProfileStoreError as error:
@@ -230,8 +238,15 @@ def _check_credentials(
     return checks, store
 
 
-def _check_vault(vault_status: Callable[[], VaultStatus | None]) -> list[DoctorCheck]:
-    """Report the vault's identity and state; this never unlocks or prompts."""
+def _check_vault(
+    vault_status: Callable[[], VaultStatus | None],
+    stores_credentials: bool,
+) -> list[DoctorCheck]:
+    """Report the vault's identity and state; this never unlocks or prompts.
+
+    A missing vault is normal until a profile stores a credential, and an error
+    once one does: those credentials are gone.
+    """
     try:
         status = vault_status()
     except SecretStoreError as error:
@@ -239,8 +254,10 @@ def _check_vault(vault_status: Callable[[], VaultStatus | None]) -> list[DoctorC
     if status is None:
         return []
     label = f"Credential vault: {status.location}"
-    if status.state == "missing":
-        checks = [DoctorCheck("warning", f"{label} (not found)")]
+    if status.state == "missing" and stores_credentials:
+        checks = [DoctorCheck("error", f"{label} (not found)")]
+    elif status.state == "missing":
+        checks = [DoctorCheck("success", f"{label} (not created yet)")]
     else:
         checks = [DoctorCheck("success", f"{label} ({status.state})")]
     if status.lock_policy is not None:

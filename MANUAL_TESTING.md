@@ -56,10 +56,11 @@ kantrip list
 
 Expect: help lists nine commands; `list` prints nothing and exits 0; `doctor`
 warns about the missing database and missing clients without errors and does
-not create the database; on macOS without a vault it also warns
-`Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)` and
-creates nothing. `add local` stores no credential, so it creates no vault; it
-states the resulting connection and the database path.
+not create the database. On macOS without a vault, `doctor` passes
+`Credential vault: ~/Library/Keychains/kantrip.keychain-db (not created yet)`
+and creates nothing. `add local` stores no credential, so it creates no vault,
+and a second `doctor` still reports no vault warning; `add` states the
+resulting connection and the database path.
 
 ## 2. Credentials live only in the OS store
 
@@ -252,10 +253,11 @@ V=~/Library/Keychains/kantrip.keychain-db
    `Credential vault locks after 5 minutes idle and on sleep`. Set it back to
    15 minutes.
 10. **Missing vault.** Move the vault away:
-    `mv "$V" ~/kantrip-qa.keychain-db`. `kantrip doctor` warns
-    `Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)` and
-    `Keychain Access still lists the missing credential vault; run 'kantrip
-    doctor --repair'`, and reports `Profile credentials were not checked: …
+    `mv "$V" ~/kantrip-qa.keychain-db`. Because `qa-scram` stores a credential,
+    `kantrip doctor` reports an error,
+    `Credential vault: ~/Library/Keychains/kantrip.keychain-db (not found)`,
+    warns `Keychain Access still lists the missing credential vault; run
+    'kantrip doctor --repair'`, and reports `Profile credentials were not checked: …
     does not exist; restore it, or store the credential again with 'kantrip
     edit PROFILE --replace-secret FIELD'`. `kantrip exec qa-scram -- true`
     fails with the same guidance. `kantrip doctor --repair` prints `Removed the
