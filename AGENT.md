@@ -23,7 +23,7 @@
   families for input formats or credential operations. Never expose secret
   retrieval or round-trip profile export.
 - Keep unimplemented work and future CLI contracts in GitHub issues under the
-  `v0.1`/`v0.2` milestones, never in current docs, schemas, examples, commands,
+  `v0.1` milestone, never in current docs, schemas, examples, commands,
   or code comments. Document behavior only when it lands.
 - No backward compatibility before v0.1.0; published alphas and betas are not a
   boundary. Replace obsolete CLI, environment, profile, storage, and runtime

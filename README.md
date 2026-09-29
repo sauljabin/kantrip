@@ -67,11 +67,10 @@ ACL-independent Kafka connectivity checks.
 
 ## Roadmap
 
-Planned work is tracked in GitHub milestones:
+Planned work is tracked in the GitHub milestone
 [v0.1](https://github.com/sauljabin/kantrip/milestone/1) (first release:
-hardening, final CLI contract, dedicated credential vault, kaf)
-and [v0.2](https://github.com/sauljabin/kantrip/milestone/2) (Strimzi and
-properties import, more clients). Current support is described in
+hardening, final CLI contract, dedicated credential vault, more clients,
+Strimzi and properties import). Current support is described in
 [Compatibility](COMPATIBILITY.md).
 
 Kantrip is pre-release software: no backward compatibility is promised before

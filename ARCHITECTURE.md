@@ -4,8 +4,7 @@ How Kantrip is built and why. This guide records the implemented design, its
 technical decisions, and its limits; [Compatibility](COMPATIBILITY.md) owns the
 exact client and version matrix, and [Threat Model](THREAT_MODEL.md) the
 security analysis. Planned work lives in the
-[v0.1](https://github.com/sauljabin/kantrip/milestone/1) and
-[v0.2](https://github.com/sauljabin/kantrip/milestone/2) milestones.
+[v0.1](https://github.com/sauljabin/kantrip/milestone/1) milestone.
 
 ## Contents
 
