@@ -4,6 +4,15 @@ Use this guide to choose clients, connection methods, and file formats supported
 by the current Kantrip commands. See [Usage](USAGE.md) for command examples and
 configuration instructions.
 
+## Contents
+
+- [Client commands](#client-commands)
+- [Kafka transport and authentication](#kafka-transport-and-authentication)
+- [Registry protocols and providers](#registry-protocols-and-providers)
+- [Credential storage](#credential-storage)
+- [File formats](#file-formats)
+- [Installing supported commands](#installing-supported-commands)
+
 ## Client commands
 
 Kantrip recognizes commands by executable basename. [Apache Kafka's Unix binary

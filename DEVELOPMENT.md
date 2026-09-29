@@ -1,219 +1,133 @@
-# Development Instructions
+# Development
 
-This guide describes the development environment and repository workflows. Run
-user-facing exploratory checks from [Manual Testing](MANUAL_TESTING.md).
+Set up a working checkout, run the checks, and use the sandbox. Design
+decisions are in [Architecture](ARCHITECTURE.md), security analysis in
+[Threat Model](THREAT_MODEL.md), release smoke tests in
+[Manual Testing](MANUAL_TESTING.md), and the rules AI agents follow in
+[Agent Instructions](AGENT.md). Planned work lives in the
+[milestone issues](https://github.com/sauljabin/kantrip/milestones).
 
 ## Contents
 
-- [Documentation audiences](#documentation-audiences)
 - [Setup](#setup)
-- [Development scripts](#development-scripts)
-- [Schema and application environment](#schema-and-application-environment)
-- [Database migrations](#database-migrations)
-- [Credential store development](#credential-store-development)
-- [Sandbox services and E2E workflow](#sandbox-services-and-e2e-workflow)
-  - [Automated E2E acceptance matrix](#automated-e2e-acceptance-matrix)
-- [Build artifacts](#build-artifacts)
+- [Everyday checks](#everyday-checks)
+- [Sandbox and E2E tests](#sandbox-and-e2e-tests)
+  - [Start the sandbox](#start-the-sandbox)
+  - [Install the released clients](#install-the-released-clients)
+  - [Run the E2E suite](#run-the-e2e-suite)
+  - [When E2E runs](#when-e2e-runs)
+- [Vault tests](#vault-tests)
+- [Build](#build)
 - [Website](#website)
-  - [Recapture the terminal demo](#recapture-the-terminal-demo)
-- [Architecture and security](#architecture-and-security)
 - [Release](#release)
-
-## Documentation audiences
-
-- End users: [Usage](USAGE.md) and [Compatibility](COMPATIBILITY.md). Show installed
-  `kantrip` commands and current support; keep sandbox and `uv run` instructions
-  in developer documentation.
-- Developers: this guide, [Architecture](ARCHITECTURE.md),
-  [Threat Model](THREAT_MODEL.md), and [Manual Testing](MANUAL_TESTING.md).
-- AI agents: [Agent Instructions](AGENT.md) and
-  [Release Checklist](RELEASE_CHECKLIST.md). Planned work lives in the
-  [milestone issues](https://github.com/sauljabin/kantrip/milestones).
-
-Architecture owns technical decisions and their rationale; agent instructions
-own implementation conventions. Record each decision when its implementation
-lands, keep the threat model aligned, and link to the canonical explanation.
 
 ## Setup
 
-Install uv:
+You need [uv](https://docs.astral.sh/uv/) on macOS or Linux; it installs the
+right Python for you.
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-# or on macOS
-brew install uv
-```
-
-Install locked development dependencies and the Git hooks:
-
-```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # or: brew install uv
 uv sync --locked
 uv run pre-commit install
-```
-
-The pre-commit hook first classifies staged paths without building a wheel or
-touching the sandbox. For E2E-impacting changes, it builds a wheel from Git's
-staged index in a temporary checkout, installs it separately, and runs the full
-E2E suite against the already-running sandbox. Provision the sandbox and pinned
-released clients for those changes; a missing or locked vault or service is then
-a failed hook, not a skipped test. The hook links existing private sandbox state
-without copying or caching secrets. A documentation-only commit skips local E2E.
-Set `KANTRIP_E2E_FORCE=1` on the hook invocation when documentation changes
-executable behavior or when an explicit full check is needed.
-
-The hook calls `python3 scripts/tests.py --staged-wheel` directly. This mode
-uses only Python's standard library until it selects E2E, then uses uv and the
-project's locked Python to build and test the staged wheel. The same script
-owns CI selection (`--ci-event`) and result validation
-(`--verify-e2e-result`); `--suite unit|e2e|vault` runs a suite directly.
-
-Run the editable CLI directly from the checkout:
-
-```bash
 uv run kantrip --help
-uv run kantrip --version
 ```
 
-## Development scripts
+`uv run kantrip` runs the checkout's code. The pre-commit hook formats, checks,
+and, for changes that affect runtime behavior, builds a wheel from your staged
+files and runs the E2E suite against the sandbox. A docs-only commit skips E2E.
 
-Apply code styles:
+## Everyday checks
 
 ```bash
-uv run python -m scripts.styles
+uv run --locked python -m scripts.styles              # format (black and ruff)
+uv run --locked python -m scripts.analyze             # types, lint, spelling, workflows
+uv run --locked python -m scripts.tests --suite unit  # offline tests
 ```
 
-Run type, formatting, lint, spelling, and workflow analysis:
+The unit tests need no Kafka, Docker, or clients: shells, terminals, and the
+credential vaults are faked.
+
+## Sandbox and E2E tests
+
+The E2E suite runs every supported client against a real Kafka laboratory with
+the candidate wheel.
+
+### Start the sandbox
+
+Install Docker, [Kind](https://kind.sigs.k8s.io/), kubectl, and Helm, then:
 
 ```bash
-uv run python -m scripts.analyze
+uv run --locked python -m sandbox up           # create or reconcile
+uv run --locked python -m sandbox status
+uv run --locked python -m sandbox credentials  # file and variable names, never values
+uv run --locked python -m sandbox down         # delete the cluster, keep credentials
 ```
 
-Run the offline unit tests:
+The sandbox is one Kind cluster with Strimzi Kafka, Keycloak, Confluent Schema
+Registry, and Apicurio Registry, all on loopback:
+
+| Endpoint | Address |
+| --- | --- |
+| Kafka plaintext, TLS, SCRAM-SHA-512, mTLS, OAuth | `localhost:9092` to `9096` |
+| Kafka PLAIN and SCRAM-SHA-256 over TLS | `localhost:9097`, `9098` |
+| Schema Registry: plain, HTTPS Basic, OAuth, mTLS | `http://localhost:8081`, `https://localhost:8083`, `8085`, `8086` |
+| Apicurio: plain, HTTPS Basic and OAuth | `http://localhost:8082`, `https://localhost:8084` |
+| Keycloak | `https://localhost:8443` |
+
+Credentials, the CA, and client properties are in `sandbox/.state` (private and
+ignored). Open `sandbox/.state/credentials.env` in an editor when you need a
+value; don't print it. To rotate the credentials, run `sandbox down` and delete
+that directory. See [Verification](ARCHITECTURE.md#verification) for how the
+laboratory is built.
+
+### Install the released clients
+
+Install the clients listed in `tests/e2e/versions.env` (newer releases work
+locally), and make sure both `kcat` and its old name `kafkacat` exist:
 
 ```bash
-uv run python -m scripts.tests --suite unit
+mkdir -p ~/.local/bin
+ln -s "$(command -v kcat)" ~/.local/bin/kafkacat   # if kafkacat is missing
 ```
 
-The default suite is `unit`. Select it explicitly in automation with:
+### Run the E2E suite
+
+The suite tests an installed wheel, not the checkout, and runs Kantrip without
+a terminal, so unlock your vault first. On Linux, unlock the `kantrip` keyring
+or wallet in Passwords and Keys or KDE Wallet Manager; macOS asks for the
+password once on the terminal.
 
 ```bash
-uv run --locked python -m scripts.tests --suite unit
+uv build --wheel --out-dir /tmp/kantrip-dist
+uv venv /tmp/kantrip-candidate
+uv pip install --python /tmp/kantrip-candidate/bin/python /tmp/kantrip-dist/*.whl
+export KANTRIP_E2E_KANTRIP=/tmp/kantrip-candidate/bin/kantrip
+uv run --locked python -m scripts.tests --suite e2e
 ```
 
-Unit tests live in `tests/unit`, including the shell contract with generated fake
-clients and PTYs. They do not require Kafka, Docker, kcat, Kaskade, or Java.
-Infrastructure acceptance lives in `tests/e2e` and uses the same entry point
-with `--suite e2e` after explicit provisioning.
+The suite never starts or stops the sandbox, and it removes only the profiles,
+topics, and schemas it creates. A missing client or an unready sandbox is
+reported as a setup failure, not a test failure. The full run takes about ten
+minutes.
 
-Generate the deterministic Rich README banner:
+### When E2E runs
 
-```bash
-uv run python -m scripts.banner
-```
+- **Pre-commit:** for runtime, dependency, packaging, sandbox, or E2E changes;
+  force it with `KANTRIP_E2E_FORCE=1 git commit …`.
+- **Pull requests:** only when the `run-e2e` label is newly applied, or on a
+  manual workflow run. Remove and reapply the label to run it again.
+- **`main` and releases:** on every runtime change, and always against the exact
+  release wheel.
 
-Shared script code belongs in `scripts/__init__.py`; modules are executable
-workflows. Keep test utilities with their suite and the reproducible integration
-environment in `sandbox`.
+## Vault tests
 
-## Schema and application environment
+`--suite vault` tests the real credential vault without the sandbox. It locks,
+unlocks, and hides the vault, so run it against a throwaway vault, never your
+own. Build the candidate and set `KANTRIP_E2E_KANTRIP` as above, then use the
+project's Python directly (uv keeps its cache below `HOME`).
 
-Keep the profile schema in `schemas/`, synthetic examples in `examples/`, and
-private-data-free fixtures with their tests.
-
-When an application variable changes, update `USAGE.md`, architecture guidance,
-and tests together. No backward compatibility is promised before v0.1.0,
-including between published alphas: obsolete contracts may be replaced
-directly. Reject incompatible state explicitly; do not add aliases or silently
-reset user data.
-
-Implement milestone issues in the order given by the delivery index
-([#47](https://github.com/sauljabin/kantrip/issues/47)), including their
-acceptance criteria and affected documentation. The human checks in
-[Manual Testing](MANUAL_TESTING.md) are a separate release gate; both unit and
-E2E suites remain required.
-
-## Database migrations
-
-Keep database evolution independent from product releases. The transaction
-engine, migration commands, and explicit `MigrationChain` registry live together
-in `kantrip/migrations.py`. Each `SqlMigration` subclass has one positive integer
-`sequence`, an immutable descriptive name, and an immutable SQL tuple. The
-sequence is its only identity and order; the product version that applies it is
-history metadata, not part of the migration name. The engine derives a checksum
-from that complete identity and payload.
-
-Before merging a database change:
-
-- Choose the next sequence on `main`; resolve branch collisions before merge.
-- Keep each schema change in its own `SqlMigration` subclass and append one
-  instance to the explicit registry. Never edit or renumber a migration that has
-  appeared in a release; add a forward migration.
-- Update the schema, `schema_migrations`, and `PRAGMA user_version` in the same
-  bounded transaction.
-- Test a fresh database, idempotent reopen, supported upgrade paths, rollback,
-  uniquely timestamped backups, checksum tampering, missing or future sequences,
-  and concurrent initialization.
-- Keep migrations inside the package. Do not require a user-run SQL file or add
-  a separate migration command.
-- Do not implement compatibility for an unreleased database shape. The first
-  published release establishes the oldest supported migration state.
-- Keep normal `doctor` execution read-only. Explicit maintenance belongs only in
-  `doctor --repair`.
-
-Tests should create a repository at a selected migration sequence and then run
-the current chain. A published package release is not required to establish an
-upgrade fixture.
-
-## Credential store development
-
-On macOS, `kantrip/macos_vault.py` stores credentials in the dedicated vault,
-`~/Library/Keychains/kantrip.keychain-db`, through `/usr/bin/security`. On
-Linux, `kantrip/linux_vault.py` stores them in the dedicated Secret Service
-collection `kantrip` through `secretstorage`, a Linux-only dependency that the
-module imports on first use. See
-[Credential vault](ARCHITECTURE.md#credential-vault) for the design. Other
-Secret Service providers must fail closed.
-
-Inspect the vault the development environment uses with:
-
-```bash
-uv run --locked kantrip doctor --verbose
-```
-
-`mypy.ini` ignores the missing `secretstorage` import on macOS; Linux type
-checks use its real annotations, so keep the D-Bus layer's return values
-explicitly converted (`str`, `bool`, `bytes`) to pass on both platforms.
-
-Offline unit tests inject synthetic in-memory implementations of Kantrip's narrow
-`SecretStore` protocol. They must not read or modify a developer's real
-credential store. Both vaults' tests replace their operating-system layer. The
-macOS tests use an in-memory `security` tool (`KeychainSystem`) that enforces the
-`security -i` line limit and fails any item access to a locked vault; they cover
-creation, locking, wrong and cancelled passwords, no terminal, and missing or
-replaced vaults. The Linux tests use an in-memory Secret Service
-(`SecretServiceSystem`) with scripted windows; they cover GNOME and KDE lookup,
-creation, locked reads, cancelled, unshown, and unanswered windows, Ctrl-C, no
-terminal, vaults that open without a window, missing and replaced vaults, KDE
-ghosts, empty secrets, and KDE's default takeover. Tests that reach
-`load_secret_store` patch it.
-
-The separate E2E suite intentionally exercises the real Kantrip vault: the
-pre-created disposable vault on Linux CI, or the developer's own vault. The suite
-runs Kantrip without a terminal, so unlock your vault before running it: macOS
-then asks for the password on the terminal when a precondition first reads it,
-and on Linux unlock the `kantrip` keyring or wallet in Passwords and Keys or KDE
-Wallet Manager. Its temporary credentials and profiles are owned and cleaned by
-the suite; it does not substitute a fake store.
-
-`--suite vault` runs this platform's vault acceptance without the sandbox,
-against the candidate wheel in `KANTRIP_E2E_KANTRIP`. It locks and unlocks the
-real vault, and on Linux hides its file, so it belongs on a disposable vault:
-the macOS and Ubuntu CI jobs create throwaway vaults for it. On macOS it needs
-the vault password in `KANTRIP_E2E_VAULT_PASSWORD`; on Linux it runs only
-against the empty-password keyring that CI pre-creates. To try it locally
-without touching your vault, set `KANTRIP_E2E_KANTRIP` as for E2E and give the
-run its own home directory. The project's Python runs directly because uv keeps
-its cache below `HOME`. On macOS:
+On macOS:
 
 ```bash
 vault_home="$(mktemp -d)"
@@ -225,9 +139,8 @@ HOME="$vault_home" KANTRIP_E2E_VAULT_PASSWORD=vault-e2e \
   .venv/bin/python -m unittest -v tests.e2e.vault_acceptance
 ```
 
-On Linux, the run also needs its own D-Bus session and GNOME Keyring daemon, so
-its runtime directory must differ from your session's; otherwise the new daemon
-would join your running one:
+On Linux, the run starts its own D-Bus session and GNOME Keyring daemon with an
+empty-password `kantrip` keyring, the same as CI:
 
 ```bash
 vault_home="$(mktemp -d)"
@@ -242,391 +155,45 @@ HOME="$vault_home" XDG_DATA_HOME="$vault_home/.local/share" \
     .venv/bin/python -m unittest -v tests.e2e.vault_acceptance'
 ```
 
-Secret-bearing profile changes use the transaction engine in
-`kantrip/credential_mutations.py`. Each replacement receives a new credential
-UUID. The engine commits an exact cleanup record before writing the store,
-switches the profile and advances its expected revision in SQLite, then retires
-the superseded reference. Profile removal commits the row deletion and cleanup
-records before it contacts the credential backend.
+The separate runtime directory keeps the new daemon from joining your
+desktop's.
 
-Tests for this boundary use deterministic in-process failpoints and
-`tests/unit/mutation_worker.py` subprocess barriers. Keep this matrix intact when a
-new credential owner or input path is added:
-
-| Cut or race | Required invariant |
-| --- | --- |
-| Intent committed before the first store write | Old profile or absent add; exact cleanup record |
-| Store writes and then raises, including the second of several writes | Every possibly written immutable reference remains journaled |
-| Validation, CAS, or database failure before commit | Previous complete generation remains active; no old secret is retired |
-| Lost commit acknowledgement | Exact row and journal inspection yields committed (`3`), unchanged (`1`), or unknown (`4`) |
-| Secret deleted before journal-row removal | Committed generation survives; repair is idempotent |
-| Two adds, edit/edit, edit/remove, or stale remove after recreate | One serial valid outcome; no lost update or wrong-UUID deletion |
-| Repair versus staging or snapshot versus rotation | No live value is deleted; readers resolve one coherent generation |
-| Live reference appears in cleanup journal | Integrity error and no credential deletion |
-
-The multi-value rows apply to one combined Kafka/Registry mutation as well as
-to multiple fields owned by one service. Tests stage both owners together and
-fail before and after either store write; the active row remains one complete
-generation and every possibly written reference remains journaled.
-
-The subprocess suite uses pipe barriers and real `SIGKILL`, never timing sleeps,
-at durable intent, store readback, post-commit reload, and post-delete journal
-boundaries. It verifies exact journal/profile state, private permissions,
-idempotent repair, and secret-free output. These tests model process failure,
-not hardware power loss or an approved OS store restart; release QA records
-those platform boundaries separately. Assertions may inspect references and
-journal rows, but must never include a real credential value in diagnostic
-output.
-
-## Sandbox services and E2E workflow
-
-The sandbox is a local Kind laboratory with one operator-managed Strimzi Kafka
-cluster, Keycloak, Schema Registry, Apicurio Registry, and cert-manager.
-Install Docker, Kind, kubectl, and Helm before using it. Component versions are
-pinned in `sandbox/versions.env`. The topology decision, trust boundary, and
-non-production provisioning limits are canonical in
-[Sandbox verification topology](ARCHITECTURE.md#sandbox-verification-topology).
-
-Create, inspect, and delete the environment with:
-
-```bash
-uv run --locked python -m sandbox up
-uv run --locked python -m sandbox status
-uv run --locked python -m sandbox credentials
-uv run --locked python -m sandbox down
-```
-
-Generated credentials, CA material, and Java client property files are private
-and ignored below `sandbox/.state`. The lifecycle command does not print their
-values. The generated assignment file is a laboratory input, not Kantrip's
-child environment contract. Source it only in a dedicated laboratory shell
-with `set +a; . sandbox/.state/credentials.env`, never with `set -a`, inside
-`kantrip exec`, or from shell startup files, and never print it. Every
-generated source variable uses the
-`KANTRIP_SANDBOX_*` namespace, which supervised children scrub. `down` removes
-the cluster but retains this private state so another
-`up` can reuse the same credentials; remove that exact directory to rotate the
-local laboratory credentials.
-
-The loopback-only endpoints are:
-
-- Kafka plaintext: `localhost:9092`
-- Kafka TLS: `localhost:9093`
-- Kafka SCRAM-SHA-512 over TLS: `localhost:9094`
-- Kafka mTLS: `localhost:9095`
-- Kafka OAuth over TLS: `localhost:9096`
-- Kafka PLAIN over TLS (authorizer fixture): `localhost:9097`
-- Kafka SCRAM-SHA-256 over TLS (authorizer fixture): `localhost:9098`
-- Schema Registry baseline: `http://localhost:8081`
-- Apicurio baseline: `http://localhost:8082`
-- Schema Registry with HTTPS and Basic Auth: `https://localhost:8083`
-- Apicurio with HTTPS and Basic/OAuth: `https://localhost:8084`
-- Schema Registry with HTTPS and OAuth: `https://localhost:8085`
-- Schema Registry with HTTPS and mTLS: `https://localhost:8086`
-- Keycloak: `https://localhost:8443`
-
-The baseline Registry endpoints retain unauthenticated adapter coverage. Schema
-Registry uses separate Basic and OAuth processes because its local JAAS
-property-file login and OAuth `AuthenticationHandler` are different server
-authentication paths; Apicurio accepts both mechanisms on one endpoint and
-assigns its service account the standard `sr-readonly` realm role.
-The E2E suite creates typed Kantrip profiles for every secure variant. The single Kafka cluster's
-`plaintext` listener means no authentication and no encryption. All other
-external mechanisms share its `StandardAuthorizer`; authenticated no-ACL
-principals prove that `kantrip ping` does not depend on Kafka resource
-authorization. PLAIN JAAS is read from the mounted `kafka-custom-users` Secret.
-
-Registry OAuth pings in this workflow request one token in a new bounded process.
-Disabling the Keycloak client proves that a later acquisition fails; it does not
-prove refresh inside a long-lived Registry client. Native refresh acceptance is
-grouped by implementation rather than wrapper: one Confluent Java console case,
-one Kaskade Confluent Python case, and one Kaskade native Apicurio case.
-
-The native Apicurio OAuth contract is verified against the published
-[Kaskade 5.0.1 release](https://github.com/sauljabin/kaskade/releases/tag/v5.0.1),
-which is also Kaskade's minimum version in Kantrip. Test version checks with
-installed stable releases, not only with development-version strings.
-An idempotent Kubernetes Job authenticates as the dedicated `sandbox-admin`
-through the internal TLS/SCRAM-SHA-512 listener and provisions SCRAM-SHA-256
-from a private temporary config file. `sandbox-admin` is the only superuser.
-
-Strimzi owns its authenticated-client, OAuth, and Registry ACLs. The Job owns
-both SCRAM-SHA-256 identities and the allowed identity's `kantrip-auth-` ACLs,
-plus the `ANONYMOUS` topic/group prefix `kantrip-smoke-` and cluster Describe
-needed by the plaintext and server-only TLS smoke. The User Operator ignores
-these Job-owned principals; `ANONYMOUS` is not a superuser. The
-laboratory does not claim Kubernetes network isolation or production hardening.
-
-The Kafka cluster uses a disposable persistent volume, so broker data, ACLs,
-and the SCRAM-SHA-256 credential survive pod restarts but are removed with the
-Kind cluster. A pre-unification laboratory containing `Kafka/auth-kantrip` is
-rejected with explicit `sandbox down` and `sandbox up` guidance rather than
-being deleted silently. Both Apicurio instances use KafkaSQL with
-separate journal and snapshot topics configured for delete cleanup and infinite
-retention. Their registry data therefore survives an Apicurio pod restart without
-leaking data between the baseline and authenticated variants.
-Schema Registry topics are declared as Strimzi `KafkaTopic` resources with
-`cleanup.policy=compact` and the same kebab-case names used by the Kafka
-clients: `schema-registry`, `schema-registry-secure`, and
-`schema-registry-oauth`.
-
-The Confluent console wrappers have two configuration consumers: the Kafka
-command and the schema formatter/reader. Both receive the private session file;
-the validated Registry URL is additionally supplied as a non-secret formatter
-or reader property to suppress Confluent's built-in localhost default. Registry
-OAuth sessions own the JVM URL allowlist and use Java PEM truststore properties
-for both the Registry and token endpoint.
-
-Install the released client versions listed in `tests/e2e/versions.env`
-outside Kantrip's environment. CI installs each pinned version exactly. A local
-run also accepts a newer release, because Kantrip only checks a minimum version.
-A unit test keeps every pin at or above Kantrip's minimum for that client. Build the candidate wheel and install it in a
-separate environment, then set `KANTRIP_E2E_KANTRIP` to that environment's
-`kantrip` executable. The test process validates all tools, sandbox workloads,
-host endpoints, private file modes, and the native credential store before any
-product assertion.
-
-The preconditions require both `kcat` and its historical name `kafkacat`,
-because Kantrip supports both executables. Homebrew on macOS installs only
-`kcat`, and CI links the alias on Ubuntu as well. On macOS or Linux, if
-`kafkacat` is missing, link it into a user-owned directory on `PATH` such as
-`~/.local/bin`:
-
-```bash
-mkdir -p ~/.local/bin
-ln -s "$(command -v kcat)" ~/.local/bin/kafkacat
-```
-
-`kafkacat -V` should then print the same version as `kcat -V`. If the command is
-not found, add `~/.local/bin` to `PATH` in your shell profile.
-
-Run the complete adapter, shell, authentication, authorization, and Registry
-renewal matrix against the already-running services:
-
-```bash
-uv run --locked python -m scripts.tests --suite e2e
-```
-
-The runner never invokes `sandbox up` or `sandbox down`; local and CI provisioners
-own that lifecycle. It holds a non-blocking lock while mutating shared OAuth
-clients, creates isolated profiles and exact test-owned topics/schemas/artifacts,
-and leaves the sandbox running. CI runs the same command on Ubuntu with a real
-DBus/GNOME Keyring session and the pre-created disposable vault, and always
-collects sanitized resource diagnostics before removing its CI-owned sandbox.
-Two more jobs in the same workflow run `--suite vault` on macOS and Ubuntu
-against disposable vaults.
-The same path classification drives local staged checks and `main` push CI:
-
-| Change or event | Local staged hook | Hosted E2E |
-| --- | --- | --- |
-| Prose-only Markdown, images/site assets, issue/PR templates, `LICENSE`, or unit tests only | Skip E2E | Skip E2E on `main` |
-| Runtime code, schemas, dependencies/lockfiles, packaging, sandbox, E2E tests/tools, or E2E workflow/hook infrastructure | Run E2E | Run E2E on `main` |
-| Mixed changes, deleted/renamed runtime paths, or unknown paths | Run E2E | Run E2E on `main` |
-| PR opened, synchronized, or reopened | Classify staged changes independently | Fast CI only |
-| Newly applied `run-e2e` PR label, a PR opened with it, or explicit CI workflow dispatch | Not applicable | Run full E2E once |
-| Release tag | Not applicable | Run full E2E against the exact release wheel |
-
-The PR label is a one-shot request: subsequent pushes do not repeat E2E merely
-because the label remains. Opening a PR with the label fires separate `opened`
-and `labeled` runs that cancel each other; the `opened` run reads the PR's
-current labels so either survivor runs E2E. Remove and reapply it to request another run. The
-`main` selector compares the complete push range; a missing base or an unknown
-path selects E2E conservatively. Documentation that changes an executable
-contract needs an explicit force: `KANTRIP_E2E_FORCE=1` locally, a fresh
-`run-e2e` label event on the PR, or workflow dispatch on `main`. Quality, the
-full Python/OS unit matrix, and package verification still run for all PRs and
-`main` pushes. Release publishing always requires another complete E2E run
-against the exact wheel built and verified by the tag's build job. The hosted
-client cache is keyed by OS, architecture, pinned versions, and workflow setup;
-only checksum-verified downloaded clients and builds are saved, never sandbox
-state or credentials.
-The E2E Zsh launcher skips host-global startup files with Zsh's `-d` option to
-avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs.
-
-### Automated E2E acceptance matrix
-
-| Area | Released clients and operation evidence |
-| --- | --- |
-| Kafka plaintext | Apache Kafka 4.3.1 and Confluent Platform 8.3.1 topic/admin, producer, consumer, group, config, ACL, and broker-API commands; kcat/kafkacat 1.7.0 on macOS and 1.7.1 on Ubuntu linked against librdkafka 2.11.0+ for metadata/produce/consume; Kaskade 5.0.1 admin/consume; kaf 0.2.14 and kcl 0.20.0 list/produce/consume plus Avro decode and encode by schema ID; Bash, Zsh, and Fish sessions |
-| Kafka authentication | Verified TLS plus PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth profiles; real Java produce/consume, librdkafka metadata, kaf and kcl list/produce/consume (OAuth rejected before launch), all three shells, prefix ACL denial, and no-resource-ACL ping proof |
-| Schema formats | Confluent Avro, JSON Schema, and Protobuf console producer/consumer pairs with decoded markers and exact topic cleanup |
-| Registry security | Confluent Basic, OAuth, and mTLS plus native Apicurio Basic and OAuth profile probes; kaf rejected before launch for each (custom CA, OAuth, mTLS, Apicurio); kcl subject listing through Basic and mTLS with the custom CA, rejected before launch for OAuth and Apicurio; invalid credentials/identity/CA/hostname and anonymous-access controls |
-| OAuth lifetime | Native Kafka Java/librdkafka clients survive expiry; Confluent Java, Kaskade Confluent, and Kaskade native Apicurio consumers stay alive across fresh schema cache misses, show new IdP issuance, then fail token acquisition after client revocation without decoding the final record |
-| macOS credential vault | Real `/usr/bin/security` with the candidate wheel: a 4096-bit mTLS key split across two items, resolved by `doctor` and `exec`, removed with the profile; a locked vault makes `exec` and `doctor` without a terminal fail at once and stay locked |
-| Linux credential vault | Real GNOME Keyring with the candidate wheel: a 4096-bit mTLS key stored in one item, resolved by `doctor` and `exec`, removed with the profile; a relocked vault that opens without a window is used and reported by `doctor`; a hidden keyring file makes `doctor` report the vault as not found and `exec` fail with recovery guidance |
-| Ping boundary | Kafka proves broker protocol/authentication without topic APIs; Registry uses the documented read endpoint and requires anonymous denial for authenticated profiles; successful ping is followed by denied resource operations for no-ACL identities |
-
-Unsupported or conditional combinations remain explicit in `COMPATIBILITY.md`;
-an absent required executable or setup component is an E2E setup failure, never
-a skip or pass. See [Manual Testing](MANUAL_TESTING.md) for provider-specific
-exploratory checks and expected results.
-
-## Build artifacts
-
-Build the wheel and source distribution:
+## Build
 
 ```bash
 uv build --clear
-```
-
-Verify versions, entry points, the packaged profile schema, public examples, and
-required documentation. The check also extracts the source distribution and runs
-the bundled tests that read repository metadata (such as `.github` workflows)
-from inside it, so the sdist stays self-contained:
-
-```bash
 uv run --locked python -m scripts.verify_release dist
 ```
 
-Exact `vMAJOR.MINOR.PATCH` tags, optionally suffixed with PEP 440 `aN`, `bN`, or
-`rcN`, define releases. Untagged builds use hatch-vcs development metadata; its
-fallback only bootstraps empty or exported checkouts.
+`verify_release` checks the version, entry points, bundled schema and docs, and
+runs the sdist's own tests. Versions come from Git tags; an untagged build gets
+a development version.
 
 ## Website
 
-The project site at `https://sauljabin.github.io/kantrip/` is plain HTML, CSS,
-and vanilla JavaScript in `site/`, with no framework, build step, web fonts,
-analytics, or cookies. Its only third-party request is `site/site.js` asking the
-GitHub API for the release shown in the hero: the newest stable release, or the
-newest pre-release while none is stable. The Content-Security-Policy allows
-`connect-src` to `https://api.github.com` only. Without JavaScript, or when the
-request fails or hits the anonymous rate limit, the line links to the Releases
-page. Deployment uploads the directory as is. `site/demo.json` holds the terminal demo, and `site/index.html` embeds
-the same transcript as static text between the `demo-transcript` markers, so the
-page works without JavaScript, for screen readers, and with reduced motion.
-`site/site.js` replays that static transcript; it has no separate copy of the
-data. Links and assets are relative so the site works under the `/kantrip/`
-path.
-
-Validate the site, then regenerate the static transcript after editing
-`site/demo.json`:
+The site in `site/` is plain HTML, CSS, and JavaScript with no build step.
 
 ```bash
-uv run --locked python -m scripts.website check
-uv run --locked python -m scripts.website render
+uv run --locked python -m scripts.website check    # validate the site and demo commands
+uv run --locked python -m scripts.website render   # after editing site/demo.json
+uv run --locked python -m scripts.website capture  # rerecord the demo; needs the sandbox
+uv run --locked python -m scripts.banner           # regenerate images/banner.svg
 ```
 
-`check` verifies that the transcript matches the data file, that local links,
-assets, and anchors exist, that repository links point to existing files, that
-nothing is requested from another origin, that JavaScript and CSS stay under
-30 KB, and that the demo contains no sandbox-specific values. It also runs
-`kantrip COMMAND --help` for every `kantrip` command in the demo and fails when
-a command or option no longer exists, so a CLI rename must update the demo in
-the same pull request.
-
-Preview the site under the same `/kantrip/` prefix that GitHub Pages uses, on
-macOS or Linux:
+Preview it under the same `/kantrip/` path GitHub Pages uses:
 
 ```bash
-pages="$(mktemp -d)"
-ln -s "$PWD/site" "$pages/kantrip"
+pages="$(mktemp -d)" && ln -s "$PWD/site" "$pages/kantrip"
 python3 -m http.server 8000 --bind 127.0.0.1 --directory "$pages"
 ```
 
-Open `http://127.0.0.1:8000/kantrip/`. Before merging visual changes, check
-phone width (320 px), keyboard-only navigation of the copy and demo controls,
-JavaScript disabled, light and dark color schemes, and `prefers-reduced-motion`,
-in a Chromium- or Firefox-based browser on macOS or Linux.
-
-The social preview (`og:image`, 1280×640) is `site/social-preview.png`, rendered
-from `images/social-preview.svg` with headless Chrome or Chromium. The same
-image is the repository's social preview, uploaded under Settings > General >
-Social preview; GitHub has no API for it. After editing the SVG, render it on
-macOS or Linux:
-
-```bash
-chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"  # Linux: chromium
-"$chrome" --headless=new --hide-scrollbars --force-device-scale-factor=1 \
-  --window-size=1280,640 --screenshot="$PWD/site/social-preview.png" \
-  "file://$PWD/images/social-preview.svg"
-```
-
-The PNG uses the rendering machine's monospace font, so check it before
-committing; `check` verifies that the file exists and matches the declared size.
-
-The `Pages` workflow validates the site on every pull request with read-only
-permissions and never deploys from one. It runs even when `site/` is unchanged,
-because a CLI change can break the demo commands. On pushes to `main` it
-uploads `site/` and deploys it; only the deploy job has `pages: write` and
-`id-token: write`. It requires this one-time repository setup:
-
-- Settings > Pages > Build and deployment > Source: **GitHub Actions**.
-- Settings > Environments > `github-pages` (created with the first setting) >
-  Deployment branches and tags: **Selected branches and tags**, allowing only
-  `main`.
-
-### Recapture the terminal demo
-
-The demo output comes from a real run against the sandbox, made generic.
-`site/demo.json` keeps the generic commands (`prod`, `kafka.example.com:9093`,
-`./ca.pem`, `app`); edit a command there, then recapture whenever a change can
-affect the demo's options or Kantrip's output style. With the sandbox running
-and `kcat` and `kafka-topics` on `PATH`:
-
-```bash
-uv run --locked python -m scripts.website capture
-```
-
-`capture` substitutes the sandbox's SCRAM-SHA-512 listener, CA, and user for the
-generic values, adds a temporary profile to a private temporary database, and
-creates two `kantrip-auth-site-demo-*` topics for the metadata and topic listing.
-It runs every step in a real terminal, so Kantrip prints its colored output,
-and types the sandbox password into the no-echo prompt. The password is read
-from `sandbox/.state` inside the process and is never printed; a capture that
-contains it anywhere fails without writing. The interactive session runs its
-commands in Bash between markers, so your shell prompt is not recorded.
-Terminal colors map back to the Arcana style names and the output is translated
-to the generic values; private session paths become a generic Linux runtime
-path. librdkafka's failed connection attempts to localhost's IPv6 address are
-dropped, because the sandbox listens on IPv4 loopback only and a real broker
-host does not produce them. The capture then rewrites `site/demo.json` and the
-static transcript, and runs `check`; it writes nothing if sandbox values remain. The topics and the profile, including its credential-store
-entry, are removed even when a step fails. From a Git worktree without its own
-sandbox state, `capture` uses the main checkout's `sandbox/.state`; pass
-`--state-dir` to choose another directory.
-
-The interactive session runs Zsh without global startup files and with a
-private `.zshrc` whose prompt shows `$KANTRIP_PROFILE`, as in
-[Usage](USAGE.md#displaying-the-active-profile-in-your-prompt), so the demo shows the
-active profile the way users configure it. Output is deterministic (kcat topics
-are sorted by name), so an unchanged CLI recaptures an identical file.
-
-The `site-demo` pre-commit hook runs `capture` when staged changes touch
-`kantrip/`, `site/demo.json`, `scripts/website.py`, `scripts/__init__.py`, or the
-dependency files. Like the `banner` hook, it rewrites files and fails the commit
-when the demo changed; review and stage `site/demo.json` and `site/index.html`,
-then commit again. It needs the running sandbox, the same as E2E-impacting
-changes. Skip it for one commit only when the demo cannot change, with
-`SKIP=site-demo git commit ...`.
-
-## Architecture and security
-
-- Stable design decisions: [Architecture](ARCHITECTURE.md)
-- Planned work: [milestones](https://github.com/sauljabin/kantrip/milestones)
-- Assets, threats, controls, and limitations: [Threat model](THREAT_MODEL.md)
-- Private vulnerability reporting: [Security policy](SECURITY.md)
+Then open `http://127.0.0.1:8000/kantrip/`. Pushes to `main` deploy it.
 
 ## Release
 
-Git tags define versions and GitHub Releases hold history; do not maintain a
-static version or changelog. Record each candidate with the
-[release checklist](RELEASE_CHECKLIST.md).
-
-Before releasing, ensure `main` is current, clean, and passing:
-
-```bash
-git switch main
-git pull --ff-only origin main
-git status --short
-uv lock --check
-uv run --locked python -m scripts.analyze
-uv run --locked python -m scripts.tests --suite unit
-uv build --clear
-uv run --locked python -m scripts.verify_release dist
-```
-
-Push an annotated stable tag (`vMAJOR.MINOR.PATCH`) or PEP 440 pre-release tag
-(`aN`, `bN`, or `rcN`). The protected workflow validates it against `main`,
-builds and verifies once, installs the wheel, generates Conventional Commit
-notes, attests artifacts, awaits approval, publishes through PyPI trusted
-publishing, and creates the GitHub Release. Kantrip has no Docker release job.
+Follow the [release checklist](RELEASE_CHECKLIST.md). In short: on a clean,
+current `main` with passing checks, push an annotated tag `vMAJOR.MINOR.PATCH`
+(or a pre-release `aN`, `bN`, `rcN`). The protected release workflow builds and
+verifies the wheel once, runs E2E against it, waits for approval, publishes to
+PyPI through trusted publishing, and creates the GitHub Release with generated
+notes.
