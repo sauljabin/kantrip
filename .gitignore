@@ -64,5 +64,3 @@ kantrip-local/
 *.jks
 sandbox/.state/
 
-# Internal planning notes
-KANTRIP_MVP_PLAN.md

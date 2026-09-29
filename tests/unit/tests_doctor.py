@@ -95,8 +95,19 @@ class TestDoctor(unittest.TestCase):
                 for message in verbose_messages
             )
         )
-        self.assertIn("kcat 1.7.0 is supported", verbose_messages)
-        self.assertIn("kaskade 5.0.1 is supported", verbose_messages)
+        self.assertIn("kcat version: 1.7.0", verbose_messages)
+        self.assertIn("Kaskade version: 5.0.1", verbose_messages)
+        clients = dict(report.sections(verbose=True))["Clients"]
+        headers = [index for index, check in enumerate(clients) if not check.verbose_only]
+        groups = {
+            clients[start].message.split(":")[0]: [check.message for check in clients[start:end]]
+            for start, end in zip(headers, [*headers[1:], len(clients)])
+        }
+        self.assertIn("kcat version: 1.7.0", groups["kcat"])
+        self.assertTrue(
+            any(message.startswith("Kafka CLI version: ") for message in groups["Apache Kafka CLI"])
+        )
+        self.assertIn("Kaskade version: 5.0.1", groups["Kaskade"])
 
     def test_reports_a_client_below_its_floor_and_probes_each_client_once(self) -> None:
         self.supported_versions.stop()

@@ -7,11 +7,11 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <title>Kantrip: switch Kafka profiles like magic</title>
-<meta name="description" content="Kantrip securely manages Kafka profiles for kcat, the official Kafka CLIs, Kaskade, kaf, kcl, and compatible applications, keeping secrets in the OS credential store.">
+<meta name="description" content="Kantrip securely manages Kafka profiles for kcat, the Apache Kafka and Confluent CLIs, Kaskade, kaf, kcl, and your own applications, keeping secrets in a dedicated vault in the OS credential store.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kantrip">
 <meta property="og:title" content="Kantrip: switch Kafka profiles like magic">
-<meta property="og:description" content="Secure Kafka profiles for kcat, the Kafka CLIs, and Kaskade, with secrets in the OS credential store.">
+<meta property="og:description" content="Secure Kafka profiles for kcat, the Kafka CLIs, Kaskade, kaf, and kcl, with secrets in a dedicated OS credential vault.">
 <meta property="og:url" content="https://sauljabin.github.io/kantrip/">
 <meta property="og:image" content="https://sauljabin.github.io/kantrip/social-preview.png">
 <meta property="og:image:width" content="1280">
@@ -55,10 +55,12 @@
 <span class="t-title">    |_|\_\__,_|_| |_|\__|_|  |_| .__/     </span>
  <svg class="wand-mark" viewBox="0 0 24 20" aria-hidden="true" focusable="false"><path class="wand-handle" d="M1.8 10H12"/><path class="wand-tip" d="M18 16V4M12.8 13L23.2 7M23.2 13L12.8 7"/></svg><span class="t-secondary"> switch kafka profiles like </span><span class="t-title">|_|</span><span class="t-secondary"> magic</span>  </span></pre>
     </div>
-    <p class="lede">Kantrip securely manages plaintext, TLS, SASL, mTLS, and OAuth Kafka profiles
-      for kcat, the official Kafka CLIs, Kaskade, kaf, kcl, and compatible applications. Save a
-      profile once, keep its secrets in your operating system's credential store, and run
-      your usual clients inside a scoped, supervised session.</p>
+    <p class="lede">Kantrip securely manages Kafka profiles for kcat, the Apache Kafka and
+      Confluent CLIs, Kaskade, kaf, kcl, and applications you run with <code>kantrip exec</code>,
+      over plaintext, verified TLS, SASL/PLAIN, SCRAM, mTLS, or OAuth where the client supports
+      it. Save a profile once, keep its secrets in Kantrip's own vault in your operating
+      system's credential store, and run your usual clients inside a scoped, supervised
+      session.</p>
     <div class="install">
       <div class="window install-window">
         <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">install</span></div>
@@ -111,8 +113,8 @@
     <ul class="cards">
       <li class="card">
         <h3>Secrets stay in the OS store</h3>
-        <p>Passwords, private keys, and client secrets are collected without echo and stored in
-          Kantrip's own vault: a dedicated macOS keychain, or a dedicated GNOME Keyring or KDE
+        <p>Passwords and client secrets are collected without echo, private keys are read from
+          files, and all of them are stored in Kantrip's own vault: a dedicated macOS keychain, or a dedicated GNOME Keyring or KDE
           Wallet collection on Linux. They never appear in profile documents,
           command arguments, or <code>describe</code> output.</p>
         <p class="card-command" aria-hidden="true">kantrip add prod</p>
@@ -158,16 +160,18 @@
       <div>
         <dt><code>kaf</code></dt>
         <dd>Topics, consumer groups, produce, and consume, with a private one-cluster
-          configuration and Confluent Avro decoding.</dd>
+          configuration and Confluent-compatible Avro. No Kafka OAuth.</dd>
       </div>
       <div>
         <dt><code>kcl</code></dt>
-        <dd>Topics, groups, cluster administration, produce, and consume, plus Confluent
-          Schema Registry administration and decoding.</dd>
+        <dd>Topics, groups, cluster administration, produce, and consume, plus
+          Confluent-compatible Registry administration, decoding, and encoding. No Kafka
+          OAuth.</dd>
       </div>
     </dl>
     <p>Kafka connections use plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256,
-      SCRAM-SHA-512, mTLS, or OAuth; registries use Confluent Schema Registry or Apicurio.
+      SCRAM-SHA-512, mTLS, or OAuth, and authentication always requires verified TLS;
+      registries use Confluent Schema Registry or Apicurio.
       Interactive sessions support Bash, Zsh, and Fish. The
       <a href="https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md">compatibility guide</a>
       lists versions and limits.</p>
