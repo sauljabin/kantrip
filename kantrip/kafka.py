@@ -20,7 +20,12 @@ from kantrip.oauth import (
     validate_oauth_endpoint,
     validate_oauth_identity,
 )
-from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
+from kantrip.secret_store import (
+    SecretStore,
+    SecretStoreError,
+    VaultError,
+    parse_secret_reference,
+)
 from kantrip.secret_value import Secret, reveal_optional
 
 KafkaTransport = Literal["plaintext", "tls"]
@@ -259,6 +264,8 @@ def resolve_kafka_connection(
                 connection,
                 oauth=replace(connection.oauth, client_secret=client_secret),
             )
+    except VaultError:
+        raise
     except SecretStoreError as error:
         raise KafkaProfileError("Kafka credentials could not be resolved") from error
     return connection

@@ -34,7 +34,7 @@ from kantrip.profile_storage import (
 )
 from kantrip.profiles import add_profile, edit_profile, remove_profile, resolve_profile_snapshot
 from kantrip.reconciliation import ReconciliationResult, queue_secret_cleanup
-from kantrip.secret_store import SecretStoreError, secret_reference
+from kantrip.secret_store import SecretStoreError, VaultError, secret_reference
 from kantrip.secret_value import Secret
 from tests.unit.pki import synthetic_pki
 
@@ -1408,19 +1408,65 @@ class TestProfiles(unittest.TestCase):
                 load_profiles(path)
 
 
+class TestVaultGuidance(unittest.TestCase):
+    """Vault problems reach the user as guidance, not a generic credential error (#41)."""
+
+    def test_add_reports_the_vault_error_and_stores_nothing(self) -> None:
+        store = _RecordingSecretStore()
+        store.vault_error = VaultError("synthetic vault is locked")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profiles.db"
+
+            with self.assertRaises(ProfileStoreError) as raised:
+                add_profile("secure", path, transport="tls", auth=_scram(), secret_store=store)
+
+            self.assertEqual("synthetic vault is locked", str(raised.exception))
+            self.assertEqual(1, raised.exception.exit_code)
+            self.assertEqual({}, load_profiles(path).profiles)
+
+    def test_snapshot_reports_the_vault_error_for_kafka_and_registry(self) -> None:
+        cases = {
+            "kafka": {"transport": "tls", "auth": _scram()},
+            "registry": {
+                "registry_url": "https://registry.invalid",
+                "registry_auth": RegistryAuthInput(
+                    "basic", username="app", password=Secret("synthetic-password")
+                ),
+            },
+        }
+        for name, options in cases.items():
+            with self.subTest(owner=name), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "profiles.db"
+                store = _RecordingSecretStore()
+                add_profile(name, path, secret_store=store, **options)  # type: ignore[arg-type]
+                store.vault_error = VaultError("synthetic vault is locked")
+
+                with self.assertRaisesRegex(ProfileStoreError, "^synthetic vault is locked$"):
+                    resolve_profile_snapshot(name, path, secret_store=store)
+
+
+def _scram() -> KafkaAuthInput:
+    return KafkaAuthInput("scram-sha-512", username="app", password=Secret("synthetic-password"))
+
+
 class _RecordingSecretStore:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.deleted: list[str] = []
         self.values: dict[str, str] = {}
+        self.vault_error: VaultError | None = None
 
     def get(self, reference: str) -> str:
+        if self.vault_error is not None:
+            raise self.vault_error
         try:
             return self.values[reference]
         except KeyError as error:
             raise SecretStoreError("synthetic missing value") from error
 
     def set(self, reference: str, value: str) -> None:
+        if self.vault_error is not None:
+            raise self.vault_error
         self.values[reference] = value
 
     def delete(self, reference: str) -> None:

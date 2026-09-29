@@ -20,6 +20,7 @@ system or user account.
 - [Actors and trust assumptions](#actors-and-trust-assumptions)
 - [Trust boundaries and entry points](#trust-boundaries-and-entry-points)
   - [Profile storage boundary](#profile-storage-boundary)
+  - [Credential vault boundary](#credential-vault-boundary)
   - [Execution boundary](#execution-boundary)
   - [Network boundary](#network-boundary)
   - [Sandbox laboratory boundary](#sandbox-laboratory-boundary)
@@ -115,6 +116,17 @@ expected fully qualified field. PLAIN and SCRAM passwords, mTLS private keys,
 and optional key passwords never enter the profile document; public client
 certificate chains do and are checked against the resolved key before use.
 
+### Credential vault boundary
+
+On macOS, credentials cross into the dedicated Kantrip keychain,
+`~/Library/Keychains/kantrip.keychain-db`, whose password macOS collects on the
+terminal and Kantrip never handles. The vault unlocks independently of the login
+session and locks after 15 idle minutes and on sleep unless the user changes it.
+Kantrip writes and reads items only through `/usr/bin/security`, with values on
+stdin and never in argv. It reads the vault's lock state before every item
+access without prompting, and never reads a locked vault, which would open a
+macOS password window. See [Credential vault](ARCHITECTURE.md#credential-vault).
+
 ### Execution boundary
 
 Kantrip crosses from protected state into a trusted child when it creates the
@@ -149,11 +161,14 @@ administrator, compromised node, or process inside that short-lived container
 can still read the mounted or temporary value.
 
 The E2E runner accepts only an explicitly provisioned sandbox and never owns its
-lifecycle. It requires the approved native credential backend (macOS Keychain or
-Linux Secret Service), performs an exact temporary set/get/delete check, and
-serializes changes to shared OAuth identities. CI creates a fresh DBus/GNOME
-Keyring session and removes only its own sandbox after sanitized diagnostics are
-captured. Local E2E intentionally leaves the caller's sandbox running.
+lifecycle. It requires the approved native credential backend (the Kantrip
+vault on macOS or Linux Secret Service), performs an exact temporary
+set/get/delete check, and serializes changes to shared OAuth identities. CI
+creates a fresh DBus/GNOME Keyring session and removes only its own sandbox
+after sanitized diagnostics are captured. Local E2E intentionally leaves the
+caller's sandbox running. The separate macOS vault job creates a disposable
+vault with a random, masked password on the command line, which is acceptable
+only for that throwaway runner vault.
 
 ### Recovery boundary
 
@@ -231,10 +246,16 @@ unintended copies of credential input.
 
 Controls:
 
-- Store long-lived secrets only in macOS Keychain or an approved Linux Secret
-  Service-compatible backend.
+- Store long-lived secrets only in the dedicated macOS vault or an approved
+  Linux Secret Service-compatible backend. Never fall back to the macOS login
+  keychain, which unlocks with the session.
 - Reject null, fail, plaintext, encrypted-file, unavailable, locked, and unknown
-  backends rather than degrading silently.
+  Linux backends rather than degrading silently.
+- Refuse an empty vault password at creation and report one in `doctor`, since
+  it lets anyone at the account unlock the vault without a prompt.
+- Create vault items through `/usr/bin/security`, whose stable partition keeps
+  Python upgrades from prompting, and keep labels and accounts free of secrets:
+  they name only the field and the profile and credential UUIDs.
 - Store only opaque immutable references in profile documents. Each reference
   includes independent profile and credential UUIDs so replacement never
   overwrites the value used by the current profile.
@@ -252,7 +273,14 @@ Controls:
 Residual risk: standard keyring APIs cannot enumerate arbitrary entries. If the
 reconciliation journal is destroyed, Kantrip cannot prove that no orphaned
 credential remains. A compromised or unlocked native store also exposes all
-secrets accessible to the user.
+secrets accessible to the user. While the macOS vault is unlocked, any process
+of the same user can read its items through `/usr/bin/security` without a
+prompt; Kantrip runs as Python, not as a signed binary, so it claims no
+per-application isolation inside the vault. Any process of the same user can
+delete the vault file, even while it is locked; reads then fail with recovery
+guidance, and a replaced vault reads as missing secrets. A user can lengthen or
+remove the vault's lock timeout in Keychain Access; `doctor` reports a vault
+that never locks.
 
 ### Secret disclosure during execution
 
@@ -403,6 +431,7 @@ reliably redact arbitrary child output without corrupting it.
 Threats include locked credential stores, hanging clients, unavailable remote
 services, malformed certificate files, large private keys, many stale session
 directories, and a migration blocked by another writer or insufficient disk.
+A locked macOS vault read without a terminal would wait on a password window.
 
 Controls:
 
@@ -411,6 +440,9 @@ Controls:
 - Bound PEM input sizes. Realistic backend-size integration evidence remains
   a first-release verification requirement.
 - Fail before launch when required secrets, clients, or mappings are missing.
+- Unlock a locked macOS vault only on the controlling terminal, with three
+  attempts and a clean Ctrl-C cancellation; without a terminal, fail at once
+  with guidance. A refused unlock is not asked again in the same process.
 - Scan only direct children of the validated runtime root automatically.
 - Bound maintenance lock acquisition and preserve every uniquely named private
   pre-migration backup.
@@ -449,6 +481,8 @@ can prevent operation.
   on-disk secret material or provide forensic deletion.
 - Native keyring operations and SQLite updates are not one atomic transaction;
   reconciliation narrows but cannot eliminate every orphan scenario.
+- A macOS vault that times out between Kantrip's state check and an item read
+  opens a macOS password window; the interval is milliseconds.
 - Security support is only as complete as the tested client/version matrix. A
   client upgrade can require a new mapping before Kantrip can safely launch it.
 - Successful connectivity does not establish authorization beyond the exact

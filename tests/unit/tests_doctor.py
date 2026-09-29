@@ -14,6 +14,7 @@ from kantrip.doctor import (
     PYTHON_EXCLUSIVE_MAXIMUM,
     PYTHON_MINIMUM,
     DoctorCheck,
+    DoctorReport,
     _check_python,
     run_doctor,
 )
@@ -23,9 +24,13 @@ from kantrip.profiles import add_profile
 from kantrip.reconciliation import queue_secret_cleanup
 from kantrip.runtime import SESSION_STALE_SECONDS, create_session_runtime
 from kantrip.secret_store import (
+    LockPolicy,
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreInfo,
+    VaultError,
+    VaultState,
+    VaultStatus,
     secret_reference,
 )
 from kantrip.secret_value import Secret
@@ -41,7 +46,8 @@ class TestDoctor(unittest.TestCase):
             info=SecretStoreInfo(
                 "keyring.backends.SecretService.Keyring",
                 "Secret Service",
-            )
+            ),
+            **{"vault_status.return_value": None},
         )
         patcher = patch("kantrip.doctor.load_secret_store", return_value=store)
         patcher.start()
@@ -643,13 +649,148 @@ class TestDoctorPythonRange(unittest.TestCase):
         )
 
 
+class TestDoctorVault(unittest.TestCase):
+    """The vault is reported without unlocking it; one vault error is reported once (#41)."""
+
+    def setUp(self) -> None:
+        use_supported_client_versions(self)
+
+    def test_locked_vault_is_reported_without_a_lock_policy(self) -> None:
+        messages = self._messages(_vault("locked"))
+
+        self.assertIn(
+            "Credential vault: ~/Library/Keychains/kantrip.keychain-db (locked)", messages
+        )
+        self.assertFalse(any("locks after" in message for message in messages))
+
+    def test_unlocked_vault_reports_its_lock_policy(self) -> None:
+        cases = {
+            LockPolicy(True, 900): (
+                "success",
+                "Credential vault locks after 15 minutes idle and on sleep",
+            ),
+            LockPolicy(False, 60): ("success", "Credential vault locks after 1 minute idle"),
+            LockPolicy(True, None): ("success", "Credential vault locks on sleep"),
+            LockPolicy(False, None): (
+                "warning",
+                "Credential vault never locks by itself; set a lock timeout in Keychain Access",
+            ),
+        }
+        for policy, (status, message) in cases.items():
+            with self.subTest(policy=policy):
+                report = self._report(_vault("unlocked", policy))
+                self.assertIn(DoctorCheck(status, message, "Credentials"), report.checks)
+                self.assertIn(
+                    "Credential vault: ~/Library/Keychains/kantrip.keychain-db (unlocked)",
+                    self._text(report),
+                )
+
+    def test_missing_vault_and_its_warnings_are_warnings(self) -> None:
+        report = self._report(_vault("missing", warnings=("synthetic vault warning",)))
+
+        self.assertIn(
+            DoctorCheck(
+                "warning",
+                "Credential vault: ~/Library/Keychains/kantrip.keychain-db (not created yet)",
+                "Credentials",
+            ),
+            report.checks,
+        )
+        self.assertIn(
+            DoctorCheck("warning", "synthetic vault warning", "Credentials"), report.checks
+        )
+
+    def test_vault_that_cannot_be_inspected_is_an_error(self) -> None:
+        store = _MemoryStore()
+        store.status = VaultError("synthetic vault problem")
+
+        report = self._report(store)
+
+        self.assertFalse(report.healthy)
+        self.assertIn(
+            "Credential vault could not be inspected: synthetic vault problem", self._text(report)
+        )
+
+    def test_vault_error_stops_profile_checks_with_one_message(self) -> None:
+        store = _vault("locked")
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "profiles.db"
+            for name in ("first", "second"):
+                add_profile(
+                    name,
+                    database_path,
+                    transport="tls",
+                    auth=KafkaAuthInput(
+                        "scram-sha-512", username="app", password=Secret("synthetic-password")
+                    ),
+                    secret_store=store,
+                )
+            store.get_error = VaultError("synthetic vault is locked")
+            report = self._report(store, database_path, directory)
+
+        messages = self._text(report)
+        self.assertFalse(report.healthy)
+        self.assertEqual(
+            ["Profile credentials were not checked: synthetic vault is locked"],
+            [message for message in messages if "synthetic vault" in message],
+        )
+        self.assertFalse(any("kafka.auth.password" in message for message in messages))
+
+    def _messages(self, store: "_MemoryStore") -> list[str]:
+        return self._text(self._report(store))
+
+    def _report(
+        self,
+        store: "_MemoryStore",
+        database_path: Path | None = None,
+        directory: str | None = None,
+    ) -> DoctorReport:
+        with tempfile.TemporaryDirectory() as fallback:
+            root = directory or fallback
+            environment = {
+                "KANTRIP_DATABASE": str(database_path or Path(root) / "profiles.db"),
+                "XDG_RUNTIME_DIR": root,
+                "PATH": "/tools",
+                "SHELL": "/tools/zsh",
+            }
+            with (
+                patch("kantrip.doctor.load_secret_store", return_value=store),
+                patch("kantrip.doctor.shutil.which", side_effect=_installed_tool),
+            ):
+                return run_doctor(environment)
+
+    @staticmethod
+    def _text(report: DoctorReport) -> list[str]:
+        return [check.message for check in report.checks]
+
+
+def _vault(
+    state: VaultState,
+    policy: LockPolicy | None = None,
+    *,
+    warnings: tuple[str, ...] = (),
+) -> "_MemoryStore":
+    store = _MemoryStore()
+    store.status = VaultStatus("~/Library/Keychains/kantrip.keychain-db", state, policy, warnings)
+    return store
+
+
 class _MemoryStore:
     info = SecretStoreInfo("keyring.backends.SecretService.Keyring", "Secret Service")
 
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
+        self.status: VaultStatus | VaultError | None = None
+        self.get_error: VaultError | None = None
+
+    def vault_status(self) -> VaultStatus | None:
+        if isinstance(self.status, VaultError):
+            raise self.status
+        return self.status
 
     def get(self, reference: str) -> str:
+        if self.get_error is not None:
+            raise self.get_error
         try:
             return self.values[reference]
         except KeyError as error:

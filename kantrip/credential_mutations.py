@@ -15,6 +15,7 @@ from kantrip.reconciliation import (
 from kantrip.secret_store import (
     SecretStore,
     SecretStoreError,
+    VaultError,
     parse_secret_reference,
     secret_reference,
 )
@@ -129,6 +130,10 @@ def stage_secret_replacements(
             store.set(item.reference, replacement.value.reveal())
             if store.get(item.reference) != replacement.value.reveal():
                 raise CredentialMutationError("staged credential verification failed")
+    except VaultError as error:
+        # The vault message is guidance (locked, no terminal, cancelled) that
+        # the user needs more than the generic staging failure.
+        raise CredentialMutationError(str(error)) from error
     except SecretStoreError as error:
         raise CredentialMutationError("profile credentials could not be staged") from error
     return journaled

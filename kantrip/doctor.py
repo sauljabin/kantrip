@@ -7,10 +7,10 @@ import shutil
 import stat
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from cryptography import x509
 
@@ -58,9 +58,12 @@ from kantrip.runtime import (
     scan_sessions,
 )
 from kantrip.secret_store import (
+    LockPolicy,
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
+    VaultError,
+    VaultStatus,
     load_secret_store,
 )
 from kantrip.shells import ShellError, resolve_interactive_shell
@@ -191,18 +194,20 @@ def _check_credentials(
     checks: list[DoctorCheck] = []
     store: SecretStore | None = None
     try:
-        store = load_secret_store()
+        loaded = load_secret_store()
     except SecretStoreError:
         checks.append(DoctorCheck("error", "Credential store backend is unavailable or unsafe"))
     else:
-        checks.append(DoctorCheck("success", f"Credential store: {store.info.display_name}"))
+        store = loaded
+        checks.append(DoctorCheck("success", f"Credential store: {loaded.info.display_name}"))
         checks.append(
             DoctorCheck(
                 "success",
-                f"Credential store backend: {store.info.backend}",
+                f"Credential store backend: {loaded.info.backend}",
                 verbose_only=True,
             )
         )
+        checks.extend(_check_vault(loaded.vault_status))
     try:
         pending = inspect_pending_secret_cleanup(environment=environment)
     except ProfileStoreError as error:
@@ -225,6 +230,46 @@ def _check_credentials(
     return checks, store
 
 
+def _check_vault(vault_status: Callable[[], VaultStatus | None]) -> list[DoctorCheck]:
+    """Report the vault's identity and state; this never unlocks or prompts."""
+    try:
+        status = vault_status()
+    except SecretStoreError as error:
+        return [DoctorCheck("error", f"Credential vault could not be inspected: {error}")]
+    if status is None:
+        return []
+    label = f"Credential vault: {status.location}"
+    if status.state == "missing":
+        checks = [DoctorCheck("warning", f"{label} (not created yet)")]
+    else:
+        checks = [DoctorCheck("success", f"{label} ({status.state})")]
+    if status.lock_policy is not None:
+        checks.append(_lock_policy_check(status.lock_policy))
+    checks.extend(DoctorCheck("warning", warning) for warning in status.warnings)
+    return checks
+
+
+def _lock_policy_check(policy: LockPolicy) -> DoctorCheck:
+    parts = []
+    if policy.idle_seconds is not None:
+        parts.append(f"after {_duration(policy.idle_seconds)} idle")
+    if policy.lock_on_sleep:
+        parts.append("on sleep")
+    if not parts:
+        return DoctorCheck(
+            "warning",
+            "Credential vault never locks by itself; set a lock timeout in Keychain Access",
+        )
+    return DoctorCheck("success", f"Credential vault locks {' and '.join(parts)}")
+
+
+def _duration(seconds: int) -> str:
+    if seconds % 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    minutes = seconds // 60
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
 def _check_profile_credentials(
     profiles: ProfileCollection | None,
     store: SecretStore | None,
@@ -232,31 +277,41 @@ def _check_profile_credentials(
     if profiles is None or not profiles.profiles:
         return []
     checks: list[DoctorCheck] = []
-    for name, profile in profiles.profiles.items():
-        try:
-            connection = kafka_connection(profile)
-        except KafkaProfileError:
-            checks.append(DoctorCheck("error", f"Kafka profile '{name}' is not executable"))
-            continue
-        checks.extend(_check_certificate_validity(name, profile))
-        references = credential_references(profile)
-        if not references:
-            checks.append(DoctorCheck("success", f"Profile '{name}' requires no credentials"))
-            continue
-        if store is None:
-            checks.append(DoctorCheck("error", f"Profile '{name}' credentials are unavailable"))
-            continue
-        checks.extend(_check_exact_references(name, references, store))
-        if not connection.requires_secrets:
-            continue
-        try:
-            resolve_kafka_connection(connection, store)
-        except KafkaProfileError:
-            checks.append(
-                DoctorCheck("error", f"Profile '{name}' Kafka credential identity is invalid")
-            )
-        else:
-            checks.append(DoctorCheck("success", f"Profile '{name}' Kafka credentials are usable"))
+    try:
+        for name, profile in profiles.profiles.items():
+            checks.extend(_check_one_profile_credentials(name, profile, store))
+    except VaultError as error:
+        # One vault problem blocks every remaining profile; say it once.
+        checks.append(DoctorCheck("error", f"Profile credentials were not checked: {error}"))
+    return checks
+
+
+def _check_one_profile_credentials(
+    name: str,
+    profile: Mapping[str, Any],
+    store: SecretStore | None,
+) -> list[DoctorCheck]:
+    try:
+        connection = kafka_connection(profile)
+    except KafkaProfileError:
+        return [DoctorCheck("error", f"Kafka profile '{name}' is not executable")]
+    checks = _check_certificate_validity(name, profile)
+    references = credential_references(profile)
+    if not references:
+        return [*checks, DoctorCheck("success", f"Profile '{name}' requires no credentials")]
+    if store is None:
+        return [*checks, DoctorCheck("error", f"Profile '{name}' credentials are unavailable")]
+    checks.extend(_check_exact_references(name, references, store))
+    if not connection.requires_secrets:
+        return checks
+    try:
+        resolve_kafka_connection(connection, store)
+    except KafkaProfileError:
+        checks.append(
+            DoctorCheck("error", f"Profile '{name}' Kafka credential identity is invalid")
+        )
+    else:
+        checks.append(DoctorCheck("success", f"Profile '{name}' Kafka credentials are usable"))
     return checks
 
 
@@ -270,6 +325,8 @@ def _check_exact_references(
     for field, reference in references.items():
         try:
             store.get(reference)
+        except VaultError:
+            raise
         except SecretNotFoundError:
             checks.append(DoctorCheck("error", f"Profile '{name}' {field} is missing"))
         except SecretStoreError:
@@ -472,7 +529,7 @@ def _check_private_database_file(path: Path, label: str) -> DoctorCheck:
     if exposed_permissions:
         return DoctorCheck(
             "error",
-            f"{label} permissions are broader than 0600 " f"({stat.S_IMODE(metadata.st_mode):04o})",
+            f"{label} permissions are broader than 0600 ({stat.S_IMODE(metadata.st_mode):04o})",
         )
     return DoctorCheck("success", f"{label} permissions are private")
 

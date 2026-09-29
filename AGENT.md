@@ -113,10 +113,16 @@
   commands may migrate an existing supported database, but reads never create a
   missing repository. Normal `doctor` inspection never creates or modifies
   filesystem state.
-- Access credentials only through the narrow `SecretStore` protocol. Approve
-  only macOS Keychain on macOS and Secret Service-compatible keyring backends on
-  Linux; reject null, plaintext, encrypted-file, chained, and unknown backends.
-  Use service `kantrip` and canonical immutable
+- Access credentials only through the narrow `SecretStore` protocol. On macOS,
+  use only the dedicated vault `~/Library/Keychains/kantrip.keychain-db`: read
+  and write items only through `/usr/bin/security` with values on stdin, split
+  them below the `security -i` line limit, read lock state and policy only
+  through Security.framework with interaction disabled, never read a locked
+  vault, create and unlock it only on the terminal, and never fall back to the
+  login keychain. On Linux, approve only Secret Service-compatible keyring
+  backends; reject null, plaintext, encrypted-file, chained, and unknown
+  backends. Surface `VaultError` guidance instead of a generic credential
+  error. Use service `kantrip` and canonical immutable
   `profile/<profile-uuid>/<credential-uuid>/<field>` keys. Fully qualify fields
   by owner, including `kafka/oauth/client-secret` and
   `registry/oauth/client-secret`.
@@ -283,11 +289,14 @@
 - `python -m scripts.tests --suite unit` is the default offline gate. It includes
   the Bash, Zsh, and Fish PTY contract with generated fake clients.
 - `python -m scripts.tests --suite e2e` is the sole external acceptance entry
-  point. It requires an explicitly provisioned sandbox, the pinned released
-  clients in `tests/e2e/versions.env`, the candidate wheel installed separately,
-  and a real approved native credential backend. It must never create or remove
-  the caller's sandbox. It owns exact temporary profiles, topics, schemas, and
-  artifacts and cleans only those resources.
+  point for Kafka and Registry behavior. It requires an explicitly provisioned
+  sandbox, the pinned released clients in `tests/e2e/versions.env`, the
+  candidate wheel installed separately, and a real approved native credential
+  backend. It must never create or remove the caller's sandbox. It owns exact
+  temporary profiles, topics, schemas, and artifacts and cleans only those
+  resources. `--suite vault` is the sandbox-free macOS vault acceptance; it
+  locks and unlocks the real vault, so it runs only where the vault is
+  disposable, such as the macOS CI job.
 - E2E preconditions must distinguish missing tooling or infrastructure from
   product assertion failures. Exercise real operations, not help/version output;
   parse TUI behavior through terminal state, not raw redraw bytes. Serialize the

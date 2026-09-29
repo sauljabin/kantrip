@@ -66,9 +66,12 @@ kantrip add qa-scram -b localhost:9094 --transport tls \
   --ca-file sandbox/.state/ca.crt --auth scram-sha-512 --username kantrip-scram
 ```
 
-1. The password prompt does not echo. Enter the SCRAM password.
+1. The password prompt does not echo. Enter the SCRAM password. On macOS
+   without a Kantrip vault, `add` first creates one (see §10).
 2. Open Keychain Access (macOS) or Seahorse/KWallet (Linux). Expect one item
    with service `kantrip` and an account like `profile/<uuid>/<uuid>/kafka/password`.
+   On macOS it is in the `kantrip` keychain, not `login`, labeled
+   `Kantrip kafka/password (profile <uuid>)`.
 3. `sqlite3 "$KANTRIP_DATABASE" .dump | grep -c 'THE_PASSWORD'` prints `0`.
 4. `kantrip ping qa-scram` succeeds.
 5. Rotate with a wrong value, then the right one:
@@ -77,8 +80,8 @@ kantrip add qa-scram -b localhost:9094 --transport tls \
    one keychain item after each rotation.
 6. `kantrip remove qa-scram` → decline → nothing changes; again with
    `--yes` → the keychain item is gone.
-7. macOS only: the first access may show a Keychain permission dialog; record
-   the wording and which executable it names (pipx venv Python).
+7. macOS only: no macOS permission or password window appears at any step;
+   record the wording and the named executable if one does.
 
 
 ## 3. No secrets leak during a session
@@ -177,3 +180,44 @@ kantrip edit qa-scram --replace-secret kafka.auth.password   # expect: recovers
 ```
 
 Expect every message to name the problem and the next command to run.
+
+## 10. Vault lock (macOS)
+
+Uses your real vault, `~/Library/Keychains/kantrip.keychain-db`; use a spare
+macOS account if you don't want to recreate it. Keep `qa-scram` from §2. No
+macOS window may appear in any step; every prompt is on the terminal.
+
+1. Creation (an account without the vault): the first `kantrip add` with a
+   secret explains the vault and asks for a new password twice. A mismatch asks
+   again. Pressing Enter twice (empty password) fails with "must not be empty"
+   and leaves no vault file. Afterwards, Keychain Access lists a `kantrip`
+   keychain.
+2. `kantrip doctor` shows `Credential vault: ~/Library/Keychains/kantrip.keychain-db
+   (unlocked)` and `Credential vault locks after 15 minutes idle and on sleep`.
+3. Lock it: `security lock-keychain ~/Library/Keychains/kantrip.keychain-db`.
+   `kantrip list` and `kantrip describe qa-scram` do not prompt.
+   `kantrip doctor` prints the `(locked)` line, then asks for the vault password
+   on the terminal.
+4. Lock again and run `kantrip exec qa-scram -- true`. A wrong password prints
+   `Incorrect password; 2 attempts left.`; the right one runs the command.
+5. Lock again and run `kantrip ping qa-scram`; press Ctrl-C at the prompt.
+   Expect `Kantrip vault unlock was cancelled`, status 1, and no traceback.
+6. With the vault still locked, run without a terminal:
+   `python3 -c 'import subprocess; subprocess.run(["kantrip", "exec", "qa-scram", "--", "true"], start_new_session=True)'`.
+   It fails at once with "locked and there is no terminal" and the
+   `security unlock-keychain` command to run.
+7. Start `kantrip exec qa-scram`, then lock the vault from another terminal.
+   `kcat -L` inside the session still works.
+8. Leave the vault unlocked and unused for 16 minutes, then run `kantrip doctor`:
+   it shows `(locked)`. Unlock it, sleep the Mac for a minute, wake it: locked
+   again.
+9. In Keychain Access, select `kantrip` and choose Edit > Change Settings for
+   Keychain "kantrip". Set 5 minutes; with the vault unlocked, `kantrip doctor`
+   shows `locks after 5 minutes idle and on sleep`. Set it back to 15.
+10. Move the vault away:
+    `mv ~/Library/Keychains/kantrip.keychain-db ~/kantrip-qa.keychain-db`.
+    `kantrip doctor` warns `(not created yet)` and that Keychain Access still
+    lists the vault; `kantrip exec qa-scram -- true` fails with
+    `--replace-secret` guidance. `kantrip doctor --repair` removes the Keychain
+    Access entry. Move the file back; `kantrip exec qa-scram -- true` works
+    again after unlocking.

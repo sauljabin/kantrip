@@ -21,7 +21,12 @@ from kantrip.oauth import (
     validate_oauth_endpoint,
     validate_oauth_identity,
 )
-from kantrip.secret_store import SecretStore, SecretStoreError, parse_secret_reference
+from kantrip.secret_store import (
+    SecretStore,
+    SecretStoreError,
+    VaultError,
+    parse_secret_reference,
+)
 from kantrip.secret_value import Secret
 
 RegistryProvider = Literal["apicurio", "confluent"]
@@ -199,6 +204,8 @@ def resolve_registry_connection(
                     client_secret=_secret(store, connection.oauth.client_secret_reference),
                 ),
             )
+    except VaultError:
+        raise
     except SecretStoreError as error:
         raise RegistryProfileError("Registry credentials could not be resolved") from error
     return connection
@@ -711,8 +718,7 @@ def _validate_url(url: str, *, secure: bool) -> None:
         or (port is not None and not 1 <= port <= 65535)
     ):
         raise RegistryProfileError(
-            "Registry URL must use http:// or https:// without credentials, a query, "
-            "or a fragment"
+            "Registry URL must use http:// or https:// without credentials, a query, or a fragment"
         )
     if secure and parsed.scheme != "https":
         raise RegistryProfileError(

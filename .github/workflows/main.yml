@@ -99,7 +99,7 @@ jobs:
           echo "E2E selected: $selected"
 
   e2e-tests:
-    name: E2E / Ubuntu / released clients
+    name: E2E
     needs: [e2e-selection]
     if: needs.e2e-selection.outputs.run_e2e == 'true'
     uses: ./.github/workflows/e2e.yml
