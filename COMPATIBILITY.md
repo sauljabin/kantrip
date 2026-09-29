@@ -151,11 +151,16 @@ adapter, even though an arbitrary executable can run as a supervised child.
 | Platform | Where credentials live | Locking |
 | --- | --- | --- |
 | macOS | The Kantrip vault, a dedicated keychain at `~/Library/Keychains/kantrip.keychain-db`, read and written only through `/usr/bin/security` | Locks after 15 idle minutes and on sleep unless you change it in Keychain Access; unlocks on the terminal |
-| Linux | The default Secret Service collection of GNOME Keyring or KWallet | Follows the collection's own locking |
-| Windows, and other Linux backends (plaintext, encrypted-file, null, chained) | Unsupported | Not applicable |
+| Linux with GNOME Keyring (GNOME, COSMIC, and other desktops that run it) | The Kantrip vault, a dedicated keyring `kantrip` at `~/.local/share/keyrings/kantrip.keyring` | Locks only at logout; unlocks in a desktop window |
+| Linux with KDE Wallet (KDE Plasma) | The Kantrip vault, a dedicated wallet `kantrip` at `~/.local/share/kwalletd/kantrip.kwl` | Locks at logout, or when unused for the time set in KDE's settings; unlocks in a desktop window |
+| Windows, and other Secret Service providers such as KeePassXC | Unsupported | Not applicable |
 
-A locked macOS vault can be unlocked only from a terminal; without one, commands
-that need a credential fail at once. See [Credential vault](USAGE.md#credential-vault).
+A locked vault is unlocked only for a command run in a terminal: on macOS the
+password prompt is on the terminal, on Linux it is a desktop window that needs
+an unlocked graphical session. Without a terminal, commands that need a
+credential fail at once, unless a Linux vault opens without asking for its
+password. The Linux vault was tested with GNOME Keyring 46 and 50 and with KDE
+Frameworks 6.24 (`ksecretd`). See [Credential vault](USAGE.md#credential-vault).
 
 ## File formats
 

@@ -53,6 +53,8 @@ independent identity, scopes, secret, and optional CA trust.
   - [kcl](#kcl)
 - [Profile storage](#profile-storage)
 - [Credential vault](#credential-vault)
+  - [macOS vault](#macos-vault)
+  - [Linux vault](#linux-vault)
 - [Application environment from `kantrip exec`](#application-environment-from-kantrip-exec)
   - [Environment precedence](#environment-precedence)
   - [Kafka variables](#kafka-variables)
@@ -94,16 +96,17 @@ kantrip doctor
 
 Doctor groups local checks under System, Profiles, Credentials, Session, and
 Clients, names missing commands, and summarizes health. It validates the profile
-database, approved OS credential backend, Registry support, reconciliation
+database, credential vault, Registry support, reconciliation
 state, active-session state, recoverable runtime artifacts, and installed
 clients, including any client older than Kantrip supports. It reads every secret each profile references (Kafka and Registry,
 including OAuth client secrets) and reports it as stored, missing, or
 unavailable under its field name, such as `registry.auth.token`, without printing
 sensitive material. It also checks certificate/key validity and certificate
 expiry. `doctor` is the only command that reads secret values to report this;
-`describe` only lists them as `configured`. On macOS it reports the
-[credential vault](#credential-vault) path and whether it is locked before it
-reads anything, and the vault's lock setting while it is unlocked. Use
+`describe` only lists them as `configured`. It reports where the
+[credential vault](#credential-vault) is and whether it is locked before it
+reads anything; on macOS it also shows the vault's lock setting while it is
+unlocked. Use
 `-v`/`--verbose` for paths, backend identity, and individual checks.
 
 Doctor always lists the sessions on this machine: one line per session with
@@ -129,7 +132,7 @@ Profile-dependent commands automatically apply known SQLite migrations. A
 normal `doctor` run only reports pending work; it does not create or modify
 storage. Use `kantrip doctor --repair` for an explicit maintenance pass that
 migrates the profile database, reconciles exact pending credential cleanup,
-removes a deleted credential vault from Keychain Access, removes validated stale
+removes a deleted macOS credential vault from Keychain Access, removes validated stale
 sessions, and then runs the diagnostics again. Kantrip
 has no separate migration or cleanup command.
 Migration backups include their UTC creation time and a unique suffix, so later
@@ -147,8 +150,8 @@ mv ~/.local/share/kantrip/profiles.db ~/.local/share/kantrip/profiles.db.pre-rel
 Use the path reported by `kantrip doctor --verbose` if you set
 `KANTRIP_DATABASE` or `XDG_DATA_HOME`. The old credentials stay in the OS
 credential store under the service name `kantrip`. Delete them once the new
-profiles work: on macOS, as [Credential vault](#credential-vault) describes; on
-Linux, with your Secret Service manager.
+profiles work, as [Credential vault](#credential-vault) describes for each
+platform.
 
 ## Kafka and registry connectivity
 
@@ -265,9 +268,8 @@ actionable error when it cannot prove support. Kafka 2.6 and Confluent Platform
 6.0 can still use TLS with their default trust stores.
 
 Add password authentication over TLS. The password is collected without echo
-and stored in the [credential vault](#credential-vault) on macOS or in Linux
-Secret Service; it is never placed in the profile document or command
-arguments:
+and stored in the [credential vault](#credential-vault); it is never placed in
+the profile document or command arguments:
 
 ```bash
 kantrip add production-scram \
@@ -898,13 +900,27 @@ and format requirements of each API.
 
 ## Credential vault
 
-On macOS, Kantrip keeps passwords, private keys, tokens, and client secrets in
-its own keychain, `~/Library/Keychains/kantrip.keychain-db`, not in your login
-keychain. macOS owns the vault password: Kantrip never reads, stores, or passes
-it.
+Kantrip keeps passwords, private keys, tokens, and client secrets in its own
+vault named `kantrip`, not in your login keychain or default keyring, so your
+login alone does not unlock them. The operating system owns the vault password:
+Kantrip never reads, stores, or passes it. Each item is labeled like
+`Kantrip kafka/password (profile UUID)`.
 
-The first command that stores a credential, `add` or `edit` with a secret,
-creates the vault. macOS asks for the new password twice on the terminal:
+Only commands that need a credential open the vault: `add` and `edit` when they
+store a secret, `remove` of a profile with credentials, `exec`, `ping`, and
+`doctor`. `list`, `describe`, `current`, and `--help` never touch it. A running
+`kantrip exec` command or shell keeps working after the vault locks, because it
+already has its credentials.
+
+The first command that stores a credential creates the vault, and a locked
+vault is unlocked when a command needs it. Both ask for the vault password, so
+run them in a terminal. Without one, such as in a script, a scheduled job, or
+CI, a missing or locked vault fails at once with guidance instead of waiting.
+
+### macOS vault
+
+The vault is a keychain file, `~/Library/Keychains/kantrip.keychain-db`. When
+Kantrip creates it, macOS asks for the new password twice on the terminal:
 
 ```text
 Kantrip keeps credentials in its own keychain, ~/Library/Keychains/kantrip.keychain-db.
@@ -914,35 +930,28 @@ retype password for new keychain:
 ```
 
 Choose a password that differs from your login password. An empty password is
-refused and the new vault is removed. Kantrip adds the vault to Keychain Access,
-where each item is labeled like `Kantrip kafka/password (profile UUID)`. Long
-values, such as private keys, are split into several items marked `part 1 of 2`.
+refused and the new vault is removed. Kantrip adds the vault to Keychain Access.
+Long values, such as private keys, are split into several items marked
+`part 1 of 2`.
 
 The vault locks after 15 idle minutes and when the Mac sleeps. To change that,
 select the `kantrip` keychain in Keychain Access and choose Edit > Change
 Settings for Keychain "kantrip". `kantrip doctor` shows the current setting
 while the vault is unlocked.
 
-Only commands that need a credential open the vault: `add` and `edit` when they
-store a secret, `remove` of a profile with credentials, `exec`, `ping`, and
-`doctor`. `list`, `describe`, `current`, and `--help` never touch it. When the
-vault is locked, those commands ask for its password on the terminal:
+When the vault is locked, commands ask for its password on the terminal:
 
 ```text
 Kantrip vault ~/Library/Keychains/kantrip.keychain-db is locked.
 password to unlock /Users/you/Library/Keychains/kantrip.keychain-db:
 ```
 
-You get three attempts; Ctrl-C cancels and leaves the vault locked. Without a
-terminal, such as in a script, a scheduled job, or CI, a locked vault fails at
-once with guidance instead of waiting. Unlock it beforehand from a terminal:
+You get three attempts; Ctrl-C cancels and leaves the vault locked. To use the
+vault from a script, unlock it beforehand from a terminal:
 
 ```bash
 security unlock-keychain ~/Library/Keychains/kantrip.keychain-db
 ```
-
-A running `kantrip exec` command or shell keeps working after the vault locks,
-because it already has its credentials.
 
 Delete the vault and every credential in it with:
 
@@ -966,9 +975,78 @@ found:
 security delete-generic-password -s kantrip ~/Library/Keychains/login.keychain-db
 ```
 
-On Linux, credentials are stored in the default Secret Service collection
-(GNOME Keyring or KWallet) under the service name `kantrip` and follow that
-collection's locking.
+### Linux vault
+
+The vault lives in your desktop's Secret Service. GNOME, COSMIC, and other
+desktops that run GNOME Keyring keep it as the keyring `kantrip`
+(`~/.local/share/keyrings/kantrip.keyring`); KDE Plasma keeps it as the wallet
+`kantrip` (`~/.local/share/kwalletd/kantrip.kwl`). Kantrip refuses other Secret
+Service providers, such as KeePassXC. Manage the vault in Passwords and Keys
+(Seahorse) on GNOME or in KDE Wallet Manager on KDE.
+
+Password windows are desktop windows, never terminal prompts. Kantrip prints
+what the window is for and waits up to 60 seconds; after that it closes the
+window and fails. When Kantrip creates the vault:
+
+```text
+Kantrip keeps credentials in its own keyring, 'kantrip'.
+Choose a password for it in the window on your desktop; Kantrip waits up to 60 seconds. Kantrip never sees or stores this password.
+```
+
+Choose a password that differs from your login password. On GNOME, an empty
+password is refused and the new keyring is removed. KDE's wallet wizard
+preselects GPG encryption, which fails unless you have a GPG key: choose
+Classic.
+
+When the vault is locked, commands print
+`Kantrip vault PATH is locked. Enter its password in the window on your desktop`
+and the desktop shows the unlock window. Cancel it and the command fails with
+the vault still locked. The window needs an unlocked desktop session: over SSH
+without a desktop login, or while the screen is locked, it cannot be shown and
+the command says so at once. To use the vault from a script, unlock the
+`kantrip` keyring or wallet beforehand in Passwords and Keys or KDE Wallet
+Manager. A vault that the desktop opens without asking for a password, as
+described below, is used even without a terminal.
+
+Neither desktop locks the vault on a timer by default:
+
+- **GNOME and COSMIC** keep it unlocked until you log out, including while the
+  screen is locked and after suspend. Lock it yourself in Passwords and Keys.
+- **KDE** keeps it open until you log out unless you enable System Settings >
+  KDE Wallet > Close when unused for, which takes effect at your next login.
+  Neither KDE option closes it on suspend.
+
+`kantrip doctor` reports whether the vault is locked; Linux has no lock setting
+for it to report.
+
+Two desktop settings undo the vault's protection, and Kantrip warns about both:
+
+- GNOME's unlock window offers **Automatically unlock this keyring whenever I'm
+  logged in**. Leave it unticked: it stores the vault password in your login
+  keyring, so your login opens the vault again. When the vault opens without
+  asking for its password, the command warns on the terminal and `doctor`
+  reports it. To undo it, delete `Unlock password for: kantrip` from the Login
+  keyring in Passwords and Keys.
+- Never make the vault your **default** keyring or wallet: other applications
+  would store their secrets in it. `doctor` warns when it is. On a KDE install
+  where no application has opened a wallet yet, the first wallet opened becomes
+  the default; Kantrip restores your previous default right away.
+
+Delete the vault and every credential in it by deleting the `kantrip` keyring in
+Passwords and Keys, or the `kantrip` wallet in KDE Wallet Manager. Profiles that
+stored credentials in it then fail with guidance until you store each
+credential again with `kantrip edit PROFILE --replace-secret FIELD`, which
+creates a new vault. On KDE, log out and back in before that: KDE keeps listing
+a deleted wallet until then.
+
+Pre-release versions stored credentials in the default keyring or wallet, and
+Kantrip no longer reads them. After you add your profiles again, delete them
+with `secret-tool` (package `libsecret-tools` on Debian and Ubuntu), which
+matches only those old items:
+
+```bash
+secret-tool clear service kantrip application 'Python keyring library'
+```
 
 ## Application environment from `kantrip exec`
 

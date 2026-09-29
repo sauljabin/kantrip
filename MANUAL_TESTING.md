@@ -4,8 +4,8 @@ The unit suite and the sandbox E2E suite (`python -m scripts.tests --suite e2e`)
 cover behavior that a program can check. This guide lists only what needs a
 person: real OS credential stores, real terminals and shells, and readability.
 Run it once per release candidate on macOS and on one Linux distribution,
-using the built wheel. There is no upgrade check: no backward compatibility is
-promised before v0.1.0.
+using the built wheel; run §11 on each Linux desktop listed there. There is no
+upgrade check: no backward compatibility is promised before v0.1.0.
 
 Record for each scenario: candidate commit, OS, shell, client versions, result,
 and (sanitized) evidence for any failure.
@@ -56,9 +56,11 @@ kantrip list
 
 Expect: help lists nine commands; `list` prints nothing and exits 0; `doctor`
 warns about the missing database and missing clients without errors and does
-not create the database. On macOS without a vault, `doctor` passes
-`Credential vault: ~/Library/Keychains/kantrip.keychain-db (not created yet)`
-and creates nothing. `add local` stores no credential, so it creates no vault,
+not create the database. Without a vault, `doctor` passes
+`Credential vault: … (not created yet)` (on macOS
+`~/Library/Keychains/kantrip.keychain-db`, on GNOME
+`/org/freedesktop/secrets/collection/kantrip in GNOME Keyring`, on KDE
+`~/.local/share/kwalletd/kantrip.kwl in KDE Wallet`) and creates nothing. `add local` stores no credential, so it creates no vault,
 and a second `doctor` still reports no vault warning; `add` states the
 resulting connection and the database path.
 
@@ -69,12 +71,13 @@ kantrip add qa-scram -b localhost:9094 --transport tls \
   --ca-file sandbox/.state/ca.crt --auth scram-sha-512 --username kantrip-scram
 ```
 
-1. The password prompt does not echo. Enter the SCRAM password. On macOS
-   without a Kantrip vault, `add` first creates one (see §10).
-2. Open Keychain Access (macOS) or Seahorse/KWallet (Linux). Expect one item
-   with service `kantrip` and an account like `profile/<uuid>/<uuid>/kafka/password`.
-   On macOS it is in the `kantrip` keychain, not `login`, labeled
-   `Kantrip kafka/password (profile <uuid>)`.
+1. The password prompt does not echo. Enter the SCRAM password. Without a
+   Kantrip vault, `add` first creates one (see §10 on macOS, §11 on Linux).
+2. Open Keychain Access (macOS), Passwords and Keys (GNOME), or KDE Wallet
+   Manager (KDE). Expect one item labeled
+   `Kantrip kafka/password (profile <uuid>)` with service `kantrip` and an
+   account like `profile/<uuid>/<uuid>/kafka/password`, in the `kantrip`
+   keychain, keyring, or wallet, not in `login` or `kdewallet`.
 3. `sqlite3 "$KANTRIP_DATABASE" .dump | grep -c 'THE_PASSWORD'` prints `0`.
 4. `kantrip ping qa-scram` succeeds.
 5. Rotate with a wrong value, then the right one:
@@ -177,7 +180,7 @@ Break things one at a time and read `kantrip doctor` each time:
 ```bash
 chmod 644 "$KANTRIP_DATABASE"      # expect: unsafe permissions error with the fix
 chmod 600 "$KANTRIP_DATABASE"
-# delete the qa-scram keychain item in Keychain Access / Seahorse
+# delete the qa-scram item in Keychain Access, Passwords and Keys, or KDE Wallet Manager
 kantrip doctor                     # expect: missing credential named by profile and field
 kantrip edit qa-scram --replace-secret kafka.auth.password   # expect: recovers
 ```
@@ -265,3 +268,82 @@ V=~/Library/Keychains/kantrip.keychain-db
     `kantrip doctor` no longer shows the Keychain Access warning. Move the file
     back with `mv ~/kantrip-qa.keychain-db "$V"`; `kantrip exec qa-scram -- true`
     works again after you unlock it.
+
+## 11. Vault lock (Linux)
+
+Run this on each Linux desktop the release claims: GNOME Keyring on Ubuntu
+(GNOME) and on Pop!_OS (COSMIC), and KDE Wallet on Kubuntu (Plasma). It uses
+your real vault; use a spare account or a live USB session if you don't want to
+recreate yours. Sign in to the desktop, then run the commands from a terminal
+there unless a step says otherwise. Keep `qa-scram` from §2. Every password
+window is a desktop window; the terminal only explains it.
+
+1. **Creation.** On an account without the vault, run the §2 `kantrip add`.
+   After the SCRAM password, the terminal prints
+   `Kantrip keeps credentials in its own keyring, 'kantrip'.` (KDE: `wallet`,
+   plus `choose Classic unless you have a GPG key`) and a desktop window asks
+   for the new password.
+   - GNOME/COSMIC: leave both fields empty and accept storing unencrypted:
+     `add` fails with `must not be empty; the new vault was removed`, and
+     Passwords and Keys shows no `kantrip` keyring. Run `add` again and choose
+     a password; `add` prints
+     `Created /org/freedesktop/secrets/collection/kantrip.`
+   - KDE: the wizard preselects GPG. Choose Classic, then a password twice.
+     `add` prints `Created ~/.local/share/kwalletd/kantrip.kwl.`
+2. **Report.** `kantrip doctor` shows `Credential vault: … (unlocked)` with the
+   collection path (and on KDE the wallet file), no `Credential vault locks …`
+   line, and no warning. On KDE, System Settings > KDE Wallet still shows your
+   previous default wallet, not `kantrip`, even on a fresh install where
+   `~/.config/kwalletrc` had no `First Use=false` before step 1.
+3. **Locked, read-only commands.** Lock the vault in Passwords and Keys
+   (right-click `kantrip` > Lock) or KDE Wallet Manager (Close). `kantrip list`
+   and `kantrip describe qa-scram` finish without a window. `kantrip doctor`
+   prints `Kantrip vault … is locked. Enter its password in the window on your
+   desktop; Kantrip waits up to 60 seconds.` and a window asks for the password.
+   Enter it: the report shows `(locked)` (the state before doctor unlocked it)
+   and `Profile 'qa-scram' kafka.auth.password is stored`.
+4. **Cancel and timeout.** Lock the vault, run `kantrip ping qa-scram`, and
+   click Cancel: expect `Error: Kantrip vault unlock was cancelled`, exit status
+   1, and the vault still locked. Run it again and ignore the window: after 60
+   seconds expect `got no answer within 60 seconds, so Kantrip closed the
+   window` and the window gone from the screen. Run it again and press Ctrl-C
+   in the terminal: expect `unlock was cancelled`, no traceback, and the window
+   gone.
+5. **No terminal.** With the vault locked, run
+   `setsid kantrip-qa exec qa-scram -- true < /dev/null`. Expect, within a
+   second and with no window: `is locked and there is no terminal to unlock
+   it`. Unlock the vault in the keyring or wallet manager and run the same
+   command: it succeeds silently.
+6. **No desktop session.** From another machine, `ssh` into this account while
+   the desktop is logged in and its screen unlocked, lock the vault, and run
+   `kantrip ping qa-scram`: the window appears on the laptop, not in SSH.
+   Lock the screen (GNOME/COSMIC) and run it again: expect at once `window could
+   not be shown; it needs an unlocked desktop session`. Log out of the desktop
+   and run it again: GNOME fails the same way; KDE reports
+   `no Secret Service is running for this user`.
+7. **Automatic unlock (GNOME and COSMIC).** Lock the vault, run
+   `kantrip doctor`, and tick "Automatically unlock this keyring whenever I'm
+   logged in" in the window before unlocking. Lock the vault again and run
+   `kantrip exec qa-scram -- true`: it opens with no window, prints
+   `Warning: Kantrip vault … opened without asking for its password`, and
+   `kantrip doctor` reports the same warning. In Passwords and Keys, confirm the
+   Login keyring holds `Unlock password for: kantrip`, delete it, lock the vault,
+   and check that the next command asks in a window again.
+8. **Default keyring.** Make `kantrip` the default (Passwords and Keys:
+   right-click > Set as Default; KDE: System Settings > KDE Wallet). `kantrip
+   doctor` warns `Credential vault is the default keyring` (KDE: `wallet`).
+   Set your previous default back; the warning disappears.
+9. **Lock policy.** Unlock the vault, leave it idle for 16 minutes, lock the
+   screen, and suspend for a minute: on GNOME and COSMIC `kantrip doctor` still
+   shows `(unlocked)`. On KDE, enable Close when unused for 1 minute, log out
+   and back in, unlock the vault, wait 2 minutes: `kantrip doctor` shows
+   `(locked)`. Turn the setting off again. Log out and back in on every
+   desktop: the vault is `(locked)` after login.
+10. **Missing vault.** Move the vault file away
+    (`~/.local/share/keyrings/kantrip.keyring` or
+    `~/.local/share/kwalletd/kantrip.kwl`, plus its `.salt`). Because `qa-scram`
+    stores a credential, `kantrip doctor` reports `(not found)` as an error; on
+    KDE it also warns `KDE Wallet still lists the credential vault without its
+    file`. `kantrip exec qa-scram -- true` fails with `does not exist; restore
+    it`, and on KDE no create-wallet wizard appears. Move the files back: the
+    vault is `(locked)` again and usable after you unlock it.

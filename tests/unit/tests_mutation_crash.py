@@ -87,11 +87,7 @@ class TestMutationCrashRecovery(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env={
-                key: value
-                for key, value in os.environ.items()
-                if key not in {"KANTRIP_DATABASE", "KANTRIP_KEYRING_BACKEND"}
-            },
+            env={key: value for key, value in os.environ.items() if key != "KANTRIP_DATABASE"},
         )
         self.addCleanup(_terminate, process)
         assert process.stdout is not None

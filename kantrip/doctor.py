@@ -62,6 +62,7 @@ from kantrip.secret_store import (
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
+    Vault,
     VaultError,
     VaultStatus,
     load_secret_store,
@@ -150,6 +151,11 @@ def run_doctor(
     versions = VersionProbe(env)
     credential_checks, store = _check_credentials(env, _stores_credentials(profiles))
     profile_credential_checks = _check_profile_credentials(profiles, store)
+    if store is not None:
+        # Checking credentials may have opened the vault; say how it opened.
+        profile_credential_checks.extend(
+            DoctorCheck("warning", warning) for warning in store.unlock_warnings()
+        )
     profile_id = None
     # Profile ID → (name, current revision), to label sessions of every profile.
     known_profiles: dict[str, tuple[str, int]] = {}
@@ -198,13 +204,13 @@ def _stores_credentials(profiles: ProfileCollection | None) -> bool:
 def _check_credentials(
     environment: Mapping[str, str],
     stores_credentials: bool,
-) -> tuple[list[DoctorCheck], SecretStore | None]:
+) -> tuple[list[DoctorCheck], Vault | None]:
     checks: list[DoctorCheck] = []
-    store: SecretStore | None = None
+    store: Vault | None = None
     try:
         loaded = load_secret_store()
-    except SecretStoreError:
-        checks.append(DoctorCheck("error", "Credential store backend is unavailable or unsafe"))
+    except SecretStoreError as error:
+        checks.append(DoctorCheck("error", f"Credential vault is unavailable: {error}"))
     else:
         store = loaded
         checks.append(DoctorCheck("success", f"Credential store: {loaded.info.display_name}"))

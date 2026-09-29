@@ -16,8 +16,7 @@ import ctypes
 import os
 import re
 import subprocess
-from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,9 +27,12 @@ from kantrip.secret_store import (
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreInfo,
+    Terminal,
     VaultError,
     VaultState,
     VaultStatus,
+    controlling_terminal,
+    display_path,
     parse_secret_reference,
 )
 
@@ -63,15 +65,6 @@ class CommandResult:
     stderr: str = ""
 
 
-class Terminal(Protocol):
-    """The controlling terminal, used only around ``security`` prompts."""
-
-    fd: int
-
-    def write(self, text: str) -> None:
-        """Show one Kantrip message on the terminal."""
-
-
 class KeychainSystem(Protocol):
     """Operating-system calls the vault needs; unit tests replace them."""
 
@@ -95,14 +88,6 @@ class KeychainSystem(Protocol):
 
     def terminal(self) -> Any:
         """Return a context manager yielding the controlling terminal or None."""
-
-
-class _TerminalDevice:
-    def __init__(self, fd: int) -> None:
-        self.fd = fd
-
-    def write(self, text: str) -> None:
-        os.write(self.fd, text.encode())
 
 
 class _Settings(ctypes.Structure):
@@ -181,17 +166,8 @@ class NativeKeychainSystem:
         )
         return CommandResult(completed.returncode, completed.stdout, completed.stderr or "")
 
-    @contextmanager
-    def terminal(self) -> Iterator[Terminal | None]:
-        try:
-            fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
-        except OSError:
-            yield None
-            return
-        try:
-            yield _TerminalDevice(fd)
-        finally:
-            os.close(fd)
+    def terminal(self) -> Any:
+        return controlling_terminal()
 
     def _with_keychain(self, path: Path, operation: Any) -> int:
         security = self._framework()
@@ -231,14 +207,6 @@ class NativeKeychainSystem:
 def default_vault_path() -> Path:
     """Return the one Kantrip vault of the current macOS user."""
     return Path.home() / "Library" / "Keychains" / VAULT_FILENAME
-
-
-def display_path(path: Path) -> str:
-    """Show a vault path below the home directory with ``~``."""
-    try:
-        return f"~/{path.relative_to(Path.home())}"
-    except ValueError:
-        return str(path)
 
 
 class MacOSVault:
@@ -317,6 +285,10 @@ class MacOSVault:
                 "run 'kantrip doctor --repair'"
             )
         return VaultStatus(self._display, state, policy, tuple(warnings))
+
+    def unlock_warnings(self) -> tuple[str, ...]:
+        """Report nothing: a macOS vault never opens without its password prompt."""
+        return ()
 
     def forget_missing_vault(self) -> bool:
         """Remove a missing vault from the keychain search list."""
@@ -582,5 +554,4 @@ __all__ = [
     "NativeKeychainSystem",
     "Terminal",
     "default_vault_path",
-    "display_path",
 ]

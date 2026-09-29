@@ -22,6 +22,9 @@ the active execution.
 - [Data flow](#data-flow)
 - [Profiles and connection material](#profiles-and-connection-material)
 - [Credential vault](#credential-vault)
+  - [macOS keychain vault](#macos-keychain-vault)
+  - [Linux Secret Service vault](#linux-secret-service-vault)
+  - [Vault errors and diagnostics](#vault-errors-and-diagnostics)
 - [Schema evolution and maintenance](#schema-evolution-and-maintenance)
 - [Connection-only configuration](#connection-only-configuration)
 - [Profile lifecycle and input sources](#profile-lifecycle-and-input-sources)
@@ -177,12 +180,10 @@ parent directories are created one level at a time and each parent entry is
 
 Long-lived secrets use immutable
 `profile/<profile-uuid>/<credential-uuid>/<field>` keys in the dedicated
-[credential vault](#credential-vault) on macOS or a Linux Secret
-Service-compatible backend. The credential UUID changes on every replacement,
-so staging never overwrites the value referenced by the usable profile. Kantrip
-rejects unavailable, plaintext, encrypted-file, null, and unknown Linux
-backends instead of weakening storage, and never falls back to the macOS login
-keychain.
+[credential vault](#credential-vault) of each platform. The credential UUID
+changes on every replacement, so staging never overwrites the value referenced
+by the usable profile. Kantrip never falls back to the macOS login keychain, the
+default Secret Service collection, or an unknown Secret Service provider.
 
 The implemented connection model supports plaintext transport,
 server-authenticated TLS, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, and mutual
@@ -201,8 +202,17 @@ unsupported combinations fail before the requested client operation.
 
 ## Credential vault
 
-On macOS, `macos_vault.MacOSVault` implements `SecretStore` on one keychain file
-per user, `~/Library/Keychains/kantrip.keychain-db`, so credentials do not
+Each platform keeps credentials in one dedicated vault named `kantrip`, so they
+do not unlock with the login session, and the operating system owns the vault
+password. Both vaults implement the same `SecretStore` protocol with item
+account (or attribute) `profile/<profile-uuid>/<credential-uuid>/<field>` under
+service `kantrip`, check the vault state before any item access, and create or
+unlock the vault only when a command needs a credential.
+
+### macOS keychain vault
+
+`macos_vault.MacOSVault` implements `SecretStore` on one keychain file per
+user, `~/Library/Keychains/kantrip.keychain-db`, so credentials do not
 unlock with the login session. macOS owns its password: `security
 create-keychain` and `security unlock-keychain` prompt on the controlling
 terminal (`/dev/tty`), and Kantrip never reads, stores, or passes it. aws-vault
@@ -268,26 +278,114 @@ unlock is remembered for the rest of the process, so reconciling several
 credentials never prompts again. Without a controlling terminal, a locked or
 missing vault fails at once.
 
-The vault's errors are `VaultError`, a `SecretStoreError` whose message is user
+### Linux Secret Service vault
+
+`linux_vault.LinuxVault` implements `SecretStore` on one dedicated Secret
+Service collection labeled `kantrip`, created through the D-Bus API with
+`secretstorage` (imported only on first use, so importing Kantrip on macOS
+needs no D-Bus). The provider owns the vault password: GNOME Keyring and KDE
+Wallet collect it in their own desktop windows, and Kantrip never reads,
+stores, or passes it. Kantrip identifies the provider from the process that
+owns `org.freedesktop.secrets` (`/proc/PID/comm`) and accepts only
+`gnome-keyring-daemon` and KDE's `ksecretd`/`kwalletd5`/`kwalletd6`. The
+design was measured on GNOME Keyring 50 (Ubuntu 26.04), KDE Frameworks 6.24
+(Kubuntu 26.04), and GNOME Keyring 46 under COSMIC (Pop!_OS 24.04); aws-vault
+finds its collection the same way on GNOME.
+
+**Lookup never prompts.** GNOME Keyring accepts only the `default` alias
+(`NotSupported` otherwise) and derives each object path from its keyring file
+name, so the vault is `/org/freedesktop/secrets/collection/kantrip`, from
+`kantrip.keyring`. Kantrip requires exactly that path with the label `kantrip`
+and refuses to guess when another collection shares the label or the path has
+another label. KDE supports custom aliases, and its wallet file is named after
+the label, so the vault is the collection that alias `kantrip` names, backed by
+`$XDG_DATA_HOME/kwalletd/kantrip.kwl`. KDE is looked up by alias only: after a
+delete, `ksecretd` lists a same-label ghost collection at a new path until it
+restarts. KDE also keeps listing a collection whose wallet file is gone; unlocking
+it would start the create-wallet wizard and then read stale items as empty
+secrets, so a listed vault without its file is treated as missing, never
+unlocked, and never recreated until the user logs in again. Every read rejects
+an empty secret for the same reason. Labels and attributes carry only the
+service name, the reference, and the field (KDE stores them in plain JSON beside
+the wallet); values are never split, because D-Bus has no line limit (1 MB
+values round-trip exactly).
+
+| State | `get` / `delete` | `set` |
+| --- | --- | --- |
+| Missing | `get` fails with recovery guidance; `delete` succeeds | Create in a desktop window, with a terminal; fail at once without one |
+| Locked | Unlock in a desktop window, with a terminal; without one, proceed only if the provider opens it without a window | Same |
+| Unlocked | Proceed | Proceed |
+
+Locked reads fail at once with no window on both providers, and lock-state
+reads never prompt, so, unlike on macOS, the state check has no race.
+
+**Windows are desktop windows, bounded by Kantrip.** `Service.Unlock` and
+`CreateCollection` return a prompt object; the provider shows nothing until
+`Prompt.Prompt()` runs it. An unanswered window blocks forever and stays on
+screen, so Kantrip waits for `Completed` for at most 60 seconds, then calls
+`Prompt.Dismiss()` and fails; Ctrl-C also dismisses it. A prompt dismissed
+within one second was not shown: GNOME dismisses at once without a display
+(`cannot open display` over SSH) or while the screen is locked, and KDE has no
+Secret Service at all before the desktop login. Kantrip then asks for an
+unlocked desktop session instead of reporting a cancellation. As on macOS, a
+refused, cancelled, or unanswered window is final for the process. Without a
+controlling terminal, Kantrip still calls `Unlock`: if it returns no prompt the
+vault opened without a window and is used; otherwise the never-shown prompt is
+dismissed and the command fails at once, so scripts and scheduled jobs never
+raise windows. With a terminal, Kantrip says there that a window is waiting.
+
+**Opened without a window.** `Unlock` returns no prompt when the vault needs no
+password: an empty password, or GNOME's "Automatically unlock this keyring
+whenever I'm logged in", which stores the vault password in the login keyring
+(measured on COSMIC: a locked vault reopened in 0.0 s). Kantrip detects it only
+when it unlocks the vault anyway, for a command or for doctor's own credential
+checks, and never unlocks a vault just to probe, which would open a vault the
+user expects locked. The warning goes to the terminal and to doctor. Separately,
+GNOME writes an empty-password keyring in plain text instead of its encrypted
+`GnomeKeyring` format, so doctor reads the file header without any D-Bus call,
+and creation removes a new plain-text keyring like macOS removes an
+empty-password keychain.
+
+**KDE first use.** While `kwalletrc` lacks `First Use=false`, creating or
+opening any wallet makes it the desktop default, and other applications would
+then store their secrets in the Kantrip vault. Kantrip reads the `default`
+alias before every create or unlock and restores it with `SetAlias` afterwards
+when it moved. Doctor warns when `default` names the vault, on either provider,
+because the user can also choose "Set as default"; `--repair` does not move it,
+because it cannot know which collection the user wants as the default.
+
+**Lock policy belongs to the desktop.** Neither provider locks on a timer by
+default: GNOME Keyring and COSMIC lock only at logout (not on idle, screen lock,
+or suspend), and KDE only at logout or after its optional "close when unused"
+timeout, applied at the next login. `Lock` is not idempotent on KDE, so any
+lock must check the state first. A Kantrip-scheduled lock is tracked in
+[#100](https://github.com/sauljabin/kantrip/issues/100).
+
+### Vault errors and diagnostics
+
+Both vaults' errors are `VaultError`, a `SecretStoreError` whose message is user
 guidance. Kafka and Registry resolution, credential staging, and doctor pass it
 through instead of their generic credential errors. `doctor` reports the vault
-path and state (missing, locked, or unlocked) without unlocking it. A missing
-vault is normal until a profile stores a credential and an error afterwards,
-because its credentials are gone. While the
-vault is unlocked it also reads the lock policy through `SecKeychainCopySettings`
+location and state (missing, locked, or unlocked) without unlocking it. A
+missing vault is normal until a profile stores a credential and an error
+afterwards, because its credentials are gone. On macOS, while the vault is
+unlocked, doctor also reads the lock policy through `SecKeychainCopySettings`
 with user interaction disabled (a locked vault fails instead of prompting, so
 there is no race with the idle timer) and warns about an empty password. A
 missing vault that the search list still names is a warning, and
-`doctor --repair` removes that entry.
+`doctor --repair` removes that entry. On Linux, doctor reports no lock policy,
+because the desktop owns it, and warns about the traps listed above. Warnings a
+vault learns while opening, such as a Linux vault that opened without a window,
+come from `unlock_warnings()` after the profile credential checks.
 
 Vault prompts run where the store is first used, inside the maintenance lock
 that makes staging and snapshot resolution coherent. Another Kantrip command
 started while the user types the password waits the usual five seconds for that
-lock and then reports that maintenance is busy. A vault that times out between
-the state check and an item read still opens a macOS password window; the
-interval is milliseconds. File keychains and the
-`SecKeychain*` APIs are deprecated but work on macOS 27. The macOS CI job
-exercises them against the real `security` tool.
+lock and then reports that maintenance is busy; a Linux window's 60-second
+timeout bounds that wait. A macOS vault that times out between the state check
+and an item read still opens a password window; the interval is milliseconds.
+File keychains and the `SecKeychain*` APIs are deprecated but work on macOS 27.
+The macOS CI job exercises them against the real `security` tool.
 
 ## Schema evolution and maintenance
 
@@ -360,7 +458,7 @@ the new provider supports it. Secret values are never displayed or prefilled.
 
 The reusable cross-store transaction engine lives in
 `kantrip/credential_mutations.py`. Authentication-specific profile fields and
-commands build on this engine; they do not implement their own keyring or
+commands build on this engine; they do not implement their own vault or
 journal sequence.
 
 The profile layer is split by responsibility:
@@ -407,7 +505,7 @@ Mutation exit statuses distinguish definitely uncommitted (`1`), committed with
 cleanup or post-commit verification pending (`3`), and indeterminate commit
 outcomes (`4`). An exception is not treated as proof of rollback. Database
 backups contain references rather than credentials, so independently restoring
-SQLite cannot restore retired keyring values and is outside the supported
+SQLite cannot restore retired vault values and is outside the supported
 recovery model.
 
 Each profile row has a stable UUID, a unique name, and a monotonically
@@ -421,7 +519,7 @@ for v0.2 and will feed this same mutation path.
 
 The shared resolver builds one authenticated in-memory model from a single
 profile generation. The session path renders that model without independent
-keyring queries from adapters.
+vault queries from adapters.
 
 `session.py` runs a session in order: write the private Kafka and Registry key
 and CA files (mode 0600), render every client configuration file, build the
@@ -694,11 +792,28 @@ cache misses before and after token expiry, confirm new IdP issuance, then revok
 the client and require token-acquisition failure without decoding the final
 record. TUI clients are observed through parsed terminal state.
 
-The macOS credential vault needs no laboratory, so a separate CI job on a macOS
-runner runs `python -m scripts.tests --suite vault` against the candidate
-wheel. It creates a disposable vault with a random password (`create-keychain
--p`), stores and removes a split 4096-bit private key through the CLI, and
-locks the vault to prove that commands without a terminal fail at once.
+The credential vaults need no laboratory, so separate CI jobs on macOS and
+Ubuntu runners run `python -m scripts.tests --suite vault` against the
+candidate wheel. The macOS job creates a disposable vault with a random password
+(`create-keychain -p`), stores and removes a split 4096-bit private key through
+the CLI, and locks the vault to prove that commands without a terminal fail at
+once.
+
+A runner has no display for GNOME Keyring's password window, so
+`CreateCollection` is dismissed at once and the Linux vault cannot be created
+through the API. Both Ubuntu jobs therefore write an empty-password keyring file
+`kantrip.keyring` (`display-name=kantrip`, `lock-on-idle=false`,
+`lock-after=false`, mode `0600`) before `dbus-run-session` starts
+`gnome-keyring-daemon --unlock --components=secrets`. The daemon serves it as the
+real vault path, locked, and it unlocks without a window. This recipe was
+checked in `ubuntu:24.04` with GNOME Keyring 46. The Linux vault suite stores
+and removes a 4096-bit private key, relocks the vault to prove that a vault
+opening without a window is used and reported, and hides the keyring file to
+prove missing-vault guidance. Two GNOME Keyring behaviors shape it: an
+empty-password keyring is stored in plain text without escaping newlines, so a
+stored PEM key corrupts the file once it is reloaded (tests that lock or reload
+the vault store single-line passwords), and the keyring directory is rescanned
+only when its whole-second mtime changes, so the test touches it while waiting.
 
 ## Diagnostics and output
 
@@ -757,6 +872,10 @@ meaning.
 - The macOS vault depends on deprecated file-keychain APIs and on the
   `security -i` line limit staying where it is; the macOS CI job would show a
   change.
+- The Linux vault protects credentials only while it is locked, and GNOME
+  Keyring and KDE lock it only at logout by default. Its desktop windows need an
+  unlocked graphical session, so a remote-only session cannot unlock it. CI
+  covers GNOME Keyring only; KDE behavior rests on the manual scenario.
 - Schema migrations are forward-only. An older Kantrip binary cannot open a
   database containing migrations it does not recognize.
 - Compatibility depends on external client interfaces and tested versions.

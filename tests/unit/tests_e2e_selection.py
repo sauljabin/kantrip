@@ -178,7 +178,10 @@ class TestE2ESelection(unittest.TestCase):
         self.assertIn("python3 scripts/tests.py --ci-event", main)
         self.assertIn("python3 scripts/tests.py --verify-e2e-result", main)
         self.assertIn("needs.e2e-selection.outputs.run_e2e == 'true'", main)
-        self.assertEqual(2, e2e.count("candidate-artifact: ${{ inputs.candidate-artifact }}"))
+        self.assertEqual(3, e2e.count("candidate-artifact: ${{ inputs.candidate-artifact }}"))
+        # Both Linux jobs use the pre-created vault instead of any other store.
+        self.assertEqual(2, e2e.count("uses: ./.github/actions/linux-vault"))
+        self.assertNotIn("PYTHON_KEYRING_BACKEND", e2e)
         self.assertIn("if: inputs.candidate-artifact != ''", candidate)
         self.assertIn('test "${#wheels[@]}" -eq 1', candidate)
         self.assertIn("candidate-artifact: release-bundle", release)

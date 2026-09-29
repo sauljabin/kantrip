@@ -13,6 +13,7 @@ from pathlib import Path
 
 WHEEL_REQUIRED = {
     "kantrip/kafka.py",
+    "kantrip/linux_vault.py",
     "kantrip/macos_vault.py",
     "kantrip/migrations.py",
     "kantrip/profiles.py",
@@ -23,6 +24,7 @@ WHEEL_REQUIRED = {
 
 SDIST_REQUIRED = {
     ".github/actions/candidate-wheel/action.yml",
+    ".github/actions/linux-vault/action.yml",
     ".github/actions/python-uv/action.yml",
     ".github/actions/released-e2e-tools/action.yml",
     ".github/workflows/e2e.yml",

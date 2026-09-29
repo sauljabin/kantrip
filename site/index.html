@@ -112,7 +112,8 @@
       <li class="card">
         <h3>Secrets stay in the OS store</h3>
         <p>Passwords, private keys, and client secrets are collected without echo and stored in
-          macOS Keychain or Linux Secret Service. They never appear in profile documents,
+          Kantrip's own vault: a dedicated macOS keychain, or a dedicated GNOME Keyring or KDE
+          Wallet collection on Linux. They never appear in profile documents,
           command arguments, or <code>describe</code> output.</p>
         <p class="card-command" aria-hidden="true">kantrip add prod</p>
       </li>
@@ -178,8 +179,8 @@
       <div>
         <h3>What Kantrip does</h3>
         <ul class="checks">
-          <li>Stores secrets only in macOS Keychain or Linux Secret Service and rejects other
-            keyring backends.</li>
+          <li>Stores secrets only in its own vault, which does not unlock with your login, and
+            rejects other credential stores.</li>
           <li>Keeps references, never values, in profiles; <code>describe</code> never reads
             the credential store, and <code>doctor</code> checks that each credential is stored.</li>
           <li>Requires verified TLS for Kafka authentication; certificate and hostname checks

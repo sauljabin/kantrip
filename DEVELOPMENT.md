@@ -55,7 +55,7 @@ The pre-commit hook first classifies staged paths without building a wheel or
 touching the sandbox. For E2E-impacting changes, it builds a wheel from Git's
 staged index in a temporary checkout, installs it separately, and runs the full
 E2E suite against the already-running sandbox. Provision the sandbox and pinned
-released clients for those changes; a missing native keyring or service is then
+released clients for those changes; a missing or locked vault or service is then
 a failed hook, not a skipped test. The hook links existing private sandbox state
 without copying or caching secrets. A documentation-only commit skips local E2E.
 Set `KANTRIP_E2E_FORCE=1` on the hook invocation when documentation changes
@@ -167,41 +167,53 @@ upgrade fixture.
 ## Credential store development
 
 On macOS, `kantrip/macos_vault.py` stores credentials in the dedicated vault,
-`~/Library/Keychains/kantrip.keychain-db`, through `/usr/bin/security`; see
-[Credential vault](ARCHITECTURE.md#credential-vault) for the design. On Linux,
-Kantrip uses Python `keyring` only as an adapter to approved Secret
-Service-compatible backends. Null, plaintext, encrypted-file, chained, and
-unknown backends must fail closed.
+`~/Library/Keychains/kantrip.keychain-db`, through `/usr/bin/security`. On
+Linux, `kantrip/linux_vault.py` stores them in the dedicated Secret Service
+collection `kantrip` through `secretstorage`, a Linux-only dependency that the
+module imports on first use. See
+[Credential vault](ARCHITECTURE.md#credential-vault) for the design. Other
+Secret Service providers must fail closed.
 
-Inspect the store the development environment uses with:
+Inspect the vault the development environment uses with:
 
 ```bash
 uv run --locked kantrip doctor --verbose
-# Linux only: the backend the keyring library selected
-uv run --locked keyring diagnose
 ```
+
+`mypy.ini` ignores the missing `secretstorage` import on macOS; Linux type
+checks use its real annotations, so keep the D-Bus layer's return values
+explicitly converted (`str`, `bool`, `bytes`) to pass on both platforms.
 
 Offline unit tests inject synthetic in-memory implementations of Kantrip's narrow
 `SecretStore` protocol. They must not read or modify a developer's real
-credential store. The vault's tests replace its operating-system layer
-(`KeychainSystem`) with an in-memory `security` tool that enforces the
+credential store. Both vaults' tests replace their operating-system layer. The
+macOS tests use an in-memory `security` tool (`KeychainSystem`) that enforces the
 `security -i` line limit and fails any item access to a locked vault; they cover
 creation, locking, wrong and cancelled passwords, no terminal, and missing or
-replaced vaults. Tests that reach `load_secret_store` patch it.
+replaced vaults. The Linux tests use an in-memory Secret Service
+(`SecretServiceSystem`) with scripted windows; they cover GNOME and KDE lookup,
+creation, locked reads, cancelled, unshown, and unanswered windows, Ctrl-C, no
+terminal, vaults that open without a window, missing and replaced vaults, KDE
+ghosts, empty secrets, and KDE's default takeover. Tests that reach
+`load_secret_store` patch it.
 
-The separate E2E suite intentionally exercises an approved native backend: a
-real Secret Service session on Linux CI, or the developer's own Kantrip vault on
-macOS, which prompts on the terminal when it is locked. Its temporary
-credentials and profiles are owned and cleaned by the suite; it does not
-substitute a fake keyring.
+The separate E2E suite intentionally exercises the real Kantrip vault: the
+pre-created disposable vault on Linux CI, or the developer's own vault. The suite
+runs Kantrip without a terminal, so unlock your vault before running it: macOS
+then asks for the password on the terminal when a precondition first reads it,
+and on Linux unlock the `kantrip` keyring or wallet in Passwords and Keys or KDE
+Wallet Manager. Its temporary credentials and profiles are owned and cleaned by
+the suite; it does not substitute a fake store.
 
-`--suite vault` runs the macOS vault acceptance without the sandbox, against the
-candidate wheel in `KANTRIP_E2E_KANTRIP`. It locks and unlocks the real vault,
-so it needs the vault password in `KANTRIP_E2E_VAULT_PASSWORD` and belongs on a
-disposable machine: the macOS CI job creates a throwaway vault for it. To try it
-locally without touching your vault, set `KANTRIP_E2E_KANTRIP` as for E2E and
-give the run its own home directory. The project's Python runs directly because
-uv keeps its cache below `HOME`:
+`--suite vault` runs this platform's vault acceptance without the sandbox,
+against the candidate wheel in `KANTRIP_E2E_KANTRIP`. It locks and unlocks the
+real vault, and on Linux hides its file, so it belongs on a disposable vault:
+the macOS and Ubuntu CI jobs create throwaway vaults for it. On macOS it needs
+the vault password in `KANTRIP_E2E_VAULT_PASSWORD`; on Linux it runs only
+against the empty-password keyring that CI pre-creates. To try it locally
+without touching your vault, set `KANTRIP_E2E_KANTRIP` as for E2E and give the
+run its own home directory. The project's Python runs directly because uv keeps
+its cache below `HOME`. On macOS:
 
 ```bash
 vault_home="$(mktemp -d)"
@@ -211,6 +223,23 @@ security create-keychain -p vault-e2e \
 security set-keychain-settings -l -u -t 3600 "$vault_home/Library/Keychains/kantrip.keychain-db"
 HOME="$vault_home" KANTRIP_E2E_VAULT_PASSWORD=vault-e2e \
   .venv/bin/python -m unittest -v tests.e2e.vault_acceptance
+```
+
+On Linux, the run also needs its own D-Bus session and GNOME Keyring daemon, so
+its runtime directory must differ from your session's; otherwise the new daemon
+would join your running one:
+
+```bash
+vault_home="$(mktemp -d)"
+mkdir -m 700 "$vault_home/runtime"
+mkdir -p -m 700 "$vault_home/.local/share/keyrings"
+printf '%s\n' '[keyring]' 'display-name=kantrip' 'ctime=0' 'mtime=0' \
+  'lock-on-idle=false' 'lock-after=false' > "$vault_home/.local/share/keyrings/kantrip.keyring"
+chmod 600 "$vault_home/.local/share/keyrings/kantrip.keyring"
+HOME="$vault_home" XDG_DATA_HOME="$vault_home/.local/share" \
+  XDG_RUNTIME_DIR="$vault_home/runtime" dbus-run-session -- bash -c '
+    eval "$(printf %s vault-e2e | gnome-keyring-daemon --unlock --components=secrets)"
+    .venv/bin/python -m unittest -v tests.e2e.vault_acceptance'
 ```
 
 Secret-bearing profile changes use the transaction engine in
@@ -382,9 +411,10 @@ The runner never invokes `sandbox up` or `sandbox down`; local and CI provisione
 own that lifecycle. It holds a non-blocking lock while mutating shared OAuth
 clients, creates isolated profiles and exact test-owned topics/schemas/artifacts,
 and leaves the sandbox running. CI runs the same command on Ubuntu with a real
-DBus Secret Service/GNOME Keyring session and always collects sanitized resource
-diagnostics before removing its CI-owned sandbox. A second job in the same
-workflow runs `--suite vault` on macOS against a disposable vault.
+DBus/GNOME Keyring session and the pre-created disposable vault, and always
+collects sanitized resource diagnostics before removing its CI-owned sandbox.
+Two more jobs in the same workflow run `--suite vault` on macOS and Ubuntu
+against disposable vaults.
 The same path classification drives local staged checks and `main` push CI:
 
 | Change or event | Local staged hook | Hosted E2E |
@@ -423,6 +453,7 @@ avoid runner completion prompts; Kantrip's generated session `.zshrc` still runs
 | Registry security | Confluent Basic, OAuth, and mTLS plus native Apicurio Basic and OAuth profile probes; kaf rejected before launch for each (custom CA, OAuth, mTLS, Apicurio); kcl subject listing through Basic and mTLS with the custom CA, rejected before launch for OAuth and Apicurio; invalid credentials/identity/CA/hostname and anonymous-access controls |
 | OAuth lifetime | Native Kafka Java/librdkafka clients survive expiry; Confluent Java, Kaskade Confluent, and Kaskade native Apicurio consumers stay alive across fresh schema cache misses, show new IdP issuance, then fail token acquisition after client revocation without decoding the final record |
 | macOS credential vault | Real `/usr/bin/security` with the candidate wheel: a 4096-bit mTLS key split across two items, resolved by `doctor` and `exec`, removed with the profile; a locked vault makes `exec` and `doctor` without a terminal fail at once and stay locked |
+| Linux credential vault | Real GNOME Keyring with the candidate wheel: a 4096-bit mTLS key stored in one item, resolved by `doctor` and `exec`, removed with the profile; a relocked vault that opens without a window is used and reported by `doctor`; a hidden keyring file makes `doctor` report the vault as not found and `exec` fail with recovery guidance |
 | Ping boundary | Kafka proves broker protocol/authentication without topic APIs; Registry uses the documented read endpoint and requires anonymous denial for authenticated profiles; successful ping is followed by denied resource operations for no-ACL identities |
 
 Unsupported or conditional combinations remain explicit in `COMPATIBILITY.md`;

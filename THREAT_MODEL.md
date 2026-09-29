@@ -125,7 +125,19 @@ session and locks after 15 idle minutes and on sleep unless the user changes it.
 Kantrip writes and reads items only through `/usr/bin/security`, with values on
 stdin and never in argv. It reads the vault's lock state before every item
 access without prompting, and never reads a locked vault, which would open a
-macOS password window. See [Credential vault](ARCHITECTURE.md#credential-vault).
+macOS password window.
+
+On Linux, credentials cross over the D-Bus session bus into one dedicated
+Secret Service collection, the `kantrip` keyring of GNOME Keyring or the
+`kantrip` wallet of KDE Wallet, in a DH-encrypted Secret Service session. The
+provider collects the vault password in its own desktop window, and Kantrip
+never handles it. The vault unlocks independently of the login session, but
+the desktop, not Kantrip, decides when it locks again: GNOME Keyring and COSMIC
+only at logout, KDE at logout or after its optional idle timeout. Kantrip
+accepts only those two providers, identified by the process that owns
+`org.freedesktop.secrets`, and bounds every password window with a 60-second
+timeout and `Prompt.Dismiss()`. See
+[Credential vault](ARCHITECTURE.md#credential-vault).
 
 ### Execution boundary
 
@@ -161,14 +173,15 @@ administrator, compromised node, or process inside that short-lived container
 can still read the mounted or temporary value.
 
 The E2E runner accepts only an explicitly provisioned sandbox and never owns its
-lifecycle. It requires the approved native credential backend (the Kantrip
-vault on macOS or Linux Secret Service), performs an exact temporary
-set/get/delete check, and serializes changes to shared OAuth identities. CI
-creates a fresh DBus/GNOME Keyring session and removes only its own sandbox
-after sanitized diagnostics are captured. Local E2E intentionally leaves the
-caller's sandbox running. The separate macOS vault job creates a disposable
-vault with a random, masked password on the command line, which is acceptable
-only for that throwaway runner vault.
+lifecycle. It requires the Kantrip vault of the platform, performs an exact
+temporary set/get/delete check, and serializes changes to shared OAuth
+identities. CI creates a fresh DBus/GNOME Keyring session and removes only its
+own sandbox after sanitized diagnostics are captured. Local E2E intentionally
+leaves the caller's sandbox running. The separate macOS vault job creates a
+disposable vault with a random, masked password on the command line. The Ubuntu
+jobs pre-create an empty-password `kantrip` keyring, which GNOME Keyring stores
+in plain text and unlocks without a window. Both are acceptable only for those
+throwaway runner vaults, which hold only synthetic sandbox credentials.
 
 ### Recovery boundary
 
@@ -240,22 +253,34 @@ cryptographic trust anchor.
 
 ### Secret disclosure at rest
 
-Threats include credentials committed to profile documents, insecure keyring
-fallback, world-readable files, orphaned values after failed updates, and
-unintended copies of credential input.
+Threats include credentials committed to profile documents, a fallback to a
+store that unlocks with the session or has no password, world-readable files,
+orphaned values after failed updates, and unintended copies of credential
+input.
 
 Controls:
 
-- Store long-lived secrets only in the dedicated macOS vault or an approved
-  Linux Secret Service-compatible backend. Never fall back to the macOS login
-  keychain, which unlocks with the session.
-- Reject null, fail, plaintext, encrypted-file, unavailable, locked, and unknown
-  Linux backends rather than degrading silently.
+- Store long-lived secrets only in the dedicated Kantrip vault of each
+  platform. Never fall back to the macOS login keychain or the default Secret
+  Service collection, which unlock with the session.
+- Accept only GNOME Keyring and KDE Wallet as Linux providers, and fail with
+  guidance when no Secret Service runs rather than degrading silently.
 - Refuse an empty vault password at creation and report one in `doctor`, since
-  it lets anyone at the account unlock the vault without a prompt.
-- Create vault items through `/usr/bin/security`, whose stable partition keeps
-  Python upgrades from prompting, and keep labels and accounts free of secrets:
-  they name only the field and the profile and credential UUIDs.
+  it lets anyone at the account unlock the vault without a prompt; on GNOME it
+  also stores the keyring file in plain text.
+- Warn when a Linux vault opens without asking for its password, which reveals
+  GNOME's "Automatically unlock this keyring whenever I'm logged in" or an empty
+  password, and warn in `doctor` when the vault is the desktop's default
+  collection. Restore KDE's `default` alias after creating or opening the
+  vault, because KDE's first use would otherwise make the vault the default.
+- Find the Linux vault only by its exact identity (the GNOME object path and
+  label, or the KDE alias and wallet file), refuse to guess between same-label
+  collections, and reject empty secrets, which KDE returns for items of a
+  replaced wallet.
+- Create macOS vault items through `/usr/bin/security`, whose stable partition
+  keeps Python upgrades from prompting, and keep labels, accounts, and
+  attributes free of secrets: they name only the field and the profile and
+  credential UUIDs. KDE stores Linux labels and attributes in plain JSON.
 - Store only opaque immutable references in profile documents. Each reference
   includes independent profile and credential UUIDs so replacement never
   overwrites the value used by the current profile.
@@ -270,7 +295,7 @@ Controls:
   process only cleanup records owned by the current successful mutation; older
   debt remains explicit for repair.
 
-Residual risk: standard keyring APIs cannot enumerate arbitrary entries. If the
+Residual risk: Kantrip does not enumerate the vault's entries. If the
 reconciliation journal is destroyed, Kantrip cannot prove that no orphaned
 credential remains. A compromised or unlocked native store also exposes all
 secrets accessible to the user. While the macOS vault is unlocked, any process
@@ -281,6 +306,18 @@ delete the vault file, even while it is locked; reads then fail with recovery
 guidance, and a replaced vault reads as missing secrets. A user can lengthen or
 remove the vault's lock timeout in Keychain Access; `doctor` reports a vault
 that never locks.
+
+On Linux the vault is readable by any same-user process for as long as it is
+unlocked, which is the whole login session by default: GNOME Keyring does not
+lock it on idle, screen lock, or suspend, and a secret was read at the lock
+screen during testing. Any same-user process can also delete the locked
+collection without a password, lock or unlock it through the API, and move the
+desktop's `default` alias without a prompt; doctor reports a moved default but
+cannot prevent it. A user who ticks GNOME's automatic unlock makes every lock
+cosmetic; Kantrip detects it only the next time it unlocks the vault, never by
+probing. Password windows do not name the requesting application on either
+provider, so a same-user process can ask for the vault password in a window
+that looks like Kantrip's.
 
 ### Secret disclosure during execution
 
@@ -431,7 +468,9 @@ reliably redact arbitrary child output without corrupting it.
 Threats include locked credential stores, hanging clients, unavailable remote
 services, malformed certificate files, large private keys, many stale session
 directories, and a migration blocked by another writer or insufficient disk.
-A locked macOS vault read without a terminal would wait on a password window.
+A locked macOS vault read without a terminal would wait on a password window,
+and an unanswered Linux password window blocks its caller forever and stays on
+screen.
 
 Controls:
 
@@ -443,13 +482,18 @@ Controls:
 - Unlock a locked macOS vault only on the controlling terminal, with three
   attempts and a clean Ctrl-C cancellation; without a terminal, fail at once
   with guidance. A refused unlock is not asked again in the same process.
+- Show a Linux password window only with a terminal to explain it, wait for it
+  at most 60 seconds, and dismiss it on timeout or Ctrl-C. Without a terminal,
+  dismiss the never-shown prompt and fail at once, unless the vault opens
+  without a window. Report a window the desktop could not show (no display, a
+  locked screen) as such.
 - Scan only direct children of the validated runtime root automatically.
 - Bound maintenance lock acquisition and preserve every uniquely named private
   pre-migration backup.
 
-Residual risk: Kantrip does not provide high availability. A locked keyring,
-unavailable external service, exhausted filesystem, or hostile same-user process
-can prevent operation.
+Residual risk: Kantrip does not provide high availability. A locked vault with
+no desktop session to unlock it, an unavailable external service, an exhausted
+filesystem, or a hostile same-user process can prevent operation.
 
 ## Security strengths
 
@@ -479,7 +523,7 @@ can prevent operation.
   profile metadata, or interfere with runtime files subject to OS controls.
 - Temporary private files reduce accidental exposure but do not eliminate
   on-disk secret material or provide forensic deletion.
-- Native keyring operations and SQLite updates are not one atomic transaction;
+- Vault operations and SQLite updates are not one atomic transaction;
   reconciliation narrows but cannot eliminate every orphan scenario.
 - A macOS vault that times out between Kantrip's state check and an item read
   opens a macOS password window; the interval is milliseconds.

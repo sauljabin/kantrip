@@ -119,10 +119,15 @@
   them below the `security -i` line limit, read lock state and policy only
   through Security.framework with interaction disabled, never read a locked
   vault, create and unlock it only on the terminal, and never fall back to the
-  login keychain. On Linux, approve only Secret Service-compatible keyring
-  backends; reject null, plaintext, encrypted-file, chained, and unknown
-  backends. Surface `VaultError` guidance instead of a generic credential
-  error. Use service `kantrip` and canonical immutable
+  login keychain. On Linux, use only the dedicated Secret Service collection
+  `kantrip` through `secretstorage`, in GNOME Keyring or KDE Wallet; reject
+  other providers. Find it by the GNOME object path and label or the KDE alias
+  and wallet file, never by guessing. Open create and unlock windows only with a
+  terminal, bound them with Kantrip's timeout and `Prompt.Dismiss()`, and without
+  a terminal proceed only when the vault opens without a window. Restore KDE's
+  `default` alias around create and unlock, reject empty secrets, and never
+  unlock a vault just to inspect it. Surface `VaultError` guidance instead of a
+  generic credential error. Use service `kantrip` and canonical immutable
   `profile/<profile-uuid>/<credential-uuid>/<field>` keys. Fully qualify fields
   by owner, including `kafka/oauth/client-secret` and
   `registry/oauth/client-secret`.
@@ -294,9 +299,11 @@
   candidate wheel installed separately, and a real approved native credential
   backend. It must never create or remove the caller's sandbox. It owns exact
   temporary profiles, topics, schemas, and artifacts and cleans only those
-  resources. `--suite vault` is the sandbox-free macOS vault acceptance; it
-  locks and unlocks the real vault, so it runs only where the vault is
-  disposable, such as the macOS CI job.
+  resources. `--suite vault` is the sandbox-free vault acceptance of the current
+  platform; it locks and unlocks the real vault, so it runs only where the vault
+  is disposable, such as the macOS and Ubuntu CI jobs. Linux CI pre-creates an
+  empty-password `kantrip` keyring because runners cannot show GNOME Keyring's
+  password window.
 - E2E preconditions must distinguish missing tooling or infrastructure from
   product assertion failures. Exercise real operations, not help/version output;
   parse TUI behavior through terminal state, not raw redraw bytes. Serialize the

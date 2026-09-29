@@ -23,9 +23,9 @@ dependencies = [
     "confluent-kafka>=2.15,<3",
     "cryptography>=44,<51",
     "jsonschema>=4.25,<5",
-    "keyring>=25.7,<26",
     "pyyaml>=6.0,<7",
     "rich>=14.2,<16",
+    "secretstorage>=3.5,<4; sys_platform == 'linux'",
 ]
 
 [project.scripts]
