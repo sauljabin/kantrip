@@ -18,9 +18,9 @@ These checks apply to the first stable release (v0.1.0), not to an
 intermediate alpha or beta. Pre-releases use the shared preparation and
 pre-release sections below; their exact-wheel release E2E remains mandatory.
 
-- [ ] Run every scenario in [Manual Testing](MANUAL_TESTING.md) against the
-  candidate wheel on macOS and one Linux distribution. Record actual results;
-  automated unit and E2E tests do not replace the human checks.
+- [ ] Run [Manual Testing](MANUAL_TESTING.md) against the candidate wheel on
+  macOS and on each Linux desktop its platform table lists. Record actual
+  results; automated unit and E2E tests do not replace the human checks.
 - [ ] Confirm every required CLI/protocol/authentication/input-format cell in
   [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
   conditional and unsupported cells explicitly, including ping proof limits.

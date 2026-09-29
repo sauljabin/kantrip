@@ -309,10 +309,12 @@
   parse TUI behavior through terminal state, not raw redraw bytes. Serialize the
   shared OAuth identities and prove refresh and post-revocation failure in the
   same long-lived client processes.
-- Keep reproducible, high-value exploratory scenarios in `MANUAL_TESTING.md`.
-  Every scenario needs explicit setup, actions, and expected results.
-  `DEVELOPMENT.md` contains environment and contributor workflows, not manual
-  test cases. Manual checks complement rather than replace unit and E2E tests.
+- Keep `MANUAL_TESTING.md` as short smoke tests of what only a person can check
+  (the real vault, terminals, desktops, readability). Each test states why it
+  matters, the commands to run, and what to expect; the platform table at the
+  top says which sections run on macOS, Linux, or each Linux desktop. Leave
+  anything a program can check to the unit and E2E suites, and keep manual
+  test cases out of `DEVELOPMENT.md`.
 
 ## Verification
 
