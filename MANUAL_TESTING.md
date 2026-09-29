@@ -27,7 +27,8 @@ alias kantrip=kantrip-qa
 Keep the test profiles away from your own:
 
 ```bash
-export QA="$(mktemp -d "${TMPDIR:-/tmp}/kantrip-qa.XXXXXX")"
+qa_tmp="${TMPDIR:-/tmp}"
+export QA="$(mktemp -d "${qa_tmp%/}/kantrip-qa.XXXXXX")"
 chmod 700 "$QA" && mkdir -m 700 "$QA/runtime"
 export KANTRIP_DATABASE="$QA/profiles.db" XDG_RUNTIME_DIR="$QA/runtime"
 ```
@@ -155,8 +156,10 @@ kantrip exec local -- kcat -b other:9092 -L      # refused before launch
 
 Expect your prompt, aliases, and history to work inside the session, and the
 profile to show in the prompt if you set up an integration from `USAGE.md`.
-The sandbox lets `qa-scram` create only topics whose names start with
-`kantrip-auth-`; any other name fails with `Authorization failed`.
+The sandbox runs an authorizer: `qa-scram` may use only topics and consumer
+groups whose names start with `kantrip-auth-`, and `local` (every client on the
+unauthenticated plaintext listener) only those starting with `kantrip-smoke-`.
+Any other name fails with `Authorization failed`.
 
 ## 5. Output reads well
 

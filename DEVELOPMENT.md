@@ -75,6 +75,10 @@ Registry, and Apicurio Registry, all on loopback:
 | Apicurio: plain, HTTPS Basic and OAuth | `http://localhost:8082`, `https://localhost:8084` |
 | Keycloak | `https://localhost:8443` |
 
+Kafka authorizes every client: plaintext clients may use only topics and
+groups starting with `kantrip-smoke-`, the PLAIN, SCRAM, and mTLS users
+`kantrip-auth-`, and the OAuth client `kantrip-oauth-`.
+
 Credentials, the CA, and client properties are in `sandbox/.state` (private and
 ignored). Open `sandbox/.state/credentials.env` in an editor when you need a
 value; don't print it. To rotate the credentials, run `sandbox down` and delete
