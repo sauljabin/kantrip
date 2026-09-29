@@ -46,6 +46,14 @@ _QUIET_KAFKA_LOGGER.disabled = True
 _STATISTICS_INTERVAL_MS = 100
 _MAX_REGISTRY_RESPONSE_BYTES = 1024 * 1024
 KafkaProof = Literal["reachability", "server-tls", "sasl", "mtls"]
+# librdkafka follows a specific broker error with summaries such as
+# _ALL_BROKERS_DOWN, so a probe reports the most specific error it observed.
+_KAFKA_ERROR_SPECIFICITY = {
+    KafkaError._AUTHENTICATION: 4,
+    KafkaError._SSL: 3,
+    KafkaError._RESOLVE: 2,
+    KafkaError._TRANSPORT: 1,
+}
 
 
 class PingError(ConnectionError):
@@ -141,7 +149,14 @@ def _error_observation(error: PingError | None) -> dict[str, Any]:
 @dataclass
 class _ProbeState:
     connected: bool = False
-    latest_error: str | None = None
+    error: str | None = None
+    error_specificity: int = -1
+
+    def record(self, error: KafkaError) -> None:
+        specificity = _KAFKA_ERROR_SPECIFICITY.get(error.code(), 0)
+        if specificity >= self.error_specificity:
+            self.error = f"{error.name()}: {error.str()}"
+            self.error_specificity = specificity
 
 
 def ping_profile(
@@ -203,24 +218,21 @@ def _probe_kafka(connection: KafkaConnection, deadline: float) -> None:
             state.connected = True
         return 0
 
-    def error_callback(error: KafkaError) -> None:
-        state.latest_error = f"{error.name()}: {error.str()}"
-
     try:
         remaining = _remaining(deadline)
         configuration = _client_configuration(
             connection,
             remaining,
             statistics_callback=statistics_callback,
-            error_callback=error_callback,
+            error_callback=state.record,
         )
         client = AdminClient(configuration, logger=_QUIET_KAFKA_LOGGER)
         while not state.connected:
             remaining = _remaining(deadline)
             client.poll(min(remaining, _STATISTICS_INTERVAL_MS / 1000))
     except TimeoutError as error:
-        message = _classify_probe_failure(state.latest_error)
-        raise PingError(message, detail=state.latest_error or "deadline exhausted") from error
+        message = _classify_probe_failure(state.error)
+        raise PingError(message, detail=state.error or "deadline exhausted") from error
     except (KafkaException, KafkaProfileError) as error:
         detail = _exception_message(error)
         raise PingError(_classify_probe_failure(detail), detail=detail) from error
