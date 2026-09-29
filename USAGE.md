@@ -15,9 +15,9 @@ See [Compatibility](COMPATIBILITY.md) for supported clients, authentication
 methods, and file formats.
 
 No backward compatibility is promised before v0.1.0, including between
-published alpha versions. Commands, output, and stored profiles may change; a
-profile database from an earlier pre-release may be rejected with instructions
-to recreate it. Kantrip never deletes it silently.
+published alpha and beta versions. Commands, output, and stored profiles may
+change; a profile database from an earlier pre-release may be rejected with
+instructions to recreate it. Kantrip never deletes it silently.
 
 Kantrip is not a persistent process manager, a global context selector, or a
 replacement for Kafka clients. Its responsibility ends at storing profiles,
@@ -139,9 +139,9 @@ Migration backups include their UTC creation time and a unique suffix, so later
 migrations preserve earlier recovery points. Unreleased databases without
 migration history are unsupported and must be recreated.
 
-A profile database created by a pre-release (alpha) version is rejected with
-"created by a pre-release version of Kantrip". Kantrip does not modify it. To
-start over, move it aside and add your profiles again:
+A profile database created by a pre-release (alpha or beta) version is rejected
+with "created by a pre-release version of Kantrip". Kantrip does not modify it.
+To start over, move it aside and add your profiles again:
 
 ```bash
 mv ~/.local/share/kantrip/profiles.db ~/.local/share/kantrip/profiles.db.pre-release

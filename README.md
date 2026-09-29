@@ -74,9 +74,9 @@ Strimzi and properties import). Current support is described in
 [Compatibility](COMPATIBILITY.md).
 
 Kantrip is pre-release software: no backward compatibility is promised before
-v0.1.0, including between published alpha versions. Commands, output, and
-stored profiles may change, and older profile databases may need to be
-recreated.
+v0.1.0, including between published alpha and beta versions. Commands,
+output, and stored profiles may change, and older profile databases may need
+to be recreated.
 
 ## Quick start
 
