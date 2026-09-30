@@ -2084,12 +2084,11 @@ class TestSessionFiles(unittest.TestCase):
 
         self.assertEqual(
             {
-                "kcat.conf",
-                "kafka.properties",
+                "librdkafka.properties",
+                "java.properties",
                 "kaskade.ini",
                 "kaskade-registry.ini",
                 "registry.properties",
-                "schema-registry-kafka.properties",
                 *_KAFKA_MATERIAL,
             },
             files,
@@ -2185,7 +2184,6 @@ class TestSessionFiles(unittest.TestCase):
         registry = RegistryConnection(
             "apicurio", "http://registry.invalid/apis/registry/v3", "apicurio.registry.url"
         )
-        self.kafka = KafkaConnection(("localhost:9092",), "plaintext")
         files, environment = self.run_session(["orders-app"], registry)
 
         self.assertIn("APICURIO_REGISTRY_CONFIG_FILE", environment)
