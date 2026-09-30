@@ -5,6 +5,7 @@ from kantrip.oauth import OAuthConnection
 from kantrip.registry import (
     RegistryConnection,
     RegistryProfileError,
+    confluent_console_properties,
     display_registry,
     kaskade_registry_properties,
     registry_connection,
@@ -23,7 +24,88 @@ class _Store:
         return self.values[reference]
 
 
+_TOKEN_PROFILE_ID = "018f8f13-7c21-7cee-8000-000000000010"
+_TOKEN_REFERENCE = secret_reference(_TOKEN_PROFILE_ID, "registry/token")
+_SYNTHETIC_TOKEN = "synthetic-registry-token"
+
+
+def _token_registry(provider: str, property_name: str, ca: str | None = None) -> dict[str, object]:
+    registry: dict[str, object] = {
+        "provider": provider,
+        property_name: "https://registry.invalid",
+        "auth": {"type": "token", "tokenRef": _TOKEN_REFERENCE},
+    }
+    if ca is not None:
+        registry["tls"] = {"caCertificates": ca}
+    return {"id": _TOKEN_PROFILE_ID, "registry": registry}
+
+
+def _resolved_confluent_token(ca: str | None = None) -> RegistryConnection:
+    parsed = registry_connection(_token_registry("confluent", "schema.registry.url", ca))
+    assert parsed is not None
+    return resolve_registry_connection(parsed, _Store({_TOKEN_REFERENCE: _SYNTHETIC_TOKEN}))
+
+
 class TestRegistry(unittest.TestCase):
+    def test_renders_a_fixed_token_for_confluent_java_consoles(self) -> None:
+        connection = _resolved_confluent_token(synthetic_pki().ca)
+
+        properties = confluent_console_properties(connection, ca_location=Path("registry-ca.pem"))
+
+        self.assertEqual(
+            {
+                "schema.registry.url": "https://registry.invalid",
+                "schema.registry.ssl.truststore.location": "registry-ca.pem",
+                "schema.registry.ssl.truststore.type": "PEM",
+                "schema.registry.bearer.auth.credentials.source": "STATIC_TOKEN",
+                "schema.registry.bearer.auth.token": _SYNTHETIC_TOKEN,
+            },
+            properties,
+        )
+
+    def test_renders_a_fixed_token_for_confluent_librdkafka_registry_files(self) -> None:
+        connection = _resolved_confluent_token(synthetic_pki().ca)
+
+        properties = kaskade_registry_properties(connection, ca_location=Path("registry-ca.pem"))
+
+        self.assertEqual(
+            {
+                "provider": "confluent",
+                "url": "https://registry.invalid",
+                "ssl.ca.location": "registry-ca.pem",
+                "bearer.auth.credentials.source": "STATIC_TOKEN",
+                "bearer.auth.token": _SYNTHETIC_TOKEN,
+            },
+            properties,
+        )
+
+    def test_rejects_an_unresolved_fixed_token(self) -> None:
+        parsed = registry_connection(_token_registry("confluent", "schema.registry.url"))
+        assert parsed is not None
+
+        for render in (confluent_console_properties, kaskade_registry_properties):
+            with (
+                self.subTest(render=render.__name__),
+                self.assertRaisesRegex(RegistryProfileError, "token is not resolved"),
+            ):
+                render(parsed)
+
+    def test_rejects_apicurio_fixed_tokens(self) -> None:
+        with self.assertRaisesRegex(RegistryProfileError, "only for Confluent-compatible"):
+            registry_connection(_token_registry("apicurio", "apicurio.registry.url"))
+
+        connection = RegistryConnection(
+            provider="apicurio",
+            url="https://registry.invalid/apis/registry/v3",
+            property_name="apicurio.registry.url",
+            auth_type="token",
+            token=Secret(_SYNTHETIC_TOKEN),
+        )
+        with self.assertRaisesRegex(RegistryProfileError, "Apicurio does not support fixed"):
+            kaskade_registry_properties(connection)
+        with self.assertRaisesRegex(RegistryProfileError, "require a Confluent Registry"):
+            confluent_console_properties(connection)
+
     def test_renders_official_shared_apicurio_oauth_security(self) -> None:
         connection = RegistryConnection(
             provider="apicurio",
@@ -149,7 +231,9 @@ class TestRegistry(unittest.TestCase):
                         "auth": {
                             "type": "basic",
                             "username": "synthetic",
-                            "passwordRef": "profile/018f8f13-7c21-7cee-8000-000000000010/018f8f13-7c21-7cee-8000-000000000011/registry/password",
+                            "passwordRef": (
+                                "profile/018f8f13-7c21-7cee-8000-000000000010/018f8f13-7c21-7cee-8000-000000000011/registry/password"
+                            ),
                         },
                     },
                 }

@@ -717,7 +717,8 @@ kantrip exec local -- kcat -C -t avro-orders -s value=avro
 
 With `-s avro`, `-s key=avro`, or `-s value=avro`, Kantrip passes the
 profile's Confluent-compatible Registry URL with `-r`. kcat doesn't work with
-native Apicurio profiles. Kantrip rejects `-F`, `-r`, and
+native Apicurio profiles or with Registry authentication (Basic, a fixed
+token, mTLS, or OAuth). Kantrip rejects `-F`, `-r`, and
 `-X schema.registry.url=...`. Other modes don't need a Registry.
 
 ### Apache Kafka and Confluent Kafka commands
@@ -763,8 +764,9 @@ Each gets the profile's bootstrap servers, a private Java client file, and
 `schema.registry.url`. Options that would change the connection or the Registry
 endpoint are rejected.
 
-They need a plain Registry with the Confluent provider. Without a Registry, or
-with a native Apicurio one, they fail before starting.
+They need a Registry with the Confluent provider, with no authentication or
+with Basic, a fixed token, mTLS, or OAuth. Without a Registry, or with a native
+Apicurio one, they fail before starting.
 
 ### Kaskade
 
@@ -792,6 +794,7 @@ profile's provider. Kantrip rejects `-b`/`--bootstrap-servers`, `--kafka`,
 Through Kantrip, Kaskade decodes Avro, JSON Schema, and Protobuf with both
 Confluent Schema Registry and native Apicurio Registry. Native Apicurio uses its
 default `contentId` framing, because Kantrip only configures the Registry URL.
+A Registry with a fixed token makes Registry decoding fail before launch.
 
 When `kaskade consumer` decodes through a Registry that uses OAuth, Kantrip
 removes `SSL_CERT_FILE` and `SSL_CERT_DIR` for that process. For a Confluent
