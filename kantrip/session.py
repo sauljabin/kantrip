@@ -467,22 +467,24 @@ def _plan_client_files(
             *librdkafka_files,
             *registry_files,
         )
-        prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
-        variables[f"{prefix}_REGISTRY_CONFIG_FILE"] = files.plan(
-            "registry.properties", _text(kaskade_registry), *registry_files
+        variable, filename = (
+            ("APICURIO_REGISTRY_CONFIG_FILE", "apicurio-registry.properties")
+            if registry.provider == APICURIO_PROVIDER
+            else ("SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE", "schema-registry-librdkafka.properties")
         )
+        variables[variable] = files.plan(filename, _text(kaskade_registry), *registry_files)
     if registry is not None and registry.provider != APICURIO_PROVIDER:
         console_registry = _registry_properties(
             confluent_console_properties, registry, registry_material
         )
         # Confluent's Java serializers carry the Registry client key inline.
         schema_registry_java_config = files.plan(
-            "schema-registry-kafka.properties",
+            "schema-registry-java.properties",
             _text(_render_java_properties(java_config | console_registry)),
             *java_files,
             registry_material.ca,
         )
-        variables["SCHEMA_REGISTRY_KAFKA_CONFIG_FILE"] = schema_registry_java_config
+        variables["SCHEMA_REGISTRY_JAVA_CONFIG_FILE"] = schema_registry_java_config
     configuration = ClientConfiguration(
         bootstrap_servers=rdkafka_properties["bootstrap.servers"],
         java_config=java_config_path,

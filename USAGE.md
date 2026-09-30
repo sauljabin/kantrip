@@ -1093,19 +1093,22 @@ or change other variables on purpose.
 
 ### Registry variables
 
-The `*_REGISTRY_CONFIG_FILE` variable is set only for the profile's provider.
-Its file, `registry.properties`, holds the Registry URL and the client
-settings the profile needs, credentials included, under the same keys as the
-`[registry]` section of Kaskade's config file. Kantrip leaves it empty when
-that format can't describe the profile, as for an Apicurio Registry with an
-encrypted client key.
+The Registry variables are set only for the profile's provider, and their
+files hold the Registry settings the profile needs, credentials included. A
+Confluent-compatible Registry gets one file per client family, like Kafka:
+Java properties that also carry the Kafka connection, because Confluent's Java
+serializers read one combined configuration, and Registry-only properties for
+librdkafka-based clients. Their keys match the `[registry]` section of
+Kaskade's config file. A native Apicurio Registry gets one file. Kantrip leaves
+a Registry-only file empty when its format can't describe the profile, as for
+an Apicurio Registry with an encrypted client key.
 
 | Variable | Meaning |
 | --- | --- |
-| `SCHEMA_REGISTRY_CONFIG_FILE` | Confluent-compatible Registry client properties: `provider=confluent`, `url`, then `ssl.ca.location`, `ssl.certificate.location`, and `ssl.key.location` when the profile has them, and `basic.auth.*` or `bearer.auth.*` for Basic, fixed-token, or OAuth authentication |
-| `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` | Set only for a Confluent-compatible Registry: private Java properties (`schema-registry-kafka.properties`) with the Kafka connection and the `schema.registry.*` settings of Confluent's Java serializers |
+| `SCHEMA_REGISTRY_JAVA_CONFIG_FILE` | Private Java properties (`schema-registry-java.properties`) with the Kafka connection and the `schema.registry.*` settings of Confluent's Java serializers |
+| `SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE` | Private Registry properties (`schema-registry-librdkafka.properties`): `provider=confluent`, `url`, then `ssl.ca.location`, `ssl.certificate.location`, and `ssl.key.location` when the profile has them, and `basic.auth.*` or `bearer.auth.*` for Basic, fixed-token, or OAuth authentication |
 | `SCHEMA_REGISTRY_OPTS` | The same value as `KAFKA_OPTS`, set under the same condition, for Confluent's Schema Registry console scripts |
-| `APICURIO_REGISTRY_CONFIG_FILE` | Native Apicurio Registry client properties: `provider=apicurio`, `apicurio.registry.url`, then `apicurio.registry.tls.*` and `apicurio.registry.auth.*` when the profile has them |
+| `APICURIO_REGISTRY_CONFIG_FILE` | Private Registry properties (`apicurio-registry.properties`): `provider=apicurio`, `apicurio.registry.url`, then `apicurio.registry.tls.*` and `apicurio.registry.auth.*` when the profile has them |
 
 ### Kantrip session metadata
 

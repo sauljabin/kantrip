@@ -804,9 +804,9 @@ class TestProfileSession(unittest.TestCase):
                     ],
                     arguments[:4],
                 )
-                self.assertEqual("schema-registry-kafka.properties", Path(arguments[4]).name)
+                self.assertEqual("schema-registry-java.properties", Path(arguments[4]).name)
                 self.assertEqual(auxiliary_config, arguments[5])
-                self.assertEqual("schema-registry-kafka.properties", Path(arguments[6]).name)
+                self.assertEqual("schema-registry-java.properties", Path(arguments[6]).name)
                 self.assertEqual(auxiliary_property, arguments[7])
                 self.assertEqual(
                     "schema.registry.url=http://registry.invalid:8081",
@@ -816,7 +816,7 @@ class TestProfileSession(unittest.TestCase):
                 environment = observed["environment"]
                 assert isinstance(environment, dict)
                 self.assertNotIn("SCHEMA_REGISTRY_URL", environment)
-                self.assertNotIn("SCHEMA_REGISTRY_CONFIG_FILE", environment)
+                self.assertNotIn("SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE", environment)
                 self.assertIn(
                     "schema.registry.url=http://registry.invalid:8081\n",
                     observed["java_contents"],
@@ -1985,7 +1985,7 @@ class TestSessionFiles(unittest.TestCase):
                 "kafka-ca.pem",
             },
             ("kafka-avro-console-consumer", "--topic", "orders"): {
-                "schema-registry-kafka.properties",
+                "schema-registry-java.properties",
                 "kafka-ca.pem",
                 "registry-ca.pem",
             },
@@ -2047,8 +2047,8 @@ class TestSessionFiles(unittest.TestCase):
                 "kaskade.ini",
                 "kaskade-registry.ini",
                 "kcl.toml",
-                "registry.properties",
-                "schema-registry-kafka.properties",
+                "schema-registry-librdkafka.properties",
+                "schema-registry-java.properties",
                 "client-unencrypted.key",
                 "registry-client-unencrypted.key",
                 *_KAFKA_MATERIAL,
@@ -2059,8 +2059,8 @@ class TestSessionFiles(unittest.TestCase):
         variables = {
             "KAFKA_JAVA_CONFIG_FILE": "java.properties",
             "KAFKA_LIBRDKAFKA_CONFIG_FILE": "librdkafka.properties",
-            "SCHEMA_REGISTRY_CONFIG_FILE": "registry.properties",
-            "SCHEMA_REGISTRY_KAFKA_CONFIG_FILE": "schema-registry-kafka.properties",
+            "SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE": "schema-registry-librdkafka.properties",
+            "SCHEMA_REGISTRY_JAVA_CONFIG_FILE": "schema-registry-java.properties",
         }
         for name, filename in variables.items():
             with self.subTest(variable=name):
@@ -2088,7 +2088,7 @@ class TestSessionFiles(unittest.TestCase):
                 "java.properties",
                 "kaskade.ini",
                 "kaskade-registry.ini",
-                "registry.properties",
+                "apicurio-registry.properties",
                 *_KAFKA_MATERIAL,
             },
             files,
@@ -2096,23 +2096,25 @@ class TestSessionFiles(unittest.TestCase):
 
     def test_custom_commands_read_the_provider_registry_file(self) -> None:
         registries = {
-            "SCHEMA": RegistryConnection(
+            "SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE": RegistryConnection(
                 "confluent", "http://registry.invalid:8081", "schema.registry.url"
             ),
-            "APICURIO": RegistryConnection(
+            "APICURIO_REGISTRY_CONFIG_FILE": RegistryConnection(
                 "apicurio",
                 "http://registry.invalid/apis/registry/v3",
                 "apicurio.registry.url",
             ),
         }
         expected = {
-            "SCHEMA": "provider=confluent\nurl=http://registry.invalid:8081\n",
-            "APICURIO": (
+            "SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE": (
+                "provider=confluent\nurl=http://registry.invalid:8081\n"
+            ),
+            "APICURIO_REGISTRY_CONFIG_FILE": (
                 "apicurio.registry.url=http://registry.invalid/apis/registry/v3\n"
                 "provider=apicurio\n"
             ),
         }
-        for prefix, registry in registries.items():
+        for variable, registry in registries.items():
             with self.subTest(provider=registry.provider):
                 observed: dict[str, str] = {}
 
@@ -2120,12 +2122,12 @@ class TestSessionFiles(unittest.TestCase):
                     arguments: list[str],
                     *,
                     _observed: dict[str, str] = observed,
-                    _prefix: str = prefix,
+                    _variable: str = variable,
                     **options: object,
                 ) -> subprocess.CompletedProcess:
                     environment = options["env"]
                     assert isinstance(environment, dict)
-                    path = Path(environment[f"{_prefix}_REGISTRY_CONFIG_FILE"])
+                    path = Path(environment[_variable])
                     _observed["contents"] = path.read_text(encoding="utf-8")
                     _observed["mode"] = oct(stat.S_IMODE(path.stat().st_mode))
                     return subprocess.CompletedProcess(arguments, 0)
@@ -2143,7 +2145,7 @@ class TestSessionFiles(unittest.TestCase):
                         resolved_registry=registry,
                     )
 
-                self.assertEqual(expected[prefix], observed["contents"])
+                self.assertEqual(expected[variable], observed["contents"])
                 self.assertEqual(oct(0o600), observed["mode"])
 
     def test_only_java_clients_get_the_oauth_jvm_options(self) -> None:
@@ -2177,8 +2179,8 @@ class TestSessionFiles(unittest.TestCase):
     def test_no_registry_sets_no_registry_file_variable(self) -> None:
         files, environment = self.run_session(["orders-app"], None)
 
-        self.assertNotIn("SCHEMA_REGISTRY_KAFKA_CONFIG_FILE", environment)
-        self.assertNotIn("schema-registry-kafka.properties", files)
+        self.assertNotIn("SCHEMA_REGISTRY_JAVA_CONFIG_FILE", environment)
+        self.assertNotIn("schema-registry-java.properties", files)
 
     def test_an_apicurio_registry_gets_no_confluent_serializer_file(self) -> None:
         registry = RegistryConnection(
@@ -2187,8 +2189,8 @@ class TestSessionFiles(unittest.TestCase):
         files, environment = self.run_session(["orders-app"], registry)
 
         self.assertIn("APICURIO_REGISTRY_CONFIG_FILE", environment)
-        self.assertNotIn("SCHEMA_REGISTRY_KAFKA_CONFIG_FILE", environment)
-        self.assertNotIn("schema-registry-kafka.properties", files)
+        self.assertNotIn("SCHEMA_REGISTRY_JAVA_CONFIG_FILE", environment)
+        self.assertNotIn("schema-registry-java.properties", files)
 
     def test_an_interactive_shell_writes_every_file(self) -> None:
         observed: dict[str, set[str]] = {}

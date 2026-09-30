@@ -49,7 +49,7 @@ record = {{
     "profile": os.environ.get("KANTRIP_PROFILE"),
     "session_directory": session_directory,
 }}
-registry_config_path = os.environ.get("SCHEMA_REGISTRY_CONFIG_FILE")
+registry_config_path = os.environ.get("SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE")
 registry_config = Path(registry_config_path) if registry_config_path else None
 record["registry_config_exists"] = bool(registry_config and registry_config.is_file())
 record["registry_config_mode"] = (
