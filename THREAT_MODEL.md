@@ -322,8 +322,9 @@ Controls:
   adapter passes and the key and CA files that configuration names. Java
   clients carry client keys inline, so they get no key file, and an encrypted
   key is decrypted to disk only for kaf or kcl. Custom commands and interactive
-  shells still get every generated file, because they rely on the documented
-  file variables.
+  shells still get every generated configuration, because they rely on the
+  documented file variables, but a decrypted key only when a kaf or kcl
+  configuration that names it is written.
 - Redact before presentation, independently of output styling.
 - Hold in-memory secrets in an opaque `Secret` type whose `repr()` is masked
   and whose text conversion and pickling fail, so tracebacks, debuggers,
