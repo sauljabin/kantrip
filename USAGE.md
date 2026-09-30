@@ -65,22 +65,22 @@ independent identity, scopes, secret, and optional CA trust.
 ## Short command names
 
 Kantrip doesn't install shortcuts, but if you want a shorter command, the
-suggested one is `knt`. Make it a symlink in a directory on your `PATH`, such as
+suggested one is `kan`. Make it a symlink in a directory on your `PATH`, such as
 `~/.local/bin`:
 
 ```bash
-ln -s "$(command -v kantrip)" ~/.local/bin/knt
+ln -s "$(command -v kantrip)" ~/.local/bin/kan
 ```
 
 A symlink works everywhere a command does: in every shell, in session shells,
 and in scripts. The rest of this guide uses `kantrip`.
 
 Clients take short names the same way. Kantrip follows the link and configures
-the client it points to, both in `kantrip exec PROFILE -- ksk admin` and in
+the client it points to, both in `kantrip exec PROFILE -- kas admin` and in
 session shells:
 
 ```bash
-ln -s "$(command -v kaskade)" ~/.local/bin/ksk
+ln -s "$(command -v kaskade)" ~/.local/bin/kas
 ```
 
 Use symlinks rather than aliases or wrapper scripts. Kantrip can't tell which

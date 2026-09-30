@@ -270,8 +270,8 @@ def _write_fake_clients(directory: Path) -> None:
         path = directory / executable
         path.write_text(contents, encoding="utf-8")
         path.chmod(0o700)
-    # A user's shorter name for a client, such as `ln -s kaskade ksk`.
-    (directory / "ksk").symlink_to("kaskade")
+    # A user's shorter name for a client, such as `ln -s kaskade kas`.
+    (directory / "kas").symlink_to("kaskade")
 
 
 def _isolate_shell(shell_name: str, shell: str, root: Path) -> str:
@@ -401,7 +401,7 @@ def _adapter_commands() -> list[str]:
             "kaskade admin",
             "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
             "kaskade consumer -v registry",
-            "ksk consumer --topic linked-contract",
+            "kas consumer --topic linked-contract",
             "kaf topics",
             "env KCL_SEED_BROKERS=other.invalid:9092 KCL_NO_CONFIG_FILE=1 kcl topic list",
         )

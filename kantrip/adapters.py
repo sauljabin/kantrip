@@ -451,7 +451,7 @@ _SYMLINK_HOPS = 40
 def resolve_client_command(command: str, search_path: str | None) -> str:
     """Return `command`, or the supported client it names through symlinks.
 
-    A link such as `ksk -> kaskade` runs that client, so it is adapted as the
+    A link such as `kas -> kaskade` runs that client, so it is adapted as the
     first link target whose base name is a supported executable. Aliases,
     functions, and wrapper scripts are not links and are never resolved.
     """
