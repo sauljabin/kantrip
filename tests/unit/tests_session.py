@@ -11,7 +11,9 @@ from unittest.mock import Mock, patch
 from kantrip.adapters import (
     SCHEMA_REGISTRY_EXECUTABLES,
     AdapterError,
+    ClientConfiguration,
     create_subshell_shims,
+    prepare_command_environment,
     require_adapter_capability,
     resolve_client_command,
 )
@@ -96,8 +98,8 @@ class TestJavaCapabilityParity(unittest.TestCase):
                 shim_directory = create_subshell_shims(
                     root_path / "bin",
                     bootstrap_servers="localhost:9093",
-                    java_config_path=root_path / "kafka.properties",
-                    kcat_config_path=root_path / "kcat.conf",
+                    java_config_path=root_path / "java.properties",
+                    librdkafka_config_path=root_path / "librdkafka.properties",
                     kaskade_config_path=root_path / "kaskade.ini",
                     kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                     environment=environment,
@@ -204,8 +206,8 @@ class TestSymlinkedClients(unittest.TestCase):
             shim_directory = create_subshell_shims(
                 root_path / "session",
                 bootstrap_servers="localhost:9092",
-                java_config_path=root_path / "kafka.properties",
-                kcat_config_path=root_path / "kcat.conf",
+                java_config_path=root_path / "java.properties",
+                librdkafka_config_path=root_path / "librdkafka.properties",
                 kaskade_config_path=root_path / "kaskade.ini",
                 kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                 environment={"PATH": search_path},
@@ -340,7 +342,8 @@ class TestProfileSession(unittest.TestCase):
         environment = observed["environment"]
         assert isinstance(environment, dict)
         self.assertEqual("local", environment["KANTRIP_PROFILE"])
-        self.assertEqual("localhost:9092,localhost:9093", environment["KAFKA_BOOTSTRAP_SERVERS"])
+        self.assertNotIn("KAFKA_BOOTSTRAP_SERVERS", environment)
+        self.assertNotIn("KAFKA_SECURITY_PROTOCOL", environment)
         self.assertEqual(
             "bootstrap.servers=localhost:9092,localhost:9093\n" "security.protocol=PLAINTEXT\n",
             observed["contents"],
@@ -455,7 +458,7 @@ class TestProfileSession(unittest.TestCase):
                     ],
                     arguments[:4],
                 )
-                self.assertEqual("kafka.properties", Path(arguments[4]).name)
+                self.assertEqual("java.properties", Path(arguments[4]).name)
                 self.assertEqual(["--list"], arguments[5:])
                 self.assertEqual(
                     "bootstrap.servers=localhost:9092,localhost:9093\n"
@@ -477,14 +480,13 @@ class TestProfileSession(unittest.TestCase):
         def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
             environment = options["env"]
             assert isinstance(environment, dict)
-            config_path = Path(environment["KCAT_CONFIG"])
+            config_path = Path(environment["KAFKA_LIBRDKAFKA_CONFIG_FILE"])
             ca_path = config_path.parent / "kafka-ca.pem"
             java_path = Path(environment["KAFKA_JAVA_CONFIG_FILE"])
             observed["kcat"] = config_path.read_text(encoding="utf-8")
             observed["java"] = java_path.read_text(encoding="utf-8")
             observed["ca"] = ca_path.read_text(encoding="utf-8")
             observed["ca_mode"] = stat.S_IMODE(ca_path.stat().st_mode)
-            observed["security_protocol"] = environment["KAFKA_SECURITY_PROTOCOL"]
             return subprocess.CompletedProcess(arguments, 0)
 
         with (
@@ -502,7 +504,6 @@ class TestProfileSession(unittest.TestCase):
         self.assertIn("ssl.truststore.type=PEM\n", observed["java"])
         self.assertEqual(synthetic_pki().ca, observed["ca"])
         self.assertEqual(0o600, observed["ca_mode"])
-        self.assertEqual("SSL", observed["security_protocol"])
 
     def test_mtls_java_configuration_escapes_pem_and_writes_no_key_file(self) -> None:
         pki = synthetic_pki()
@@ -626,8 +627,8 @@ class TestProfileSession(unittest.TestCase):
             shim_directory = create_subshell_shims(
                 root_path / "bin",
                 bootstrap_servers="localhost:9093",
-                java_config_path=root_path / "kafka.properties",
-                kcat_config_path=root_path / "kcat.conf",
+                java_config_path=root_path / "java.properties",
+                librdkafka_config_path=root_path / "librdkafka.properties",
                 kaskade_config_path=root_path / "kaskade.ini",
                 kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                 environment={"PATH": root},
@@ -660,8 +661,8 @@ class TestProfileSession(unittest.TestCase):
             shim_directory = create_subshell_shims(
                 root_path / "bin",
                 bootstrap_servers="localhost:9096",
-                java_config_path=root_path / "kafka.properties",
-                kcat_config_path=root_path / "kcat.conf",
+                java_config_path=root_path / "java.properties",
+                librdkafka_config_path=root_path / "librdkafka.properties",
                 kaskade_config_path=root_path / "kaskade.ini",
                 kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                 environment={"PATH": root},
@@ -803,9 +804,9 @@ class TestProfileSession(unittest.TestCase):
                     ],
                     arguments[:4],
                 )
-                self.assertEqual("schema-registry-kafka.properties", Path(arguments[4]).name)
+                self.assertEqual("schema-registry-java.properties", Path(arguments[4]).name)
                 self.assertEqual(auxiliary_config, arguments[5])
-                self.assertEqual("schema-registry-kafka.properties", Path(arguments[6]).name)
+                self.assertEqual("schema-registry-java.properties", Path(arguments[6]).name)
                 self.assertEqual(auxiliary_property, arguments[7])
                 self.assertEqual(
                     "schema.registry.url=http://registry.invalid:8081",
@@ -814,8 +815,8 @@ class TestProfileSession(unittest.TestCase):
                 self.assertEqual(["--topic", "orders"], arguments[9:])
                 environment = observed["environment"]
                 assert isinstance(environment, dict)
-                self.assertEqual("http://registry.invalid:8081", environment["SCHEMA_REGISTRY_URL"])
-                self.assertNotIn("SCHEMA_REGISTRY_CONFIG_FILE", environment)
+                self.assertNotIn("SCHEMA_REGISTRY_URL", environment)
+                self.assertNotIn("SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE", environment)
                 self.assertIn(
                     "schema.registry.url=http://registry.invalid:8081\n",
                     observed["java_contents"],
@@ -1231,8 +1232,8 @@ class TestProfileSession(unittest.TestCase):
                     shim_directory = create_subshell_shims(
                         root_path / "bin",
                         bootstrap_servers="localhost:9092",
-                        java_config_path=root_path / "kafka.properties",
-                        kcat_config_path=root_path / "kcat.conf",
+                        java_config_path=root_path / "java.properties",
+                        librdkafka_config_path=root_path / "librdkafka.properties",
                         kaskade_config_path=root_path / "kaskade.ini",
                         kaskade_registry_config_path=root_path / "kaskade-registry.ini",
                         environment={"PATH": str(root_path)},
@@ -1417,10 +1418,7 @@ class TestProfileSession(unittest.TestCase):
         )
         environment = observed["environment"]
         assert isinstance(environment, dict)
-        self.assertEqual(
-            "http://registry.invalid/apis/registry/v3",
-            environment["APICURIO_REGISTRY_URL"],
-        )
+        self.assertNotIn("APICURIO_REGISTRY_URL", environment)
         self.assertNotIn("SCHEMA_REGISTRY_URL", environment)
         self.assertNotIn("APICURIO_REGISTRY_CONFIG_FILE", environment)
 
@@ -1978,16 +1976,16 @@ class TestSessionFiles(unittest.TestCase):
     def test_one_off_clients_write_only_the_files_they_read(self) -> None:
         unencrypted_keys = {"client-unencrypted.key", "registry-client-unencrypted.key"}
         cases = {
-            ("kcat", "-L"): {"kcat.conf", *_KAFKA_MATERIAL},
-            ("kafkacat", "-C", "-t", "orders"): {"kcat.conf", *_KAFKA_MATERIAL},
+            ("kcat", "-L"): {"librdkafka.properties", *_KAFKA_MATERIAL},
+            ("kafkacat", "-C", "-t", "orders"): {"librdkafka.properties", *_KAFKA_MATERIAL},
             # Java properties carry the client certificate and key inline.
-            ("kafka-topics", "--list"): {"kafka.properties", "kafka-ca.pem"},
+            ("kafka-topics", "--list"): {"java.properties", "kafka-ca.pem"},
             ("kafka-console-consumer.sh", "--topic", "orders"): {
-                "kafka.properties",
+                "java.properties",
                 "kafka-ca.pem",
             },
             ("kafka-avro-console-consumer", "--topic", "orders"): {
-                "schema-registry-kafka.properties",
+                "schema-registry-java.properties",
                 "kafka-ca.pem",
                 "registry-ca.pem",
             },
@@ -2035,7 +2033,8 @@ class TestSessionFiles(unittest.TestCase):
     def test_kcat_reads_its_configuration_through_kcat_config(self) -> None:
         files, environment = self.run_session(["kcat", "-L"], self.registry)
 
-        self.assertIn(Path(environment["KCAT_CONFIG"]).name, files)
+        self.assertEqual("librdkafka.properties", Path(environment["KCAT_CONFIG"]).name)
+        self.assertIn("librdkafka.properties", files)
         self.assertNotIn("KAFKA_LIBRDKAFKA_CONFIG_FILE", environment)
 
     def test_custom_commands_receive_every_documented_variable_and_file(self) -> None:
@@ -2043,13 +2042,13 @@ class TestSessionFiles(unittest.TestCase):
 
         self.assertEqual(
             {
-                "kcat.conf",
-                "kafka.properties",
+                "librdkafka.properties",
+                "java.properties",
                 "kaskade.ini",
                 "kaskade-registry.ini",
                 "kcl.toml",
-                "registry.properties",
-                "schema-registry-kafka.properties",
+                "schema-registry-librdkafka.properties",
+                "schema-registry-java.properties",
                 "client-unencrypted.key",
                 "registry-client-unencrypted.key",
                 *_KAFKA_MATERIAL,
@@ -2058,20 +2057,22 @@ class TestSessionFiles(unittest.TestCase):
             files,
         )
         variables = {
-            "KAFKA_JAVA_CONFIG_FILE": "kafka.properties",
-            "KAFKA_LIBRDKAFKA_CONFIG_FILE": "kcat.conf",
-            "KCAT_CONFIG": "kcat.conf",
-            "SCHEMA_REGISTRY_CONFIG_FILE": "registry.properties",
-            "SCHEMA_REGISTRY_KAFKA_CONFIG_FILE": "schema-registry-kafka.properties",
+            "KAFKA_JAVA_CONFIG_FILE": "java.properties",
+            "KAFKA_LIBRDKAFKA_CONFIG_FILE": "librdkafka.properties",
+            "SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE": "schema-registry-librdkafka.properties",
+            "SCHEMA_REGISTRY_JAVA_CONFIG_FILE": "schema-registry-java.properties",
         }
         for name, filename in variables.items():
             with self.subTest(variable=name):
                 path = Path(environment[name])
                 self.assertEqual(filename, path.name)
                 self.assertEqual(environment["KANTRIP_SESSION_DIR"], str(path.parent))
-        self.assertEqual("broker.invalid:9095", environment["KAFKA_BOOTSTRAP_SERVERS"])
-        self.assertEqual("SSL", environment["KAFKA_SECURITY_PROTOCOL"])
-        self.assertEqual("https://registry.invalid", environment["SCHEMA_REGISTRY_URL"])
+        owned = {
+            name
+            for name in environment
+            if name.startswith(("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KCAT_"))
+        }
+        self.assertEqual(set(variables), owned, "no client reads the connection values")
 
     def test_custom_commands_get_no_decrypted_key_without_a_kaf_or_kcl_config(self) -> None:
         # Neither kaf nor kcl maps native Apicurio, so no config names a decrypted key.
@@ -2083,12 +2084,11 @@ class TestSessionFiles(unittest.TestCase):
 
         self.assertEqual(
             {
-                "kcat.conf",
-                "kafka.properties",
+                "librdkafka.properties",
+                "java.properties",
                 "kaskade.ini",
                 "kaskade-registry.ini",
-                "registry.properties",
-                "schema-registry-kafka.properties",
+                "apicurio-registry.properties",
                 *_KAFKA_MATERIAL,
             },
             files,
@@ -2096,23 +2096,25 @@ class TestSessionFiles(unittest.TestCase):
 
     def test_custom_commands_read_the_provider_registry_file(self) -> None:
         registries = {
-            "SCHEMA": RegistryConnection(
+            "SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE": RegistryConnection(
                 "confluent", "http://registry.invalid:8081", "schema.registry.url"
             ),
-            "APICURIO": RegistryConnection(
+            "APICURIO_REGISTRY_CONFIG_FILE": RegistryConnection(
                 "apicurio",
                 "http://registry.invalid/apis/registry/v3",
                 "apicurio.registry.url",
             ),
         }
         expected = {
-            "SCHEMA": "provider=confluent\nurl=http://registry.invalid:8081\n",
-            "APICURIO": (
+            "SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE": (
+                "provider=confluent\nurl=http://registry.invalid:8081\n"
+            ),
+            "APICURIO_REGISTRY_CONFIG_FILE": (
                 "apicurio.registry.url=http://registry.invalid/apis/registry/v3\n"
                 "provider=apicurio\n"
             ),
         }
-        for prefix, registry in registries.items():
+        for variable, registry in registries.items():
             with self.subTest(provider=registry.provider):
                 observed: dict[str, str] = {}
 
@@ -2120,12 +2122,12 @@ class TestSessionFiles(unittest.TestCase):
                     arguments: list[str],
                     *,
                     _observed: dict[str, str] = observed,
-                    _prefix: str = prefix,
+                    _variable: str = variable,
                     **options: object,
                 ) -> subprocess.CompletedProcess:
                     environment = options["env"]
                     assert isinstance(environment, dict)
-                    path = Path(environment[f"{_prefix}_REGISTRY_CONFIG_FILE"])
+                    path = Path(environment[_variable])
                     _observed["contents"] = path.read_text(encoding="utf-8")
                     _observed["mode"] = oct(stat.S_IMODE(path.stat().st_mode))
                     return subprocess.CompletedProcess(arguments, 0)
@@ -2143,14 +2145,52 @@ class TestSessionFiles(unittest.TestCase):
                         resolved_registry=registry,
                     )
 
-                self.assertEqual(expected[prefix], observed["contents"])
+                self.assertEqual(expected[variable], observed["contents"])
                 self.assertEqual(oct(0o600), observed["mode"])
+
+    def test_only_java_clients_get_the_oauth_jvm_options(self) -> None:
+        allowed = "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=https://idp.invalid/token"
+        configuration = ClientConfiguration(
+            bootstrap_servers="broker.invalid:9095",
+            java_config=Path("java.properties"),
+            librdkafka_config=Path("librdkafka.properties"),
+            kaskade_config=Path("kaskade.ini"),
+            kaskade_registry_config=Path("kaskade-registry.ini"),
+            kcl_config=Path("kcl.toml"),
+            java_oauth_options=allowed,
+        )
+        java_variables = {"KAFKA_OPTS": allowed, "SCHEMA_REGISTRY_OPTS": allowed}
+        cases = {
+            "kafka-topics": java_variables,
+            "kafka-avro-console-consumer": java_variables,
+            "kcat": {},
+            "kaskade": {},
+            "kaf": {},
+            "kcl": {},
+        }
+        for executable, expected in cases.items():
+            with self.subTest(executable=executable):
+                environment = prepare_command_environment([executable], {}, configuration)
+                self.assertEqual(
+                    expected,
+                    {name: environment[name] for name in java_variables if name in environment},
+                )
 
     def test_no_registry_sets_no_registry_file_variable(self) -> None:
         files, environment = self.run_session(["orders-app"], None)
 
-        self.assertNotIn("SCHEMA_REGISTRY_KAFKA_CONFIG_FILE", environment)
-        self.assertNotIn("schema-registry-kafka.properties", files)
+        self.assertNotIn("SCHEMA_REGISTRY_JAVA_CONFIG_FILE", environment)
+        self.assertNotIn("schema-registry-java.properties", files)
+
+    def test_an_apicurio_registry_gets_no_confluent_serializer_file(self) -> None:
+        registry = RegistryConnection(
+            "apicurio", "http://registry.invalid/apis/registry/v3", "apicurio.registry.url"
+        )
+        files, environment = self.run_session(["orders-app"], registry)
+
+        self.assertIn("APICURIO_REGISTRY_CONFIG_FILE", environment)
+        self.assertNotIn("SCHEMA_REGISTRY_JAVA_CONFIG_FILE", environment)
+        self.assertNotIn("schema-registry-java.properties", files)
 
     def test_an_interactive_shell_writes_every_file(self) -> None:
         observed: dict[str, set[str]] = {}

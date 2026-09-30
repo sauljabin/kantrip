@@ -152,7 +152,7 @@ explains creating, unlocking, and deleting it.
 | Public PEM CA | Kafka, Registry, and OAuth CA file options | Validated public profile material; independent session-owned CA files |
 | Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the [credential store](#credential-storage) and private session files |
 | Java Kafka `.properties` | No file import | Private Java client session configuration |
-| librdkafka / kcat properties | No file import yet | Private librdkafka configuration selected through `KCAT_CONFIG` and documented file variables |
+| librdkafka properties | No file import yet | Private librdkafka configuration, passed to kcat through `KCAT_CONFIG` and to other programs through `KAFKA_LIBRDKAFKA_CONFIG_FILE` |
 | Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |
 | Strimzi generated Secret JSON / YAML | No file or stdin import | No Kubernetes resource output |
 | Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |

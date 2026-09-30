@@ -49,7 +49,7 @@ record = {{
     "profile": os.environ.get("KANTRIP_PROFILE"),
     "session_directory": session_directory,
 }}
-registry_config_path = os.environ.get("SCHEMA_REGISTRY_CONFIG_FILE")
+registry_config_path = os.environ.get("SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE")
 registry_config = Path(registry_config_path) if registry_config_path else None
 record["registry_config_exists"] = bool(registry_config and registry_config.is_file())
 record["registry_config_mode"] = (
@@ -214,7 +214,8 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 }:
                     self.assertTrue(record["registry_config_exists"], record)
                     self.assertEqual(0o600, record["registry_config_mode"])
-                    self.assertEqual("http://registry.invalid:8081", record["registry_url"])
+                    # The shim passes the URL as an argument; the shell exports none.
+                    self.assertIsNone(record["registry_url"])
                     self.assertIn(
                         "schema.registry.url=http://registry.invalid:8081\n",
                         record["config_contents"],
