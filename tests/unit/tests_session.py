@@ -2073,6 +2073,27 @@ class TestSessionFiles(unittest.TestCase):
         self.assertEqual("SSL", environment["KAFKA_SECURITY_PROTOCOL"])
         self.assertEqual("https://registry.invalid", environment["SCHEMA_REGISTRY_URL"])
 
+    def test_custom_commands_get_no_decrypted_key_without_a_kaf_or_kcl_config(self) -> None:
+        # Neither kaf nor kcl maps native Apicurio, so no config names a decrypted key.
+        registry = RegistryConnection(
+            "apicurio", "http://registry.invalid/apis/registry/v3", "apicurio.registry.url"
+        )
+
+        files, _ = self.run_session(["orders-app"], registry)
+
+        self.assertEqual(
+            {
+                "kcat.conf",
+                "kafka.properties",
+                "kaskade.ini",
+                "kaskade-registry.ini",
+                "registry.properties",
+                "schema-registry-kafka.properties",
+                *_KAFKA_MATERIAL,
+            },
+            files,
+        )
+
     def test_custom_commands_read_the_provider_registry_file(self) -> None:
         registries = {
             "SCHEMA": RegistryConnection(

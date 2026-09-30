@@ -171,21 +171,32 @@ class _SessionFiles:
 
     Each planned file names the files its contents refer to, so selecting a
     client configuration also writes the keys and CA bundles it points at.
-    Private keys and derived bundles render only when written.
+    Private keys and derived bundles render only when written, and a file
+    planned only as a dependency is written only for a file that requires it.
     """
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self._planned: dict[Path, tuple[Callable[[], str], tuple[Path, ...]]] = {}
+        self._dependencies: set[Path] = set()
         self._written: set[Path] = set()
 
-    def plan(self, name: str, render: Callable[[], str], *requires: Path | None) -> Path:
+    def plan(
+        self,
+        name: str,
+        render: Callable[[], str],
+        *requires: Path | None,
+        dependency: bool = False,
+    ) -> Path:
         path = self.directory / name
         self._planned[path] = (render, tuple(item for item in requires if item is not None))
+        if dependency:
+            self._dependencies.add(path)
         return path
 
     def write_all(self) -> None:
-        self._write(tuple(self._planned))
+        """Write every planned file but dependencies no written file requires."""
+        self._write(tuple(path for path in self._planned if path not in self._dependencies))
 
     def write_referenced(self, values: Iterable[str]) -> None:
         """Write the planned files named exactly by an argument or variable value."""
@@ -381,7 +392,11 @@ def _plan_unencrypted_key(
     password: Secret | None,
     plain_key_path: Path,
 ) -> Path:
-    """Reuse an unencrypted key file, or plan a decrypted copy for Go clients."""
+    """Reuse an unencrypted key file, or plan a decrypted copy for Go clients.
+
+    The copy is only a dependency, so it reaches disk only through a kaf or kcl
+    configuration that names it.
+    """
     if password is None:
         return plain_key_path
 
@@ -391,7 +406,7 @@ def _plan_unencrypted_key(
         except KafkaProfileError as error:
             raise SessionError(str(error)) from error
 
-    return files.plan(name, render)
+    return files.plan(name, render, dependency=True)
 
 
 def _text(contents: str) -> Callable[[], str]:
