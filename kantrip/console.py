@@ -18,6 +18,9 @@ from rich.theme import Theme
 
 from kantrip.registry import display_registry
 
+# The list table shows the UUID's first block, which vault labels also start with.
+SHORT_ID_LENGTH = 8
+
 ARCANA_COLORS = {
     "primary": "#3B82F6",
     "secondary": "#22D3EE",
@@ -100,6 +103,7 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
         header_style="heading",
     )
     table.add_column("Profile", style="secondary", no_wrap=True, min_width=12)
+    table.add_column("ID", style="muted", no_wrap=True)
     table.add_column("Description", style="foreground", min_width=12)
     table.add_column("Kafka", style="foreground", overflow="fold")
     table.add_column("Registry", style="foreground", overflow="fold")
@@ -109,6 +113,7 @@ def create_profile_table(profiles: Mapping[str, Mapping[str, Any]]) -> Table:
         bootstrap_servers = kafka.get("bootstrapServers", ()) if isinstance(kafka, Mapping) else ()
         table.add_row(
             Text(name),
+            Text(str(profile.get("id") or "-")[:SHORT_ID_LENGTH]),
             Text(str(profile.get("description") or "-")),
             Text(",".join(str(server) for server in bootstrap_servers)),
             Text(display_registry(profile)),

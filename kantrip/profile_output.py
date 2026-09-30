@@ -107,9 +107,8 @@ def _profile_observation(
     *,
     revision: int | None,
 ) -> dict[str, Any]:
-    observation: dict[str, Any] = {"name": name}
+    observation: dict[str, Any] = {"name": name, "id": profile["id"]}
     if revision is not None:
-        observation["id"] = profile["id"]
         observation["revision"] = revision
     observation["description"] = profile.get("description")
     observation["labels"] = dict(sorted(_labels(profile).items()))

@@ -63,7 +63,7 @@ class TestProfileOutput(unittest.TestCase):
         self.assertNotIn("properties", serialized)
         self.assertNotIn("classified", serialized)
 
-    def test_list_observation_omits_identity_and_revision(self) -> None:
+    def test_list_observation_includes_identity_without_revision(self) -> None:
         profiles = {
             "local": {
                 "id": "018f8f13-7c21-7cee-8000-000000000010",
@@ -77,8 +77,8 @@ class TestProfileOutput(unittest.TestCase):
 
         observation = list_observation(profiles)[0]
 
-        self.assertEqual("local", observation["name"])
-        self.assertNotIn("id", observation)
+        self.assertEqual(["name", "id"], list(observation)[:2])
+        self.assertEqual("018f8f13-7c21-7cee-8000-000000000010", observation["id"])
         self.assertNotIn("revision", observation)
 
     def test_serializes_json_and_yaml_without_style_sequences(self) -> None:

@@ -102,12 +102,15 @@ class TestCli(unittest.TestCase):
         with self.runner.isolated_filesystem():
             database_path = Path("profiles.db")
             _add_test_profile(database_path, registry=True)
-            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve()), "COLUMNS": "120"}
+            profile_id = load_profiles(database_path).profile("local")["id"]
 
             listed = self.runner.invoke(cli, ["list"], env=environment)
             described = self.runner.invoke(cli, ["describe", "local"], env=environment)
 
         self.assertIn("Profile", listed.output)
+        self.assertIn(profile_id[:8], listed.output)
+        self.assertNotIn(profile_id, listed.output)
         self.assertIn("Description", listed.output)
         self.assertIn("Kafka", listed.output)
         self.assertIn("Registry", listed.output)
@@ -278,6 +281,7 @@ class TestCli(unittest.TestCase):
                 database_path,
                 labels={"environment": "production", "owner": "data"},
             )
+            environment["COLUMNS"] = "120"
 
             result = self.runner.invoke(
                 cli,
@@ -295,7 +299,9 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             environment = {"KANTRIP_DATABASE": str(database_path)}
-            add_profile("local", database_path, labels={"environment": "development"})
+            profile = add_profile(
+                "local", database_path, labels={"environment": "development"}
+            ).profile("local")
 
             as_json = self.runner.invoke(cli, ["list", "-o", "json"], env=environment)
             as_yaml = self.runner.invoke(cli, ["list", "--output", "yaml"], env=environment)
@@ -306,8 +312,12 @@ class TestCli(unittest.TestCase):
             )
 
         self.assertEqual(0, as_json.exit_code, as_json.output)
-        self.assertEqual("local", json.loads(as_json.output)[0]["name"])
+        listed = json.loads(as_json.output)[0]
+        self.assertEqual("local", listed["name"])
+        self.assertEqual(profile["id"], listed["id"])
+        self.assertNotIn("revision", listed)
         self.assertIn("name: local", as_yaml.output)
+        self.assertIn(f"id: {profile['id']}", as_yaml.output)
         self.assertEqual([], json.loads(empty.output))
 
     def test_describe_supports_safe_json_and_yaml_observations(self) -> None:
