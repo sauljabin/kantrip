@@ -4,24 +4,6 @@
 
 Security fixes go to the `main` branch on a best-effort basis.
 
-## What the current checks prove
-
-[Compatibility](COMPATIBILITY.md) lists which authentication methods each
-client can actually use, and which inputs and Registry setups are supported.
-Remaining security work and the checks for the first release are tracked in
-the [v0.1 milestone](https://github.com/sauljabin/kantrip/milestone/1).
-
-`kantrip ping` is not an authorization check. The Kafka check waits for a
-completed broker connection and calls no topic, group, or cluster APIs, so it
-shows that the transport and authentication work, not what the identity is
-allowed to do. The Registry check sends one bounded read query to the selected
-provider: `GET /subjects?limit=1` for Confluent-compatible APIs, or
-`GET /search/versions?limit=1` for native Apicurio v3. For an authenticated
-profile it also requires the same query to be refused without credentials.
-That proves the Registry checks the configured credentials and allows that one
-query. It doesn't prove read or write access to every schema, or everything a
-producer or consumer needs.
-
 ## Reporting a vulnerability
 
 Don't report suspected vulnerabilities in a public issue, discussion, pull

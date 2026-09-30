@@ -25,7 +25,7 @@ matrix is in [Compatibility](COMPATIBILITY.md), and the security analysis in
   - [Runtime sessions and recovery](#runtime-sessions-and-recovery)
 - [Diagnostics](#diagnostics)
 - [Verification](#verification)
-- [Strengths and limitations](#strengths-and-limitations)
+- [Limitations](#limitations)
 
 ## Overview
 
@@ -413,11 +413,9 @@ Afterwards Kantrip restores signal handlers, terminal attributes, and foreground
 ownership; a supervisor SIGKILL or power loss can prevent that and leave the
 session for recovery.
 
-The child starts from the parent environment without `KAFKA_*`,
-`SCHEMA_REGISTRY_*`, `APICURIO_*`, `KANTRIP_SANDBOX_*`, and the four JVM option
-variables, then receives only the snapshot's public values and private paths.
-Shells repeat this after the user's startup files. The caller's environment is
-never changed.
+The child's environment is built as described in
+[Environment precedence](USAGE.md#environment-precedence), and shells rebuild
+it after the user's startup files. The caller's environment is never changed.
 
 ### Runtime sessions and recovery
 
@@ -459,16 +457,12 @@ repair the macOS search list, and diagnose again. It never guesses how to fix
 corrupt, ambiguous, active, recent, or foreign state.
 
 Kafka `ping` polls librdkafka's statistics and error callbacks until an
-addressable broker reaches `UP` after the TLS and SASL exchange, without topic,
-group, or cluster APIs. Plaintext proves reachability, TLS proves server
-identity, and SASL or mTLS prove the configured exchange; none proves
-authorization. Registry ping reads Confluent-compatible `/subjects?limit=1` or
-Apicurio v3 `/search/versions?limit=1`, validates the response shape, and, for
-authenticated profiles, requires the same anonymous request to fail. It proves
-that listing is allowed, not access to a schema or write permission.
-
-Results go to stdout and diagnostics to stderr. Sensitive values are classified
-and redacted before presentation, and color never carries meaning.
+addressable broker reaches `UP`, so it needs no topic, group, or cluster
+permissions. Registry ping reads one fixed list endpoint per provider,
+validates the response shape, and, for authenticated profiles, requires the
+same request to fail without credentials.
+[Kafka and registry connectivity](USAGE.md#kafka-and-registry-connectivity)
+describes what each result proves.
 
 ## Verification
 
@@ -512,38 +506,11 @@ reloads (tests that relock or move the vault store single-line passwords); and
 the keyring directory is rescanned only when its whole-second mtime changes, so
 the test touches it while waiting.
 
-## Strengths and limitations
+## Limitations
 
-Strengths:
+Security limits are listed with each threat in the
+[Threat Model](THREAT_MODEL.md#threats-and-controls). Beyond those:
 
-- Every command names its profile, so there's no hidden global selection that
-  can drift from the cluster you think you're using.
-- Long-lived secrets stay in a dedicated vault and are read only for the
-  command being run.
-- One typed connection model with a renderer per client format keeps Java and
-  librdkafka settings from mixing, and leaves no way to pass arbitrary
-  properties through. Unsupported combinations fail before a weaker
-  authentication could be used.
-- Immutable references and the cleanup journal keep a working profile through
-  partial vault failures. Ordered, checksummed migrations with backups make
-  schema changes auditable.
-- Process groups, liveness locks, and cleanup limit how long temporary secrets
-  stay on disk. The real clients speak the Kafka protocol; Kantrip doesn't
-  implement it.
-
-Limitations:
-
-- Kantrip hands out credentials; it isn't a sandbox. The client, its
-  children, and shell startup code can read what they get, and a compromised
-  user account, kernel, or administrator defeats every local control.
-- Secrets live briefly in memory and private files; deletion is not forensic.
-- SQLite and vault updates are recoverable, not atomic; losing both the journal
-  and the referenced state can leave undiscoverable orphans.
-- The macOS vault depends on deprecated file-keychain APIs and on the
-  `security -i` line limit.
-- The Linux vault protects credentials only while locked, which by default is
-  only after logout. Its windows need an unlocked graphical session, and CI
-  covers GNOME Keyring only.
-- Migrations are forward-only: an older Kantrip cannot open a newer database.
+- Migrations are forward-only: an older Kantrip can't open a newer database.
 - Compatibility depends on the clients' own interfaces and on the versions
   that were tested.

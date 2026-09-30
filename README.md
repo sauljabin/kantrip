@@ -49,13 +49,11 @@ what another terminal connects to.
   description, labels to filter by, and one Schema Registry (Confluent or
   Apicurio) with its own TLS and credentials.
 - **Secrets.** Kantrip asks for passwords and client secrets at a prompt that
-  doesn't echo, and reads private keys from files. All of them go into the
-  vault. `describe` never opens the vault; it only says which secrets are
-  configured.
+  doesn't echo, and reads private keys from files. `describe` only says which
+  secrets are configured and never opens the vault.
 - **Custom CAs.** A private CA bundle is validated and copied into the profile,
   so the original file can move or disappear later.
-- **Client configuration.** Each client gets the options or config file it
-  already understands. Arguments that would change the connection, such as
+- **Client checks.** Arguments that would change the connection, such as
   `-b` or `--bootstrap-server`, are rejected. Kantrip checks each client's
   version before starting it and names the release to install when it's too
   old.
