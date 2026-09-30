@@ -1,17 +1,17 @@
 # Threat Model
 
-This developer security analysis follows the boundaries and decisions in
-[Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
-credential lifecycle, authenticated Kafka execution, and local diagnostics.
-Secure Registry and OAuth connections use typed profiles, independent trust and
-credentials, private generated files, bounded authenticated probes, and
-client-specific capability checks. Schema acceptance alone is not an end-to-end security guarantee. See
+What Kantrip protects, what it trusts, and what it can't defend against. It
+builds on the design in [Architecture](ARCHITECTURE.md) and covers what exists
+today: the profile store, the credential lifecycle, running authenticated Kafka
+and Registry clients, and local diagnostics. A profile that passes schema
+validation isn't automatically safe end to end: whether a client can use a
+given Registry or OAuth setup safely depends on the per-client checks listed in
 [Compatibility](COMPATIBILITY.md).
 
-Kantrip reduces accidental disclosure, profile confusion, unsafe connection
-overrides, and abandoned secret-bearing artifacts. It does not make an
-untrusted command safe and does not defend against a compromised operating
-system or user account.
+Kantrip makes it harder to leak a secret by accident, to run a command against
+the wrong profile, to override a profile's connection unsafely, or to leave
+secret-bearing files behind. It doesn't make an untrusted command safe, and it
+doesn't defend against a compromised operating system or user account.
 
 ## Contents
 
@@ -41,7 +41,7 @@ system or user account.
 
 ## Security objectives
 
-Kantrip aims to preserve these properties:
+Kantrip tries to keep these true:
 
 - Every Kafka connection is associated with an explicitly selected profile.
 - Long-lived secrets are absent from the profile database, argv, logs,
@@ -55,14 +55,16 @@ Kantrip aims to preserve these properties:
 - Profile mutations leave either the previous usable profile or the new usable
   profile, with incomplete cleanup recorded for retry.
 
-These objectives protect credential handling and connection selection. They do
-not guarantee the behavior, integrity, authorization, or data handling of the
-external client or remote service.
+They cover how credentials are handled and which connection is used. They say
+nothing about how the client or the remote service behaves, what it's
+authorized to do, or what it does with your data.
 
 ## Protected assets
 
-- Kafka PLAIN and SCRAM passwords.
-- mTLS private keys and private-key passwords.
+- Kafka PLAIN and SCRAM passwords and OAuth client secrets.
+- Registry Basic passwords, fixed bearer tokens, and OAuth client secrets.
+- Kafka and Registry mTLS private keys and private-key passwords.
+- OAuth access tokens obtained by `ping` or by the client.
 - Profile-to-broker, Registry, certificate, and secret-reference associations.
 - Migration history, checksums, internal sequence, and private pre-migration
   backups.
@@ -100,8 +102,8 @@ Kantrip treats as untrusted until validated:
 - Kafka brokers until configured server TLS verification succeeds; plaintext
   Kafka and HTTP Registry connections do not verify server identity.
 
-Remote authorization policy remains outside Kantrip. A valid identity can still
-be denied access by broker ACLs, Registry permissions, or identity-provider
+Authorization happens on the server, outside Kantrip. A valid identity can
+still be denied by broker ACLs, Registry permissions, or identity-provider
 policy.
 
 ## Trust boundaries and entry points
@@ -111,39 +113,27 @@ policy.
 Each JSON profile document crosses from the private SQLite database through
 schema validation and typed parsing. Secret references become usable only after
 the configured credential backend is approved and each exact reference
-resolves. Kafka authentication references must belong to that profile and the
-expected fully qualified field. PLAIN and SCRAM passwords, mTLS private keys,
-and optional key passwords never enter the profile document; public client
-certificate chains do and are checked against the resolved key before use.
+resolves. Kafka and Registry secret references must belong to that profile and
+the expected fully qualified field. Passwords, fixed tokens, OAuth client
+secrets, mTLS private keys, and optional key passwords never enter the profile
+document; public client certificate chains do and are checked against the
+resolved key before use.
 
 ### Credential vault boundary
 
-On macOS, credentials cross into the dedicated Kantrip keychain,
-`~/Library/Keychains/kantrip.keychain-db`, whose password macOS collects on the
-terminal and Kantrip never handles. The vault unlocks independently of the login
-session and locks after 15 idle minutes and on sleep unless the user changes it.
-Kantrip writes and reads items only through `/usr/bin/security`, with values on
-stdin and never in argv. It reads the vault's lock state before every item
-access without prompting, and never reads a locked vault, which would open a
-macOS password window.
-
-On Linux, credentials cross over the D-Bus session bus into one dedicated
-Secret Service collection, the `kantrip` keyring of GNOME Keyring or the
-`kantrip` wallet of KDE Wallet, in a DH-encrypted Secret Service session. The
-provider collects the vault password in its own desktop window, and Kantrip
-never handles it. The vault unlocks independently of the login session, but
-the desktop, not Kantrip, decides when it locks again: GNOME Keyring and COSMIC
-only at logout, KDE at logout or after its optional idle timeout. Kantrip
-accepts only those two providers, identified by the process that owns
-`org.freedesktop.secrets`, and bounds every password window with a 60-second
-timeout and `Prompt.Dismiss()`. See
-[Credential vault](ARCHITECTURE.md#credential-vault).
+On macOS, credentials cross into the dedicated Kantrip keychain through
+`/usr/bin/security`, with values on stdin and never in argv. On Linux, they
+cross the D-Bus session bus, in a DH-encrypted Secret Service session, into the
+dedicated `kantrip` collection of GNOME Keyring or KDE Wallet. On both, the
+operating system collects the vault password and Kantrip never handles it, and
+the vault doesn't unlock with the login session. When it locks again is up to
+the platform; see [Credential vault](ARCHITECTURE.md#credential-vault).
 
 ### Execution boundary
 
-Kantrip crosses from protected state into a trusted child when it creates the
-child-only environment and private generated files. After that handoff, the
-child can read, copy, print, transmit, or retain the supplied values.
+Secrets leave Kantrip's control when it builds the child's environment and
+writes the private generated files. From then on, the child can read, copy,
+print, send, or keep them.
 
 ### Network boundary
 
@@ -159,29 +149,22 @@ security boundary. It binds host endpoints to loopback and uses one persistent
 Strimzi Kafka cluster with authorization enabled, but it does not claim pod
 network isolation. `sandbox-admin` is the only broker superuser and is used only
 by the in-cluster provisioning Job over TLS/SCRAM-SHA-512. Runtime-generated
-credentials remain below private ignored state and mounted Secrets.
+credentials remain below private ignored state and mounted Secrets. Its layout
+is in [Verification](ARCHITECTURE.md#verification).
 
-Strimzi owns ACLs for its authenticated clients, OAuth, and Registry identities.
-The Job owns both SCRAM-SHA-256 identities, the allowed identity's
-`kantrip-auth-` ACLs, and the `ANONYMOUS` `kantrip-smoke-` topic/group prefix and
-cluster Describe needed by unauthenticated smoke clients. The User Operator
-ignores these Job-owned principals; `ANONYMOUS` is never a superuser.
-SCRAM-SHA-256 provisioning reads passwords from mounted files,
+`ANONYMOUS` is never a superuser and is limited to the `kantrip-smoke-` topic and
+group prefix. SCRAM-SHA-256 provisioning reads passwords from mounted files,
 writes a mode-restricted temporary config, passes its path rather than the
 password to Kafka tooling, and deletes it on exit. A privileged cluster
 administrator, compromised node, or process inside that short-lived container
 can still read the mounted or temporary value.
 
-The E2E runner accepts only an explicitly provisioned sandbox and never owns its
-lifecycle. It requires the Kantrip vault of the platform, performs an exact
-temporary set/get/delete check, and serializes changes to shared OAuth
-identities. CI creates a fresh DBus/GNOME Keyring session and removes only its
-own sandbox after sanitized diagnostics are captured. Local E2E intentionally
-leaves the caller's sandbox running. The separate macOS vault job creates a
-disposable vault with a random, masked password on the command line. The Ubuntu
-jobs pre-create an empty-password `kantrip` keyring, which GNOME Keyring stores
-in plain text and unlocks without a window. Both are acceptable only for those
-throwaway runner vaults, which hold only synthetic sandbox credentials.
+The E2E runner never creates or removes the caller's sandbox; CI removes only
+the sandbox it created, after capturing sanitized diagnostics. CI vault jobs use
+weak vaults on purpose: macOS gets a random password passed on the command line
+(masked in logs), and Ubuntu an empty-password keyring that GNOME Keyring stores
+in plain text. That's acceptable only because those throwaway runner vaults
+hold nothing but synthetic sandbox credentials.
 
 ### Recovery boundary
 
@@ -505,57 +488,51 @@ filesystem, or a hostile same-user process can prevent operation.
 
 ## Security strengths
 
-- Explicit profile selection materially reduces accidental cross-environment
-  operations.
-- Long-lived secrets are isolated from portable profile metadata.
-- Typed normalization and allowlisted rendering reduce configuration injection
-  and prevent topic-specific behavior from leaking between applications.
-- Fail-closed capability checks favor confidentiality and integrity over broad
-  client compatibility.
-- Native Kafka clients avoid a custom Kafka protocol stack; shared SASL/TLS
-  renderers and per-client adapter descriptors keep adapter decisions explicit.
-- Recoverable cross-store updates and lock-based crash cleanup address failure
-  modes commonly omitted from local credential wrappers.
-- Ordered migration history and fail-closed checksum validation make schema
-  evolution explicit without coupling it to product releases.
-- Kafka and Registry security are modeled independently, reducing credential
-  reuse and accidental identity inheritance.
+- Naming the profile on every command makes it much harder to run something
+  against the wrong environment by accident.
+- Long-lived secrets are kept apart from the profile metadata.
+- Profiles hold typed fields and each client gets only allowlisted settings,
+  which limits configuration injection and keeps topic-specific settings from
+  leaking between applications.
+- When Kantrip can't confirm a client supports a setting safely, it refuses to
+  run, choosing confidentiality and integrity over compatibility.
+- Kantrip uses the real Kafka clients rather than its own protocol stack. Shared
+  SASL/TLS renderers and one descriptor per client keep each client's handling
+  in one place.
+- Updates that span the database and the vault can be recovered, and crashed
+  sessions are cleaned up using their locks. Local credential wrappers often
+  skip both.
+- The migration history is ordered and checksummed and fails closed, so schema
+  changes are explicit and independent of product releases.
+- Kafka and Registry security are separate, so credentials aren't reused and one
+  identity isn't silently inherited by the other.
 
 ## Residual weaknesses
 
-- The user-selected child is inside the trust boundary and receives usable
-  credentials. Kantrip cannot constrain what it does with them.
-- Shell startup files execute with the child environment before Kantrip can make
-  the interactive session useful; a hostile startup file can capture secrets.
-- The same local user can inspect process memory, replace executables, modify
-  profile metadata, or interfere with runtime files subject to OS controls.
-- Temporary private files reduce accidental exposure but do not eliminate
-  on-disk secret material or provide forensic deletion.
-- Vault operations and SQLite updates are not one atomic transaction;
-  reconciliation narrows but cannot eliminate every orphan scenario.
+Each threat above lists its own residual risk. A few don't belong to a single
+threat:
+
 - A macOS vault that times out between Kantrip's state check and an item read
   opens a macOS password window; the interval is milliseconds.
 - Security support is only as complete as the tested client/version matrix. A
   client upgrade can require a new mapping before Kantrip can safely launch it.
-- Successful connectivity does not establish authorization beyond the exact
-  probe performed.
 - Profile metadata such as broker names and Registry URLs remains in the local
   SQLite database. Kantrip treats it as sensitive-looking operational data,
   not as a secret-store asset.
 
 ## Out of scope
 
-- Database downgrade support and executing user-provided migration code.
+Features Kantrip doesn't have are listed in
+[Architecture](ARCHITECTURE.md#out-of-scope). Beyond those, this model doesn't
+cover:
+
+- Executing user-provided migration code.
 - Compromise of the user account, kernel, administrator, credential-store
   implementation, Python runtime, dependency, or selected client executable.
 - Sandboxing, malware prevention, record-level confidentiality, broker ACL
   administration, Registry authorization policy, and identity-provider policy.
-- Detached or managed background sessions and processes that deliberately
-  escape the Kantrip-owned POSIX boundary.
-- Windows support, Amazon MSK IAM authentication, and the Strimzi OAuth module.
-- Refresh-token or fixed-access-token Kafka OAuth profiles.
-- HTTP proxy profiles, automatic Kubernetes discovery, automatic certificate
-  conversion, and arbitrary secret-provider automation.
+- Amazon MSK IAM authentication.
 - Guarantees of physical or forensic erasure.
 
-Report suspected failures of the stated controls according to `SECURITY.md`.
+If you think one of these controls fails, report it as described in
+[SECURITY.md](SECURITY.md).
