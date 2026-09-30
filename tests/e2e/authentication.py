@@ -219,6 +219,7 @@ def main() -> None:
                 _add_profile(profile, case, credentials, environment)
                 profiles.append(profile)
                 _exercise_profile(profile, case, environment)
+            _exercise_strimzi_imports(credentials, environment, profiles)
             for case in NO_ACL_CASES:
                 profile = f"auth-{case.name}"
                 _add_profile(profile, case, credentials, environment)
@@ -424,6 +425,42 @@ def _add_profile(
         )
     )
     _run(arguments, environment, accepted=(0, 3))
+
+
+def _exercise_strimzi_imports(
+    credentials: Mapping[str, str],
+    environment: Mapping[str, str],
+    profiles: list[str],
+) -> None:
+    """Import the user operator's SCRAM Secret from a file and its TLS Secret from stdin."""
+    fields = ("KANTRIP_SANDBOX_STRIMZI_SCRAM_SECRET", "KANTRIP_SANDBOX_STRIMZI_MTLS_SECRET")
+    if any(field not in credentials for field in fields):
+        raise AuthSmokeFailure("Strimzi Secret exports are missing; run `python -m sandbox up`")
+    scram_secret, mtls_secret = (Path(credentials[field]) for field in fields)
+    _require_files((scram_secret, mtls_secret))
+    for profile, port, source, input_text in (
+        ("auth-strimzi-scram", 9094, str(scram_secret), None),
+        ("auth-strimzi-mtls", 9095, "-", mtls_secret.read_text(encoding="utf-8")),
+    ):
+        output = _run(
+            (
+                *_cli(),
+                "add",
+                profile,
+                "--from-strimzi",
+                source,
+                "--bootstrap-server",
+                f"localhost:{port}",
+                "--ca-file",
+                str(CA_FILE),
+            ),
+            environment,
+            input_text=input_text,
+        )
+        profiles.append(profile)
+        if credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"] in output:
+            raise AuthSmokeFailure(f"{profile} import printed a credential")
+        _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
 
 
 def _exercise_profile(

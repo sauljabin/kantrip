@@ -15,6 +15,11 @@ from rich.padding import Padding
 from rich.text import Text
 
 from kantrip import APP_VERSION
+from kantrip.cli_imports import (
+    imported_connection,
+    imported_kafka_authentication,
+    merge_imported_options,
+)
 from kantrip.cli_inputs import (
     AddOptions,
     EditOptions,
@@ -38,6 +43,8 @@ from kantrip.console import (
 from kantrip.doctor import DoctorReport, run_doctor
 from kantrip.maintenance import run_repair
 from kantrip.ping import PingError, PingResult, ping_observation, ping_profile
+from kantrip.profile_documents import DEFAULT_BOOTSTRAP_SERVER
+from kantrip.profile_imports import ProfileImportError
 from kantrip.profile_output import (
     OutputFormat,
     describe_observation,
@@ -189,14 +196,22 @@ def _print_structured_observation(
 def add_configured_profile(profile_name: str, **values: Any) -> None:
     """Add a profile."""
     options = AddOptions(**values)
+    try:
+        imported = imported_connection(options)
+    except ProfileImportError as error:
+        raise _InvalidProfileClickException(str(error)) from error
+    if imported is not None:
+        options = merge_imported_options(options, imported)
     violation = add_rule_violation(options)
     if violation is not None:
         raise _InvalidProfileClickException(violation)
     try:
-        auth, registry_auth = add_authentication(options)
+        auth, registry_auth = add_authentication(
+            options, imported_kafka_authentication(imported) if imported else None
+        )
         profiles = add_profile(
             profile_name,
-            bootstrap_servers=options.bootstrap_servers,
+            bootstrap_servers=options.bootstrap_servers or (DEFAULT_BOOTSTRAP_SERVER,),
             description=options.description,
             labels=options.labels,
             transport=options.resolved_transport,

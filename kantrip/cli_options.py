@@ -19,6 +19,7 @@ import cloup
 from kantrip.cli_inputs import parse_secret_fields, parse_unset_fields
 from kantrip.kafka import KafkaProfileError, read_ca_bundle
 from kantrip.oauth import OAuthProfileError, validate_oauth_endpoint
+from kantrip.profile_documents import DEFAULT_BOOTSTRAP_SERVER
 
 CommandFunction = TypeVar("CommandFunction", bound=Callable[..., Any])
 OptionDecorator = Callable[[CommandFunction], CommandFunction]
@@ -203,11 +204,22 @@ def _scope_option(flag: str, help: str) -> OptionDecorator[Any]:
 
 add_profile_options = _options(
     cloup.option_group(
+        "Import",
+        cloup.option(
+            "--from-strimzi",
+            metavar="FILE",
+            help=(
+                "Import Kafka authentication from a Strimzi KafkaUser Secret in JSON or "
+                "YAML; - reads stdin. Requires --bootstrap-server."
+            ),
+        ),
+    ),
+    cloup.option_group(
         "Kafka connection",
+        # Defaults stay out of Click so an import can fill the value first.
         _bootstrap_servers(
-            "Kafka broker; repeat or separate with commas for several.",
-            default=("localhost:9092",),
-            show_default=True,
+            "Kafka broker; repeat or separate with commas for several. "
+            f"Defaults to {DEFAULT_BOOTSTRAP_SERVER}."
         ),
         _choice(
             "--transport",
@@ -222,10 +234,8 @@ add_profile_options = _options(
         _choice(
             "--auth",
             _KAFKA_AUTH_TYPES,
-            "Kafka authentication mechanism.",
+            "Kafka authentication mechanism; defaults to none.",
             "auth_type",
-            default="none",
-            show_default=True,
         ),
         _name("--username", "Kafka SASL username."),
         _pem_file("--client-certificate-file", "Copy a public PEM Kafka client certificate chain."),

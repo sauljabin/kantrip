@@ -112,14 +112,19 @@ _EDIT_CONFLICTS = (
 
 @dataclass(frozen=True)
 class AddOptions:
-    """Every `add` option, named exactly as Click passes it."""
+    """Every `add` option, named exactly as Click passes it.
 
-    bootstrap_servers: tuple[str, ...]
+    Options with a default stay ``None`` when omitted, so an import can fill
+    them first; `kafka_auth_type` and `add` apply the defaults afterwards.
+    """
+
+    from_strimzi: str | None
+    bootstrap_servers: tuple[str, ...] | None
     description: str | None
     labels: dict[str, str]
     transport: str | None
     ca_file: str | None
-    auth_type: str
+    auth_type: str | None
     username: str | None
     client_certificate_file: Path | None
     client_key_file: Path | None
@@ -142,13 +147,18 @@ class AddOptions:
     registry_oauth_identity_pool_id: str | None
 
     @property
+    def kafka_auth_type(self) -> str:
+        """Return `--auth`, defaulting to no authentication."""
+        return self.auth_type or "none"
+
+    @property
     def resolved_transport(self) -> str:
         """Return `--transport`, or `tls` when a Kafka security option implies it."""
         if self.transport is not None:
             return self.transport
         secured = (
             self.ca_file is not None
-            or self.auth_type != "none"
+            or self.kafka_auth_type != "none"
             or self.client_certificate_file is not None
             or self.client_key_file is not None
         )
@@ -255,7 +265,7 @@ def add_rule_violation(options: AddOptions) -> str | None:
     """Check cross-field connection rules on `add` values before any secret prompt."""
     return connection_rule_violation(
         transport=options.resolved_transport,
-        kafka_auth=options.auth_type,
+        kafka_auth=options.kafka_auth_type,
         registry_provider=options.registry_provider or "confluent",
         registry_url=options.registry_url,
         registry_auth=options.registry_auth,
@@ -289,19 +299,25 @@ def edit_rule_violation(options: EditOptions, current: Mapping[str, Any]) -> str
     )
 
 
-def add_authentication(options: AddOptions) -> tuple[KafkaAuthInput, RegistryAuthInput | None]:
-    """Build the Kafka and Registry authentication inputs for `add`."""
-    auth = kafka_auth_input(
-        options.auth_type,
+def add_authentication(
+    options: AddOptions, imported: KafkaAuthInput | None = None
+) -> tuple[KafkaAuthInput, RegistryAuthInput | None]:
+    """Build the Kafka and Registry authentication inputs for `add`.
+
+    Imported Kafka authentication already carries its secrets, so nothing is prompted for it.
+    """
+    auth_type = options.kafka_auth_type
+    auth = imported or kafka_auth_input(
+        auth_type,
         options.username,
         options.client_certificate_file,
         options.client_key_file,
-        password_required=options.auth_type in PASSWORD_AUTH_TYPES,
+        password_required=auth_type in PASSWORD_AUTH_TYPES,
         oauth_token_url=options.oauth_token_url,
         oauth_client_id=options.oauth_client_id,
-        oauth_scopes=options.oauth_scope if options.auth_type == "oauth" else None,
+        oauth_scopes=options.oauth_scope if auth_type == "oauth" else None,
         oauth_ca_certificates=options.oauth_ca_file,
-        oauth_secret_required=options.auth_type == "oauth",
+        oauth_secret_required=auth_type == "oauth",
     )
     certificate, key, key_password = _registry_identity(
         options.registry_client_certificate_file, options.registry_client_key_file, None

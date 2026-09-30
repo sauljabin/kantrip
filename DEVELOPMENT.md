@@ -79,8 +79,9 @@ Kafka authorizes every client: plaintext clients may use only topics and
 groups starting with `kantrip-smoke-`, the PLAIN, SCRAM, and mTLS users
 `kantrip-auth-`, and the OAuth client `kantrip-oauth-`.
 
-Credentials, the CA, and client properties are in `sandbox/.state` (private and
-ignored). Open `sandbox/.state/credentials.env` in an editor when you need a
+Credentials, the CA, client properties, and the `kantrip-scram` and
+`kantrip-mtls` Strimzi Secrets (inputs for `add --from-strimzi`) are in
+`sandbox/.state` (private and ignored). Open `sandbox/.state/credentials.env` in an editor when you need a
 value; don't print it. To rotate the credentials, run `sandbox down` and delete
 that directory. See [Verification](ARCHITECTURE.md#verification) for how the
 laboratory is built.
