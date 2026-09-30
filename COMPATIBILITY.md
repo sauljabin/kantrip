@@ -151,12 +151,12 @@ explains creating, unlocking, and deleting it.
 | JSON / YAML | No profile import or round-trip export | `list` and `describe` output, without secrets |
 | Public PEM CA | Kafka, Registry, and OAuth CA file options | Validated public profile material; independent session-owned CA files |
 | Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the [credential store](#credential-storage) and private session files |
-| Java Kafka `.properties` | No file import | Private Java client session configuration |
-| librdkafka properties | No file import yet | Private librdkafka configuration, passed to kcat through `KCAT_CONFIG` and to other programs through `KAFKA_LIBRDKAFKA_CONFIG_FILE` |
-| Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |
+| Java Kafka `.properties` | The Kafka connection through `add --from-properties FILE`, or `-` for stdin: brokers, PEM trust, PLAIN, SCRAM, PEM mTLS, and OAuth client credentials; see [First profile](USAGE.md#first-profile) | Private Java client session configuration |
+| librdkafka properties | The same Kafka connection through `add --from-properties FILE` or `-`, told apart from Java by its keys | Private librdkafka configuration, passed to kcat through `KCAT_CONFIG` and to other programs through `KAFKA_LIBRDKAFKA_CONFIG_FILE` |
+| Confluent-generated client properties | The Java output of `confluent kafka client-config create java` through `add --from-properties`, once placeholders are filled and Schema Registry lines removed | Not a retained vendor config/cache |
 | Strimzi generated Secret JSON / YAML | One SCRAM-SHA-512 or TLS `KafkaUser` Secret through `add --from-strimzi FILE`, or `-` for stdin; see [First profile](USAGE.md#first-profile) | No Kubernetes resource output |
 | Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |
-| Registry properties | No file import | Private HTTP endpoint configuration only |
+| Registry properties | No file import; Registry keys in `--from-properties` input fail | Private HTTP endpoint configuration only |
 | kcl TOML | No file import | Private kcl session configuration selected through `KCL_CONFIG_PATH` |
 | kafkactl YAML | Unsupported | No generated adapter config |
 | JKS / PKCS12 | Unsupported for Kantrip input | No automatic conversion |

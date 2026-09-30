@@ -92,7 +92,7 @@ for clients with a versioned, tested contract.
 | --- | --- | --- |
 | CLI | `cli.py`, `cli_options.py`, `cli_inputs.py`, `cli_imports.py`, `console.py`, `profile_output.py`, `redaction.py` | Commands and presentation; `add`/`edit` options declared once per field; typed inputs and no-echo secret prompts; merging an import with explicit options; output without secrets |
 | Profiles | `profiles.py`, `profile_storage.py`, `profile_auth.py`, `profile_documents.py` | Mutation orchestration and snapshot resolution; SQLite paths, locks, and loading; pure authentication and document planning |
-| Imports | `profile_imports.py`, `strimzi.py` | Bounded import sources, the typed imported connection, and the Strimzi `KafkaUser` Secret parser |
+| Imports | `profile_imports.py`, `strimzi.py`, `properties_syntax.py`, `client_properties.py` | Bounded import sources, the typed imported connection, the Strimzi `KafkaUser` Secret parser, Java properties, librdkafka properties, and JAAS readers, and the closed Kafka mapping from client properties |
 | Consistency | `credential_mutations.py`, `mutation_outcomes.py`, `reconciliation.py`, `migrations.py`, `maintenance.py` | Cross-store staging and retirement; commit classification; the cleanup journal; the migration chain; `doctor --repair` |
 | Credentials | `secret_store.py`, `macos_vault.py`, `linux_vault.py`, `secret_value.py` | The `SecretStore` protocol and its two vaults; `Secret`, which never renders itself |
 | Connections | `kafka.py`, `registry.py`, `oauth.py` | Validated connection models and canonical properties |
@@ -188,13 +188,33 @@ supports it. Prompts and file reads happen before the lock. Backups hold
 references, not credentials, so restoring SQLite alone cannot restore retired
 vault values.
 
-An import is not a second mutation path. `add --from-strimzi` parses its
-document into an `ImportedConnection` whose secrets are `Secret` values, merges
-it with the explicit options, and hands the result to the same `add` path as
-typed input. Options fill fields the import leaves absent and must equal the
-fields it sets; `add` applies its own defaults (`localhost:9092`, no
-authentication) only after that merge, so a default never contradicts an
-import. The raw document never reaches SQLite, the vault, or a session file.
+An import is not a second mutation path. `add --from-strimzi` and
+`add --from-properties` parse their document into an `ImportedConnection` whose
+secrets are `Secret` values, merge it with the explicit options, and hand the
+result to the same `add` path as typed input. Options fill fields the import
+leaves absent and must equal the fields it sets; `add` applies its own defaults
+(`localhost:9092`, no authentication) only after that merge, so a default never
+contradicts an import. The raw document never reaches SQLite, the vault, or a
+session file.
+
+Client properties have no dialect marker, so `client_properties.py` reads the
+text as Java properties and as librdkafka `key=value` lines, then decides by
+the keys each reader found. Dialect-specific keys pick one reader; keys from
+both fail, since the file would mean different things to different clients.
+With only shared keys, both readings must agree, which rules out Java escapes,
+continuations, and `:` or space separators that librdkafka would take
+literally. The Java reader follows `Properties.load` and requires ASCII,
+because Kafka's Java tools load properties as ISO-8859-1. `sasl.jaas.config`
+goes through a tokenizer that follows Kafka's `StreamTokenizer` settings, so
+quoting, escapes, and comments mean what they mean to the client; nothing
+extracts credentials with patterns.
+
+The mapping is closed. It takes each recognized key once and fails on any
+connection key the chosen mechanism leaves unused, so a file never imports
+while carrying settings Kantrip would silently drop. Security namespaces
+(`sasl.`, `ssl.`, `security.`, `https.`) are closed too: an unknown key there
+may change what the connection trusts, so it fails. Any other key is an
+application setting and is ignored and listed by name.
 
 ## Credential vault
 

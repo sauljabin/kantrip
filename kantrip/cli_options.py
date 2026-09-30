@@ -17,7 +17,7 @@ import click
 import cloup
 
 from kantrip.cli_inputs import parse_secret_fields, parse_unset_fields
-from kantrip.kafka import KafkaProfileError, read_ca_bundle
+from kantrip.kafka import BROKER_ADDRESS, KafkaProfileError, read_ca_bundle
 from kantrip.oauth import OAuthProfileError, validate_oauth_endpoint
 from kantrip.profile_documents import DEFAULT_BOOTSTRAP_SERVER
 
@@ -29,7 +29,6 @@ _KAFKA_AUTH_TYPES = ("none", "plain", "scram-sha-256", "scram-sha-512", "mtls", 
 _REGISTRY_PROVIDERS = ("confluent", "apicurio")
 _REGISTRY_AUTH_TYPES = ("none", "basic", "token", "mtls", "oauth")
 _PEM_FILE = cloup.Path(exists=True, dir_okay=False, readable=True, path_type=Path)
-_BROKER = re.compile(r"(?:\[[0-9A-Fa-f:]+\]|[^\s,:\[\]]+):([0-9]{1,5})")
 _LABEL_KEY = re.compile(r"[a-zA-Z0-9._-]+")
 _MAX_NAME_LENGTH = 1024
 
@@ -69,7 +68,7 @@ def _split_bootstrap_servers(
         for server in (entry.strip() for entry in value.split(",")):
             if not server:
                 raise click.BadParameter("each broker must be a non-empty host:port address")
-            match = _BROKER.fullmatch(server)
+            match = BROKER_ADDRESS.fullmatch(server)
             if match is None:
                 raise click.BadParameter(
                     f"broker '{server}' must be host:port, such as kafka.example.com:9092"
@@ -206,6 +205,14 @@ add_profile_options = _options(
     cloup.option_group(
         "Import",
         cloup.option(
+            "--from-properties",
+            metavar="FILE",
+            help=(
+                "Import the Kafka connection from Java or librdkafka client properties; "
+                "- reads stdin."
+            ),
+        ),
+        cloup.option(
             "--from-strimzi",
             metavar="FILE",
             help=(
@@ -213,6 +220,7 @@ add_profile_options = _options(
                 "YAML; - reads stdin. Requires --bootstrap-server."
             ),
         ),
+        constraint=cloup.constraints.mutually_exclusive,
     ),
     cloup.option_group(
         "Kafka connection",

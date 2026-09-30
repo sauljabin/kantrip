@@ -256,6 +256,11 @@ class TestAddFromStrimzi(unittest.TestCase):
         self.assertNotIn(SCRAM_PASSWORD, self.database.read_bytes().decode("latin-1"))
         self.assertNotIn(SCRAM_PASSWORD, result.output)
         self.assertEqual(digest, hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual(
+            f"{path} still holds the imported credentials; Kantrip left it unchanged, "
+            "so delete it if nothing else needs it\n",
+            result.stderr,
+        )
 
     def test_tls_stdin_creates_an_mtls_profile_with_listener_trust_from_ca_file(self) -> None:
         pki = synthetic_pki()
@@ -278,6 +283,7 @@ class TestAddFromStrimzi(unittest.TestCase):
         self.assertEqual("mtls", kafka["auth"]["type"])
         self.assertEqual(pki.ca.strip(), kafka["tls"]["caCertificates"].strip())
         self.assertEqual({kafka["auth"]["privateKeyRef"]}, set(self.store.values))
+        self.assertEqual("", result.stderr)
 
     def test_matching_explicit_options_are_accepted(self) -> None:
         path = self.write(_scram_secret())

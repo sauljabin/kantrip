@@ -16,6 +16,7 @@ from rich.text import Text
 
 from kantrip import APP_VERSION
 from kantrip.cli_imports import (
+    import_notices,
     imported_connection,
     imported_kafka_authentication,
     merge_imported_options,
@@ -86,9 +87,9 @@ def _profile_click_exception(error: ProfileStoreError) -> _ProfileClickException
     return exception_type(str(error))
 
 
-def _echo_committed_mutation(message: str) -> None:
+def _echo_committed_mutation(message: str, *, err: bool = False) -> None:
     try:
-        click.echo(message)
+        click.echo(message, err=err)
     except OSError as error:
         raise _CommittedProfileClickException(
             "profile change committed but its result could not be written; "
@@ -225,6 +226,8 @@ def add_configured_profile(profile_name: str, **values: Any) -> None:
         raise _profile_click_exception(error) from error
     summary = _connection_summary(profiles.profiles.get(profile_name))
     _echo_committed_mutation(f"Added profile '{profile_name}': {summary}")
+    for notice in import_notices(options, imported) if imported else ():
+        _echo_committed_mutation(notice, err=True)
 
 
 @cli.command("edit")
