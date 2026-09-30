@@ -164,15 +164,15 @@ class TestSymlinkedClients(unittest.TestCase):
             _write_echo_client(root_path / "venv" / "bin" / "kaskade")
             (root_path / "bin").mkdir()
             (root_path / "bin" / "kaskade").symlink_to("../venv/bin/kaskade")
-            (root_path / "bin" / "ksk").symlink_to(root_path / "bin" / "kaskade")
+            (root_path / "bin" / "kas").symlink_to(root_path / "bin" / "kaskade")
             search_path = str(root_path / "bin")
 
             self.assertEqual(
-                str(root_path / "bin" / "kaskade"), resolve_client_command("ksk", search_path)
+                str(root_path / "bin" / "kaskade"), resolve_client_command("kas", search_path)
             )
             self.assertEqual(
                 str(root_path / "bin" / "kaskade"),
-                resolve_client_command(str(root_path / "bin" / "ksk"), search_path),
+                resolve_client_command(str(root_path / "bin" / "kas"), search_path),
             )
             self.assertEqual("kaskade", resolve_client_command("kaskade", search_path))
 
@@ -194,7 +194,7 @@ class TestSymlinkedClients(unittest.TestCase):
             _write_echo_client(root_path / "clients" / "kaskade")
             _write_echo_client(root_path / "first" / "shadowed")
             (root_path / "later").mkdir()
-            (root_path / "later" / "ksk").symlink_to("../clients/kaskade")
+            (root_path / "later" / "kas").symlink_to("../clients/kaskade")
             (root_path / "later" / "shadowed").symlink_to("../clients/kaskade")
             (root_path / "later" / "unrelated").symlink_to("../first/shadowed")
             search_path = os.pathsep.join(
@@ -211,7 +211,7 @@ class TestSymlinkedClients(unittest.TestCase):
                 environment={"PATH": search_path},
             )
             result = subprocess.run(
-                [shim_directory / "ksk", "admin"],
+                [shim_directory / "kas", "admin"],
                 env={},
                 capture_output=True,
                 text=True,
@@ -219,7 +219,7 @@ class TestSymlinkedClients(unittest.TestCase):
             )
 
             self.assertEqual(
-                ["kaskade", "ksk"], sorted(path.name for path in shim_directory.iterdir())
+                ["kas", "kaskade"], sorted(path.name for path in shim_directory.iterdir())
             )
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertEqual(
@@ -1339,10 +1339,10 @@ class TestProfileSession(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             _write_echo_client(root_path / "kaskade")
-            (root_path / "ksk").symlink_to("kaskade")
+            (root_path / "kas").symlink_to("kaskade")
             with patch("kantrip.session._run_child", side_effect=inspect_run):
                 run_profile_session(
-                    "local", self.profile, ["ksk", "admin"], environment={"PATH": root}
+                    "local", self.profile, ["kas", "admin"], environment={"PATH": root}
                 )
 
         self.assertEqual([str(root_path / "kaskade"), "admin", "--config-file"], observed[:3])
@@ -2019,7 +2019,7 @@ class TestSessionFiles(unittest.TestCase):
 
     def test_a_linked_client_writes_only_the_files_of_the_client_it_runs(self) -> None:
         with patch("kantrip.session.resolve_client_command", return_value="/opt/bin/kaskade"):
-            files, environment = self.run_session(["ksk", "admin"], self.registry)
+            files, environment = self.run_session(["kas", "admin"], self.registry)
 
         self.assertEqual({"kaskade.ini", *_KAFKA_MATERIAL}, files)
         self.assertFalse({name for name in environment if name.endswith("_CONFIG_FILE")})

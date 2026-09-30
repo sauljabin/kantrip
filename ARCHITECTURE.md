@@ -385,7 +385,7 @@ adapter, and never make persistent changes.
 
 - **Linked names.** A client is identified by its executable base name. A
   command under another name that is a symlink to a client, such as
-  `ksk -> kaskade`, is adapted as the first link target with a supported name,
+  `kas -> kaskade`, is adapted as the first link target with a supported name,
   for direct commands and shims alike; a session also gets a shim for each such
   link that is the command its `PATH` would run. Kantrip follows only symlinks:
   aliases and functions exist only inside the shell, and a wrapper script can do
