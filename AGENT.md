@@ -361,7 +361,9 @@ uv run --locked python -m scripts.verify_release dist
   fonts, analytics, or cookies. Its only third-party request is the GitHub API
   release lookup in `site/site.js` (CSP `connect-src https://api.github.com`),
   with a Releases link as the fallback. Links and assets stay relative for the
-  `/kantrip/` path; JavaScript and CSS stay under 30 KB.
+  `/kantrip/` path; JavaScript and CSS stay under 30 KB. The site's
+  `*-badge.svg` files are byte-identical copies of the README badges in
+  `images/` (a unit test enforces it); recopy them when a badge changes.
 - `site/demo.json` holds the demo, and `site/index.html` embeds the same
   transcript statically between the `demo-transcript` markers (`render`
   regenerates it). `scripts.website check` validates transcript, links, assets,

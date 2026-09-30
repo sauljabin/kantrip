@@ -15,6 +15,7 @@ from click.testing import CliRunner
 
 from kantrip.cli import cli
 from scripts.website import (
+    SITE_ROOT,
     CaptureError,
     CaptureTarget,
     DemoCapture,
@@ -221,6 +222,14 @@ class TestPages(unittest.TestCase):
                 head + '<meta property="og:image:height" content="640">', encoding="utf-8"
             )
             self.assertEqual(check_social_preview(site), [])
+
+    def test_site_badges_are_copies_of_the_readme_badges(self) -> None:
+        badges = sorted(SITE_ROOT.glob("*-badge.svg"))
+        self.assertTrue(badges)
+        for badge in badges:
+            with self.subTest(badge=badge.name):
+                original = SITE_ROOT.parent / "images" / badge.name
+                self.assertEqual(badge.read_bytes(), original.read_bytes())
 
     def test_repository_site_passes(self) -> None:
         self.assertEqual(check_site(cli_help), [])

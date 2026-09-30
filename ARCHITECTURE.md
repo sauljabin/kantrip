@@ -311,11 +311,12 @@ stays in the private session directory, written with mode `0600`.
   and CA files it points at. A one-off supported client gets the files its
   prepared arguments and environment name, plus those dependencies, and no
   `*_CONFIG_FILE` variables; `kaskade --version` gets none. Custom commands and
-  interactive shells get every file and variable, because they can't be
-  inspected. Keys and derived bundles render only when written, so an encrypted
-  key is decrypted only for kaf or kcl. On macOS, `$TMPDIR` is on disk, so a
-  one-off command leaves one or two secret-bearing files there instead of every
-  client's.
+  interactive shells get every configuration and variable, because they can't
+  be inspected. Keys and derived bundles render only when written, and a
+  decrypted key copy is only a dependency of the kaf and kcl configurations, so
+  an encrypted key reaches disk decrypted only when one of them is written. On
+  macOS, `$TMPDIR` is on disk, so a one-off command leaves one or two
+  secret-bearing files there instead of every client's.
 
 - **Custom CAs.** A selected CA bundle is validated and copied into the profile
   as public material, then written into each session. librdkafka uses native PEM
