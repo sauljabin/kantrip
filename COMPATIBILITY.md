@@ -125,7 +125,7 @@ settings passed on the command line.
 | Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. kaf maps Basic with system trust only. kcl maps Basic and mTLS with system or custom CA trust, but not OAuth. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
 | Native Apicurio Basic or mTLS | Private Kaskade INI and provider-aware ping. Kaskade supports private CA trust and unencrypted PEM mTLS keys; encrypted PEM keys are rejected. |
 | Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. Kaskade keeps Registry and token HTTP/TLS contexts separate so Registry client identity does not reach the IdP. |
-| Confluent fixed bearer | Profile and probe support; kcl sends it as its bearer token; clients without a safe fixed-token mapping reject it |
+| Confluent fixed bearer | Profile and ping support. Confluent's Avro, JSON Schema, and Protobuf consoles receive it as `bearer.auth.credentials.source=STATIC_TOKEN` with `bearer.auth.token`, and kcl as its bearer token; `SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE` carries the same `bearer.auth.*` keys. Kaskade Registry decoding, kaf, and kcat Avro reject it before launch. |
 | Kafka credential inheritance / URL credentials | Rejected |
 
 [Kafka and registry connectivity](USAGE.md#kafka-and-registry-connectivity)
