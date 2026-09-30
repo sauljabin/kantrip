@@ -415,7 +415,9 @@ session for recovery.
 
 The child's environment is built as described in
 [Environment precedence](USAGE.md#environment-precedence), and shells rebuild
-it after the user's startup files. The caller's environment is never changed.
+it after the user's startup files. Kantrip also removes `KANTRIP_SANDBOX_*`, so
+sandbox credentials a contributor exported never reach a client. The caller's
+environment is never changed.
 
 ### Runtime sessions and recovery
 

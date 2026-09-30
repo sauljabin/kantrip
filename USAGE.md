@@ -758,7 +758,13 @@ profile's provider. Kantrip rejects `-b`/`--bootstrap-servers`, `--kafka`,
 Through Kantrip, Kaskade decodes Avro, JSON Schema, and Protobuf with both
 Confluent Schema Registry and native Apicurio Registry. Native Apicurio uses its
 default `contentId` framing, because Kantrip only configures the Registry URL.
-Kantrip sets no Kaskade-specific environment variable.
+
+When `kaskade consumer` decodes through a Registry that uses OAuth, Kantrip
+removes `SSL_CERT_FILE` and `SSL_CERT_DIR` for that process. For a Confluent
+Registry whose token endpoint has its own CA, it then sets `SSL_CERT_FILE` to a
+private bundle of the system CAs plus that CA, because the Confluent Python
+token client ignores the Registry's CA setting. Every HTTPS client inside that
+Kaskade process sees the bundle.
 
 ### kaf
 
@@ -1046,22 +1052,27 @@ secret-tool clear service kantrip application 'Python keyring library'
 Kantrip sets these variables only for the programs it starts, never in your
 own shell. Kafka has no standard environment variables shared across
 languages, so your application has to read the `KAFKA_*` values below itself.
-`KANTRIP_*` is reserved for session details.
+`KANTRIP_*` is reserved for Kantrip.
 
-A supported client run as a one-off command, such as
-`kantrip exec local -- kcat -L`, gets only its own generated files, through its
-usual options or variables, and none of the `*_CONFIG_FILE` variables below.
-Other commands and subshells get all of them.
+Every program gets the connection values, the Registry URL, and the session
+variables. The variables that point at generated files (`KCAT_CONFIG` and the
+`*_CONFIG_FILE` variables) go only to subshells and to programs Kantrip has no
+adapter for. A supported client run as a one-off command, such as
+`kantrip exec local -- kcat -L`, gets just the file it reads, through its usual
+option or variable. A few clients also get variables of their own, described
+in their sections: [kaf](#kaf) runs with `HOME=/dev/null`, [kcl](#kcl) with
+`KCL_CONFIG_PATH`, and [Kaskade](#kaskade) Registry OAuth with `SSL_CERT_FILE`.
 
 ### Environment precedence
 
 For a one-off command, Kantrip passes on your other exported variables,
-removes every `KAFKA_*`, `SCHEMA_REGISTRY_*`, `APICURIO_*`, and
-`KANTRIP_SANDBOX_*` variable, and then adds only the profile's public values and
-the paths of its private config files. It also removes `KAFKA_OPTS`,
-`JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and `_JAVA_OPTIONS`, so JVM options
-can't swap in a different connection. Without a Registry, none of the Registry
-variables are set.
+removes every `KAFKA_*`, `SCHEMA_REGISTRY_*`, and `APICURIO_*` variable, and then
+adds only the profile's public values and the paths of its private config
+files. It also removes `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and
+`_JAVA_OPTIONS`, so JVM options can't swap in a different connection;
+`KAFKA_OPTS` and `SCHEMA_REGISTRY_OPTS` are removed with their prefixes and set
+again only for OAuth, as the tables below describe. Without a Registry, none of
+the Registry variables are set.
 
 A subshell runs your usual startup files first. Then Kantrip removes the
 reserved variables again, sets its own values back exactly (including
@@ -1074,22 +1085,25 @@ run are still trusted: they can read or change other variables on purpose.
 | Variable | Meaning |
 | --- | --- |
 | `KAFKA_BOOTSTRAP_SERVERS` | Comma-separated broker addresses |
-| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` or `SSL`, matching the selected profile |
+| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL` (TLS or mTLS), or `SASL_SSL` (PLAIN, SCRAM, or OAuth) |
 | `KAFKA_JAVA_CONFIG_FILE` | Generated Java Kafka properties path |
 | `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Generated librdkafka properties path |
 | `KCAT_CONFIG` | Generated librdkafka properties path read natively by kcat |
+| `KAFKA_OPTS` | Set only when Kafka or a Confluent Registry uses OAuth: `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=` with the token endpoint URLs, which Kafka's Java clients require before they call a token endpoint |
 
 ### Registry variables
 
-Only the variables for the profile's provider are set. The generated
-properties file holds that provider's official serializer and deserializer URL
-property.
+The `*_REGISTRY_URL` and `*_REGISTRY_CONFIG_FILE` variables are set only for the
+profile's provider, and that file holds the provider's official serializer and
+deserializer URL property. `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` is set for either
+provider.
 
 | Variable | Meaning |
 | --- | --- |
 | `SCHEMA_REGISTRY_URL` | Confluent-compatible registry URL |
 | `SCHEMA_REGISTRY_CONFIG_FILE` | Generated file containing `schema.registry.url` |
-| `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` | Private combined Kafka and prefixed Confluent Registry client properties |
+| `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` | Private Java properties with the Kafka connection and, for a Confluent Registry, the prefixed Registry client settings |
+| `SCHEMA_REGISTRY_OPTS` | The same value as `KAFKA_OPTS`, set under the same condition, for Confluent's Schema Registry console scripts |
 | `APICURIO_REGISTRY_URL` | Native Apicurio Core Registry API v3 URL |
 | `APICURIO_REGISTRY_CONFIG_FILE` | Generated file containing `apicurio.registry.url` |
 
