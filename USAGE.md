@@ -1,6 +1,6 @@
 # Kantrip Usage
 
-Kantrip is a pre-release CLI for authenticated Kafka profiles and scoped sessions:
+Kantrip saves Kafka connection profiles and runs clients with them:
 
 ```bash
 kantrip add local
@@ -14,19 +14,13 @@ kantrip exec local -- kcat -L
 See [Compatibility](COMPATIBILITY.md) for supported clients, authentication
 methods, and file formats.
 
-No backward compatibility is promised before v0.1.0, including between
-published alpha and beta versions. Commands, output, and stored profiles may
-change; a profile database from an earlier pre-release may be rejected with
-instructions to recreate it. Kantrip never deletes it silently.
-
-Kantrip is not a persistent process manager, a global context selector, or a
-replacement for Kafka clients. Its responsibility ends at storing profiles,
-resolving the connection material supported by the installed release,
-generating the correct temporary configuration, and supervising active
-execution. It supports plaintext, server-authenticated TLS, SASL/PLAIN,
-SCRAM-SHA-256, SCRAM-SHA-512, mTLS, and OAuth client credentials. Kafka
-authentication always requires verified TLS. OAuth token endpoints have
-independent identity, scopes, secret, and optional CA trust.
+Kantrip isn't a process manager, a global "current context" switch, or a
+replacement for your Kafka clients. It stores profiles, looks up their
+credentials, writes the temporary configuration each client needs, and
+supervises the command while it runs. Connections can be plaintext, TLS with a
+verified server, SASL/PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, mTLS, or OAuth client
+credentials. Kafka authentication always requires verified TLS. An OAuth token
+endpoint has its own client ID, scopes, secret, and optional CA.
 
 ## Contents
 
@@ -96,29 +90,31 @@ connection:
 kantrip doctor
 ```
 
-Doctor groups local checks under System, Profiles, Credentials, Session, and
-Clients, names missing commands, and summarizes health. It validates the profile
-database, credential vault, Registry support, reconciliation
-state, active-session state, recoverable runtime artifacts, and installed
-clients, including any client older than Kantrip supports. It reads every secret each profile references (Kafka and Registry,
-including OAuth client secrets) and reports it as stored, missing, or
-unavailable under its field name, such as `registry.auth.token`, without printing
-sensitive material. It also checks certificate/key validity and certificate
-expiry. `doctor` is the only command that reads secret values to report this;
-`describe` only lists them as `configured`. It reports where the
-[credential vault](#credential-vault) is and whether it is locked before it
-reads anything; on macOS it also shows the vault's lock setting while it is
-unlocked. Use
-`-v`/`--verbose` for paths, backend identity, and individual checks.
+Doctor groups its checks under System, Profiles, Credentials, Session, and
+Clients, names any missing commands, and ends with a summary. It checks the
+profile database, the credential vault, Registry settings, pending credential
+cleanup, sessions, leftover session files, and installed clients, including
+any that are older than Kantrip supports.
 
-Doctor always lists the sessions on this machine: one line per session with
-its profile, revision, and age, plus the session ID, supervisor PID, and path
-with `-v`. The Session section also says whether the current shell is inside a
-Kantrip session. Stale sessions come with a `--repair` hint; an entry Kantrip
-cannot verify as its own is reported by path and must be inspected and removed
-manually, because `--repair` never deletes it.
+It reads every secret each profile references, for Kafka and the Registry,
+OAuth client secrets included, and reports each one as stored, missing, or
+unavailable under its field name, such as `registry.auth.token`. It never prints
+the values. It also checks that certificates and keys are valid and when the
+certificates expire. `doctor` is the only command that reads secrets just to
+report on them; `describe` only lists them as `configured`. Before reading
+anything, doctor says where the [credential vault](#credential-vault) is and
+whether it's locked. On macOS it also shows the vault's lock setting while it's
+unlocked. Add `-v`/`--verbose` for paths, the backend, and every individual
+check.
 
-Scope checks and sessions to one immutable profile identity. The title names the
+Doctor always lists the sessions on this machine, one line each with the
+profile, revision, and age; `-v` adds the session ID, supervisor PID, and path.
+The Session section also says whether the current shell is inside a Kantrip
+session. Stale sessions come with a `--repair` hint. An entry Kantrip can't
+verify as its own is reported by path, and you have to inspect and remove it
+yourself, because `--repair` never deletes it.
+
+To check a single profile and its sessions, name it. The title shows the
 profile, and the database line still counts every profile:
 
 ```bash
@@ -126,20 +122,20 @@ kantrip doctor production
 kantrip doctor production -v
 ```
 
-Missing optional clients or a first-run profile database produce warnings. An
-invalid database, unsupported registry settings, or inconsistent session state
-exits with status 1. Doctor never contacts Kafka or a registry.
+A missing optional client, or no profile database yet on a first run, gives a
+warning. An invalid database, unsupported Registry settings, or inconsistent
+session state make doctor exit with status 1. Doctor never contacts Kafka or a
+Registry.
 
-Profile-dependent commands automatically apply known SQLite migrations. A
-normal `doctor` run only reports pending work; it does not create or modify
-storage. Use `kantrip doctor --repair` for an explicit maintenance pass that
-migrates the profile database, reconciles exact pending credential cleanup,
-removes a deleted macOS credential vault from Keychain Access, removes validated stale
-sessions, and then runs the diagnostics again. Kantrip
-has no separate migration or cleanup command.
-Migration backups include their UTC creation time and a unique suffix, so later
-migrations preserve earlier recovery points. Unreleased databases without
-migration history are unsupported and must be recreated.
+Commands that use profiles apply database migrations automatically. A plain
+`doctor` run only reports pending work and never creates or changes anything.
+`kantrip doctor --repair` does the maintenance: it migrates the profile
+database, finishes pending credential cleanup, removes a deleted macOS vault
+from Keychain Access, removes stale sessions it has validated, and then runs the
+checks again. There's no separate migration or cleanup command. Each migration
+backup is named with its UTC creation time and a unique suffix, so a later
+migration never overwrites an earlier backup. Unreleased databases without a
+migration history aren't supported and have to be recreated.
 
 A profile database created by a pre-release (alpha or beta) version is rejected
 with "created by a pre-release version of Kantrip". Kantrip does not modify it.
@@ -163,28 +159,32 @@ Check Kafka and, when configured, registry connectivity:
 kantrip ping local
 ```
 
-`ping` polls Confluent/librdkafka connection-state callbacks until one configured
-or learned broker reaches `UP` after the required TLS and SASL exchange. It does
-not request topics, groups, schemas, or a cluster description. Plaintext proves
-reachability; server-only TLS proves server identity; SASL and mTLS report their
-configured authentication exchange. None proves application authorization.
+`ping` watches librdkafka's connection-state callbacks until one of the
+configured or discovered brokers reaches `UP`, after whatever TLS and SASL
+exchange the profile needs. It doesn't request topics, groups, schemas, or a
+cluster description. With plaintext, that shows the broker is reachable; with
+TLS alone, that the server's identity checks out; with SASL or mTLS, that the
+authentication exchange succeeded. None of them shows what the client is
+allowed to do.
 
-The Registry probe performs one bounded read query: `/subjects?limit=1` on
-Confluent-compatible Registry, including Apicurio's ccompat API without URL
-rewriting, or `/search/versions?limit=1` on native Apicurio v3. Empty valid
-collections succeed. Authenticated profiles repeat the same query anonymously
-and expect HTTP 401/403 (or a rejected no-client-certificate TLS exchange for
-mTLS). If the anonymous query also succeeds, the Registry is reachable but the
-configured credentials are not proven: `ping` reports it as ok with the proof
-"endpoint also allows anonymous reads, credentials not proven", prints a
-warning, and still exits `0`, as plaintext Kafka reports reachability.
-Credentials the Registry rejects (401/403 on the authenticated query) fail.
-OAuth first obtains one bounded client-credentials token. Each HTTPS hop
-verifies its independent configured trust. It needs no external CLI
-and applies one five-second deadline across configured services, configurable with
-`--timeout SECONDS`. Colored terminals animate checks; plain output uses
-`[running]`. Failures include a sanitized message from the underlying client or
-transport exception.
+The Registry check sends one bounded read query: `/subjects?limit=1` to a
+Confluent-compatible Registry, including Apicurio's ccompat API (the URL is
+used as is), or `/search/versions?limit=1` to native Apicurio v3. A valid empty
+list is a success. For an authenticated profile, `ping` sends the same query
+again without credentials and expects HTTP 401/403, or for mTLS a TLS handshake
+rejected for lack of a client certificate. If the anonymous query succeeds
+too, the Registry is reachable but your credentials weren't tested: `ping`
+reports it as ok with the proof "endpoint also allows anonymous reads,
+credentials not proven", prints a warning, and still exits `0`, the same way a
+plaintext Kafka check only reports reachability. If the Registry rejects your
+credentials (401/403 on the authenticated query), the check fails. With OAuth,
+`ping` first gets one client-credentials token, with a time limit. Each HTTPS
+connection checks the CA configured for it.
+
+`ping` needs no external client. All checks share one five-second deadline,
+which you can change with `--timeout SECONDS`. Colored terminals show a
+spinner; plain output prints `[running]`. A failure includes a cleaned-up
+message from the underlying client or connection error.
 
 `ping` reports each service as `ok`, `failed`, or `skipped` (not attempted) and
 exits `0` only when every attempted check is ok. If Kafka succeeds and the
@@ -217,8 +217,8 @@ For scripts that need only the exit status, suppress all output with:
 kantrip ping local --quiet
 ```
 
-`-q` is the short form of `--quiet`; both suppress stdout and stderr on success
-and failure and communicate only through exit status 0 or 1.
+`-q` is the short form of `--quiet`. Either way, `ping` prints nothing to stdout
+or stderr, whether it succeeds or fails, and exits with 0 or 1.
 
 ## First profile
 
@@ -251,9 +251,9 @@ Updated profile 'production': kafka-2.example.com:9093, tls, scram-sha-512
 Removed profile 'production'
 ```
 
-For a private CA, pass a PEM certificate bundle. Kantrip validates the bundle,
-copies the public certificates into the profile, and later materializes them
-only in the private session directory:
+For a private CA, pass a PEM certificate bundle. Kantrip validates it and
+copies the certificates into the profile. At run time they're written only to
+the private session directory:
 
 ```bash
 kantrip add production-private-ca \
@@ -261,17 +261,18 @@ kantrip add production-private-ca \
   --ca-file ./cluster-ca.pem
 ```
 
-The CA source must be a regular UTF-8 PEM file of at most 1 MiB. Certificate and
-hostname verification cannot be disabled. `kcat`, `kafkacat`, and Kaskade use
-the PEM bundle directly. Java Kafka commands require Apache Kafka 2.7+ or
-Confluent Platform 6.1+ for native PEM trust-store support. Kantrip checks the
-installed Java client version before the Kafka operation and reports an
-actionable error when it cannot prove support. Kafka 2.6 and Confluent Platform
-6.0 can still use TLS with their default trust stores.
+The CA file must be a regular UTF-8 PEM file of at most 1 MiB. Certificate and
+hostname verification can't be turned off. `kcat`, `kafkacat`, and Kaskade read
+the PEM bundle directly. The Java Kafka commands need Apache Kafka 2.7+ or
+Confluent Platform 6.1+ to use a PEM trust store. Kantrip checks the installed
+Java client's version before the Kafka operation and tells you what to install
+when it can't confirm support. Kafka 2.6 and Confluent Platform 6.0 can still
+use TLS with their default trust stores.
 
-Add password authentication over TLS. The password is collected without echo
-and stored in the [credential vault](#credential-vault); it is never placed in
-the profile document or command arguments:
+Add password authentication over TLS. Kantrip asks for the password at a
+prompt that doesn't echo and stores it in the
+[credential vault](#credential-vault), never in the profile or in command
+arguments:
 
 ```bash
 kantrip add production-scram \
@@ -280,17 +281,17 @@ kantrip add production-scram \
   --username application
 ```
 
-The same workflow supports `plain`, `scram-sha-256`, and `scram-sha-512`.
-Required passwords are prompted only when creating the credential or when
-explicitly replacing `kafka.auth.password`:
+This works the same for `plain`, `scram-sha-256`, and `scram-sha-512`. Kantrip
+asks for the password only when it creates the credential, or when you replace
+`kafka.auth.password` explicitly:
 
 ```bash
 kantrip edit production-scram --replace-secret kafka.auth.password
 ```
 
-For mTLS, Kantrip copies the public certificate chain into the profile and
-stores the validated private key and optional encrypted-key password in the OS
-credential store:
+For mTLS, Kantrip copies the public certificate chain into the profile, and
+stores the private key, plus its password if the key is encrypted, in the vault
+after checking them:
 
 ```bash
 kantrip add production-mtls \
@@ -300,11 +301,12 @@ kantrip add production-mtls \
   --client-key-file ./client.key
 ```
 
-Certificate and key files must be bounded regular PEM files and must match.
-Encrypted keys prompt for their password without echo.
+The certificate and key must be regular PEM files within a size limit, and
+they must match. For an encrypted key, Kantrip asks for its password at a
+prompt that doesn't echo.
 
-OAuth uses the client-credentials grant and keeps broker and token-endpoint
-trust independent:
+OAuth uses the client-credentials grant. The broker and the token endpoint
+each have their own CA:
 
 ```bash
 kantrip add production-oauth \
@@ -317,12 +319,14 @@ kantrip add production-oauth \
   --oauth-ca-file ./identity-ca.pem
 ```
 
-The client secret is collected by a no-echo prompt. Repeat `--oauth-scope` to
-preserve scope order. `edit` keeps omitted OAuth fields;
-`--unset kafka.auth.oauth.scopes` and `--unset kafka.auth.oauth.ca` remove them.
+Kantrip asks for the client secret at a prompt that doesn't echo. Repeat
+`--oauth-scope` for several scopes; their order is kept. `edit` leaves OAuth
+fields you don't mention alone; `--unset kafka.auth.oauth.scopes` and
+`--unset kafka.auth.oauth.ca` remove them.
 
-Choose one or more broker addresses when needed. Repeat `-b/--bootstrap-server`
-or separate addresses with commas; both keep their order and reject duplicates:
+To give several brokers, repeat `-b/--bootstrap-server` or separate the
+addresses with commas. Either way the order is kept and duplicates are
+rejected:
 
 ```bash
 kantrip add development \
@@ -334,8 +338,8 @@ kantrip add development \
   --registry-url http://registry.example.com:8081
 ```
 
-`--registry-url` defaults to the Confluent provider. Select native Apicurio
-explicitly and pass its Core Registry API v3 endpoint:
+`--registry-url` assumes a Confluent-compatible Registry. For native Apicurio,
+say so and pass its Core Registry API v3 endpoint:
 
 ```bash
 kantrip add development-apicurio \
@@ -346,7 +350,8 @@ kantrip add development-apicurio \
 
 `--registry-provider` without `--registry-url` is invalid.
 
-Secure Registry profiles use their own trust and credentials. For example:
+A secure Registry has its own CA and credentials, separate from Kafka's. For
+example:
 
 ```bash
 kantrip add registry-oauth \
@@ -360,17 +365,19 @@ kantrip add registry-oauth \
   --registry-oauth-ca-file ./identity-ca.pem
 ```
 
-Registry Basic, fixed Confluent bearer tokens, mTLS, and OAuth use no-echo
-prompts or bounded private-key files. Kafka and Registry secrets and CA bundles
-are never inherited from one another. `--unset registry.tls.ca`,
-`--unset registry.auth.oauth.ca`, `--unset registry.auth.oauth.scopes`,
+Registry Basic auth, fixed Confluent bearer tokens, mTLS, and OAuth all take
+their secrets from prompts that don't echo or from private-key files within a
+size limit. Kafka and the Registry never share secrets or CA bundles.
+`--unset registry.tls.ca`, `--unset registry.auth.oauth.ca`,
+`--unset registry.auth.oauth.scopes`,
 `--unset registry.auth.oauth.logical-cluster`, and
-`--unset registry.auth.oauth.identity-pool-id` remove the matching field. Changing provider requires a new Registry URL and keeps
-the current authentication only when the new provider supports it.
+`--unset registry.auth.oauth.identity-pool-id` remove the matching field.
+Changing the provider requires a new Registry URL, and keeps the current
+authentication only if the new provider supports it.
 
-`add` creates the database when needed and never overwrites a profile. `-l` is
-the short form of repeatable `--label KEY=VALUE`. Edit explicit fields without
-changing the profile identity:
+`add` creates the database if needed and never overwrites an existing profile.
+`-l` is short for `--label KEY=VALUE`, which you can repeat. `edit` changes only
+the fields you pass and keeps the profile's identity:
 
 ```bash
 kantrip edit development \
@@ -380,27 +387,26 @@ kantrip edit development \
   --registry-url http://registry.example.com:8081
 ```
 
-`edit --transport tls` enables TLS with the client's default trust store.
-`edit --ca-file PATH`
-replaces the custom CA for an existing TLS profile; combine it with
-`--transport tls` when upgrading a plaintext profile. Switching back to default
-trust is an explicit `edit --unset kafka.tls.ca` operation and does not disable
-TLS. Switching to `--transport plaintext` removes the stored TLS configuration.
-`--unset kafka.tls.ca` and `--ca-file` are mutually exclusive.
+`edit --transport tls` turns on TLS with the client's default trust store.
+`edit --ca-file PATH` replaces the custom CA of a TLS profile; add
+`--transport tls` to switch a plaintext profile to TLS at the same time. To go
+back to the default trust store, run `edit --unset kafka.tls.ca`; TLS stays on.
+`--transport plaintext` removes the stored TLS settings. `--unset kafka.tls.ca`
+and `--ca-file` can't be combined.
 
-`edit` adds or updates labels and can add a Registry to a profile that has none.
-When only `--registry-url` is supplied, the new Registry defaults to Confluent.
-Repeatable `--unset FIELD` makes an optional field absent: `description`,
-`labels.KEY`, `registry`, `kafka.tls.ca`, and the Kafka and Registry trust and
-OAuth fields above. An unknown or required field fails and lists the valid
-names. Omitting an option preserves its current value. `edit` needs at least one option; `edit PROFILE` alone prints
-usage and exits with status 2.
+`edit` adds or updates labels, and can add a Registry to a profile that has
+none. With only `--registry-url`, the new Registry is Confluent. `--unset FIELD`,
+which you can repeat, removes an optional field: `description`, `labels.KEY`,
+`registry`, `kafka.tls.ca`, and the Kafka and Registry trust and OAuth fields
+above. An unknown or required field fails with a list of the valid names.
+Options you leave out keep their current values. `edit` needs at least one
+option; `edit PROFILE` alone prints usage and exits with status 2.
 
-Changing the Registry authentication type (for example `--registry-auth none`
-or from OAuth to Basic) keeps no fields of the previous type; its stored
-credentials are retired after the change commits. Changing the provider keeps
-the current authentication when the new provider supports it; otherwise `edit`
-fails without changes and asks for an explicit `--registry-auth`.
+Changing the Registry authentication type (for example `--registry-auth none`,
+or from OAuth to Basic) drops all fields of the old type, and its stored
+credentials are deleted once the change is committed. Changing the provider
+keeps the current authentication if the new provider supports it; otherwise
+`edit` changes nothing and asks you to pass `--registry-auth`.
 
 Remove one with:
 
@@ -408,39 +414,45 @@ Remove one with:
 kantrip remove development
 ```
 
-Removal asks for confirmation bound to the captured profile UUID and revision.
-Pass `-y/--yes` to skip the confirmation. Without a terminal, `remove` fails
-unless `--yes` is given.
+`remove` asks for confirmation, and the confirmation applies to the exact
+profile version (UUID and revision) it showed you. Pass `-y/--yes` to skip it.
+Without a terminal, `remove` fails unless you pass `--yes`.
 
-Profile mutations return status 0 when the change and cleanup completed, 1 when
-the requested change ran but definitely did not commit, 2 for invalid options or
-values (nothing is changed, and the message says what to fix), 3 when the
-change committed but cleanup or post-commit verification remains, and 4 when
-the commit outcome cannot be established. For 3, inspect `describe` and run
-`doctor --repair`; do not repeat the mutation blindly. For 4, stop automatic
-retries and inspect local storage first.
+`add`, `edit`, and `remove` exit with:
 
-A broken stdout pipe after persistence reports status 3 when the process can
-still return normally. A signal or `SIGKILL` can terminate the process before a
-CLI status is emitted; inspect the profile and `doctor` before retrying. Kantrip
-does not promise exactly-once command invocation across process termination.
+- `0` when the change and its cleanup finished.
+- `1` when the change ran but certainly wasn't committed.
+- `2` for invalid options or values. Nothing changes, and the message says what
+  to fix.
+- `3` when the change was committed but cleanup or the check afterwards didn't
+  finish. Look at `describe` and run `doctor --repair`; don't just repeat the
+  command.
+- `4` when Kantrip can't tell whether the change was committed. Stop any
+  automatic retries and look at the local storage first.
 
-`kantrip list` succeeds without rows when no profiles exist; on a terminal it
-also prints a hint to stderr. Kantrip validates
-every profile whenever it reads or updates the database.
+If stdout breaks (for example, a closed pipe) after the change is saved, the
+exit status is 3, as long as the process can still exit normally. A signal or
+`SIGKILL` can end the process before it reports a status; check the profile and
+run `doctor` before retrying. Kantrip can't guarantee a command runs exactly
+once if the process is killed.
 
-Human list output includes labels and a short profile ID, the first eight
-characters of the profile's immutable UUID. Filter by an exact pair with `-l` or
-`--label`; repeated filters use logical AND:
+`kantrip list` prints nothing and succeeds when there are no profiles; on a
+terminal it also prints a hint to stderr. Kantrip validates every profile each
+time it reads or updates the database.
+
+The human-readable list shows labels and a short profile ID, the first eight
+characters of the profile's UUID, which never changes. Filter by an exact
+label with `-l` or `--label`; with several filters, a profile must match all of
+them:
 
 ```bash
 kantrip list --label environment=development --label owner=platform
 ```
 
-Use `--output json` or `--output yaml` (`-o` for short) for a stable structured
-summary. On a colored TTY, Kantrip applies syntax highlighting; `--no-color`
-or output redirection emits plain machine-readable content without ANSI escapes.
-Structured empty results are an empty sequence.
+Use `--output json` or `--output yaml` (`-o` for short) for output you can
+parse. On a color terminal it's syntax-highlighted; with `--no-color`, or when
+the output is redirected, it's plain text without ANSI escapes. With no
+profiles, you get an empty list.
 
 ## Profile workflow
 
@@ -456,14 +468,14 @@ so `kantrip exec local kafka-topics --help` shows the tool's own help. The `--`
 before COMMAND is optional; the examples keep it for clarity. Kantrip's own
 options, such as `--no-color`, go before PROFILE.
 
-`describe` presents Rich sections by default. JSON and YAML are safe
-machine-readable observations rather than profile export documents. They show
-every public connection field and the profile's current database revision, and
-omit arbitrary client properties, secret values, and internal credential
-references. Kafka and Registry use the same `auth` shape: `type`, the
-type-specific public fields (`username`, `clientCertificate` subject and expiry,
-`oauth` endpoint, client ID, scopes, and token trust), and `credentials`, which
-lists each secret the profile uses as `configured`:
+`describe` prints sections for people by default. Its JSON and YAML output is
+for reading, not a profile export you can import again. It shows every public
+connection field and the profile's current revision, and leaves out secret
+values and internal credential references. Kafka and the Registry use the same
+`auth` shape: `type`, the public fields for that type (`username`, the
+`clientCertificate` subject and expiry, or the `oauth` endpoint, client ID,
+scopes, and token CA), and `credentials`, which lists each secret the profile
+uses as `configured`:
 
 ```json
 "auth": {
@@ -473,12 +485,12 @@ lists each secret the profile uses as `configured`:
 }
 ```
 
-`describe` never reads the OS credential store, so it never prompts or unlocks
-anything. Run `kantrip doctor` to check that each credential is actually stored.
+`describe` never reads the vault, so it never prompts or unlocks anything.
+Run `kantrip doctor` to check that each credential is really stored.
 
-Without a command, `kantrip exec PROFILE` opens a supervised Bash, Zsh, or Fish
-subshell from `SHELL`, falling back to Bash when it is unset. Other shells fail
-with an actionable error:
+Without a command, `kantrip exec PROFILE` opens a Bash, Zsh, or Fish subshell,
+whichever `SHELL` names, or Bash if `SHELL` is unset. Other shells fail with an
+error that says so:
 
 ```bash
 kantrip exec local
@@ -488,55 +500,59 @@ kafka-topics --list
 exit
 ```
 
-Kantrip never exports the profile to the parent shell. Nested sessions and
-detached children are unsupported; exit before starting another session.
+Nothing is exported to the shell you started from. Sessions can't be nested,
+and detached children aren't supported, so exit one session before starting
+another.
 
-`kantrip current` prints the active profile or reports that none is selected. It
-is equivalent to reading `KANTRIP_PROFILE`.
+`kantrip current` prints the active profile, or says there isn't one. It's the
+same as reading `KANTRIP_PROFILE`.
 
-The subshell preserves normal startup files and history. It neutralizes aliases,
-functions, and Fish abbreviations that shadow adapters, keeps the shim directory
-first on `PATH`, and removes these changes on exit.
+The subshell loads your usual startup files and history. Kantrip then disables
+any aliases, functions, and Fish abbreviations that would hide a supported
+client, keeps its wrapper directory first on `PATH`, and undoes all of it when
+you exit.
 
 ## Session supervision and recovery
 
-One-off commands run in their own POSIX process group. Interactive Bash, Zsh,
-and Fish subshells run through a PTY so terminal input, Ctrl-C, job control, and
-window resizing behave normally. Kantrip preserves normal child exit codes and
-maps signal termination to `128 + signal number`.
+A one-off command runs in its own POSIX process group. A Bash, Zsh, or Fish
+subshell runs on a PTY, so typing, Ctrl-C, job control, and window resizing
+behave normally. Kantrip exits with the child's exit code, or with
+`128 + signal number` if a signal killed it.
 
-Kantrip forwards SIGINT, SIGTERM, and SIGHUP to the managed process boundary. A
-second termination signal or a child that remains alive for five seconds causes
-escalation to SIGKILL. Terminal state and signal handlers are restored when the
-supervisor exits. Processes that deliberately daemonize or create a new POSIX
-session remain unsupported.
+Kantrip forwards SIGINT, SIGTERM, and SIGHUP to the process group or subshell.
+If a second signal arrives, or the child is still alive five seconds later,
+Kantrip sends SIGKILL. When Kantrip exits, it restores the terminal and its
+signal handlers. Processes that daemonize or start a new POSIX session on
+purpose aren't supported.
 
-Session files live under `$XDG_RUNTIME_DIR/kantrip/sessions` when the configured
-runtime directory is private and user-owned. Otherwise Kantrip uses a private
-`kantrip-<uid>/sessions` directory below the operating-system temporary root.
-Every session holds a liveness lock; PIDs are metadata and are not used alone to
-decide whether a session is active.
+Session files live under `$XDG_RUNTIME_DIR/kantrip/sessions` when that runtime
+directory is private and owned by you. Otherwise Kantrip uses a private
+`kantrip-<uid>/sessions` directory in the system's temporary directory. Each
+session holds a lock while it runs, and that lock, not the PID, decides whether
+the session is still active.
 
-Before `exec`, Kantrip inspects at most 256 direct runtime entries and removes
-validated unlocked sessions older than five minutes. Inspect the complete local
-state without modifying it, or explicitly repair safe deterministic issues, with:
+Before each `exec`, Kantrip looks at up to 256 entries in that directory and
+removes unlocked sessions older than five minutes once they pass validation.
+To see the full state without changing anything, or to clean up what can be
+cleaned up safely, run:
 
 ```bash
 kantrip doctor
 kantrip doctor --repair
 ```
 
-Repair applies known database migrations and removes every validated stale
-session. It refuses malformed markers, symlinks, unsafe permissions, wrong
-owners, and paths outside the runtime root. Active and recent sessions remain
-untouched. Runtime paths appear only with `--verbose`.
+Repair applies pending database migrations and removes every stale session
+that passes validation. It leaves alone anything with a malformed marker, a
+symlink, unsafe permissions, the wrong owner, or a path outside the session
+directory. Active and recent sessions aren't touched. Paths are shown only with
+`--verbose`.
 
 ## Displaying the active profile in your prompt
 
-Prompt integrations should read `KANTRIP_PROFILE`, which exists only inside a
-`kantrip exec PROFILE` subshell. They need not invoke Kantrip repeatedly.
+Your prompt can read `KANTRIP_PROFILE`, which is set only inside a
+`kantrip exec PROFILE` subshell, so it doesn't need to run Kantrip at all.
 
-Configure only the integration that renders your prompt:
+Set up only the one that draws your prompt:
 
 - Use **Starship** if Starship controls your prompt.
 - Use **Powerlevel10k** if Powerlevel10k controls your prompt, even when it is
@@ -545,8 +561,8 @@ Configure only the integration that renders your prompt:
   standard `PROMPT` variable.
 - Use **Bash** or **Fish** for their own prompt.
 
-Kantrip keeps your normal startup files, so these settings also load inside the
-session.
+Kantrip loads your usual startup files, so these settings work inside the
+session too.
 
 ### Choose a display style
 
@@ -660,20 +676,22 @@ The profile should appear in the subshell and disappear after `exit`.
 
 ## Supported command-line tools
 
-Kantrip configures supported tools inside `kantrip exec` and blocks profile
-overrides. It reports missing clients but does not install them.
+Inside `kantrip exec`, Kantrip configures these tools for the profile and
+rejects arguments that would override it. It tells you about missing clients
+but doesn't install them.
 
-Before each launch, Kantrip checks the installed client's version against its
-minimum, listed in [Compatibility](COMPATIBILITY.md#client-commands). A client
-that is too old, or whose version Kantrip can't read, stops before it starts.
-The error names the release to install. Session shims check every installed
-client in parallel when the session starts.
+Before each launch, Kantrip checks the installed client's version against the
+minimum listed in [Compatibility](COMPATIBILITY.md#client-commands). A client
+that's too old, or whose version Kantrip can't read, doesn't start, and the
+error names the release to install. In a subshell, all installed clients are
+checked in parallel when the session starts.
 
 ### kcat
 
-Each session sets `KCAT_CONFIG` to a private librdkafka properties file.
-Interactive sessions add a pass-through executable to resist startup-time
-`PATH`, alias, and function changes without configuration arguments.
+Each session points `KCAT_CONFIG` at a private librdkafka properties file.
+Subshells also add a small `kcat` wrapper, so `PATH` changes, aliases, and
+functions from your startup files can't bypass it. The wrapper adds no
+arguments.
 
 ```bash
 kantrip exec local -- kcat -L
@@ -682,10 +700,10 @@ kantrip exec local -- kcat -P -t orders
 kantrip exec local -- kcat -C -t avro-orders -s value=avro
 ```
 
-`-s avro`, `-s key=avro`, and `-s value=avro` inject a
-Confluent-compatible registry URL through `-r`. Native Apicurio profiles are not
-supported by kcat. Kantrip rejects `-F`, `-r`, and
-`-X schema.registry.url=...` overrides. Other modes need no registry profile.
+With `-s avro`, `-s key=avro`, or `-s value=avro`, Kantrip passes the
+profile's Confluent-compatible Registry URL with `-r`. kcat doesn't work with
+native Apicurio profiles. Kantrip rejects `-F`, `-r`, and
+`-X schema.registry.url=...`. Other modes don't need a Registry.
 
 ### Apache Kafka and Confluent Kafka commands
 
@@ -702,13 +720,13 @@ kantrip exec local -- kafka-acls --list
 kantrip exec local -- kafka-broker-api-versions
 ```
 
-Kantrip injects `--bootstrap-server` and a private Java client-properties file.
-Console consumers receive `--consumer.config`, console producers receive
-`--producer.config`, and administrative commands receive `--command-config`.
-Injected and legacy connection options cannot override the profile. Use `.sh`
-with Apache Kafka archives and unsuffixed names with Confluent Platform.
+Kantrip adds `--bootstrap-server` and a private Java client properties file:
+`--consumer.config` for console consumers, `--producer.config` for console
+producers, and `--command-config` for the admin commands. You can't override
+these, or pass older connection options instead. Use the `.sh` names with
+Apache Kafka archives and the unsuffixed names with Confluent Platform.
 
-Interactive sessions create temporary shims, so commands work without repeating
+In a subshell, temporary wrappers let you run the commands without repeating
 `kantrip exec`:
 
 ```bash
@@ -718,8 +736,8 @@ kafka-console-consumer --topic orders --from-beginning
 exit
 ```
 
-These shims follow the session behavior above and disappear on exit; Kantrip
-installs no CLI or persistent aliases.
+The wrappers work as described above and disappear when you exit. Kantrip
+never installs commands or permanent aliases.
 
 ### Additional Confluent Schema Registry console clients
 
@@ -738,12 +756,12 @@ kantrip exec local -- kafka-protobuf-console-producer --topic orders \
 kantrip exec local -- kafka-protobuf-console-consumer --topic orders --from-beginning
 ```
 
-Each receives the profile's bootstrap servers, private Java client file, and
-`schema.registry.url`. Connection and endpoint overrides are rejected in direct
-and interactive sessions.
+Each gets the profile's bootstrap servers, a private Java client file, and
+`schema.registry.url`. Options that would change the connection or the Registry
+endpoint are rejected, both in one-off commands and in subshells.
 
-They require a plain registry with the Confluent provider. Missing registries
-and native Apicurio profiles fail before launch.
+They need a plain Registry with the Confluent provider. Without a Registry, or
+with a native Apicurio one, they fail before starting.
 
 ### Kaskade
 
@@ -762,16 +780,16 @@ The first command becomes:
 kaskade admin --config-file /tmp/kantrip-SESSION/kaskade.ini
 ```
 
-The default INI contains Kafka properties. Registry deserialization (`-k
-registry` or `-v registry`) selects a second INI with a provider-specific
-`[registry]` section. Kantrip rejects `-b`/`--bootstrap-servers`, `--kafka`,
-`--config-file`, and `--registry` overrides. Interactive shims behave
-identically.
+The default INI holds the Kafka properties. Registry decoding (`-k registry` or
+`-v registry`) switches to a second INI with a `[registry]` section for the
+profile's provider. Kantrip rejects `-b`/`--bootstrap-servers`, `--kafka`,
+`--config-file`, and `--registry`, except the two `--kafka` settings listed in
+[Compatibility](COMPATIBILITY.md#client-commands). Subshells work the same way.
 
-Kaskade supports Avro, JSON Schema, and Protobuf decoding with Confluent Schema
-Registry and native Apicurio Registry through this adapter. Native Apicurio uses
-its default `contentId` framing because Kantrip currently configures only the
-registry URL. Kantrip sets no Kaskade-specific environment variable.
+Through Kantrip, Kaskade decodes Avro, JSON Schema, and Protobuf with both
+Confluent Schema Registry and native Apicurio Registry. Native Apicurio uses its
+default `contentId` framing, because Kantrip only configures the Registry URL.
+Kantrip sets no Kaskade-specific environment variable.
 
 ### kaf
 
@@ -859,35 +877,37 @@ Apicurio's native API make every kcl command fail before launch.
 
 ## Profile storage
 
-Kantrip stores profiles in a private local database. Use `add`, `edit`, and
-`remove` to change profiles instead of editing the database directly.
+Profiles live in a private local database. Change them with `add`, `edit`, and
+`remove` rather than editing the database directly.
 
-Database lookup order is:
+Kantrip looks for the database in this order:
 
 1. `KANTRIP_DATABASE`.
 2. `$XDG_DATA_HOME/kantrip/profiles.db`.
 3. `~/.local/share/kantrip/profiles.db`.
 
-The database directory is private to the current user (`0700`), and the database
-is `0600`. Writable connections verify SQLite WAL and FULL synchronization;
-supported macOS builds also verify `fullfsync`. New database and migration-backup
-directory entries are synchronized before success is reported. These guarantees
-apply to a local filesystem. Network filesystems, cloud-synchronized database
-directories, and concurrently writable restored/copied databases are outside
-the supported durability boundary.
+The directory is readable only by you (`0700`), and so is the database
+(`0600`). Before writing, Kantrip checks that SQLite runs in WAL mode with FULL
+synchronization, and on macOS also with `fullfsync`. After creating a database
+or a migration backup, Kantrip syncs its directory before reporting success.
+All of this assumes a
+local filesystem. Network filesystems, cloud-synced folders, and restored or
+copied databases that something else writes to at the same time aren't
+covered.
 
-The first `add` creates a missing database; read-only commands do not create it.
-Kantrip rejects unsafe permissions, corrupt contents, and unsupported database
-versions. Database backups contain credential references, not credentials, and
-cannot restore values retired after the backup. Restoring SQLite independently
-from the OS credential store is unsupported; use safe credential observations
-and explicit `--replace-secret` recovery instead of deleting or inventing
-references. Keep existing data until you have followed the reported recovery
-guidance; Kantrip does not silently reset it.
+The first `add` creates the database; commands that only read never do.
+Kantrip rejects unsafe permissions, corrupt contents, and database versions it
+doesn't support. Backups hold references to credentials, not the credentials,
+so they can't bring back a value that was deleted after the backup. Restoring
+the database without the matching vault isn't supported. Instead of deleting or
+making up references, use `doctor` to see which credentials are missing and
+`edit --replace-secret` to store them again. Keep your existing data until
+you've followed the recovery steps Kantrip prints; it never resets anything on
+its own.
 
-A profile supports one optional Registry connection. Supplying `--registry-url`
-without `--registry-provider` selects Confluent. To use Apicurio's
-Confluent-compatible API with Confluent console clients, kcat Avro, or Kaskade:
+A profile can have one Registry. `--registry-url` without `--registry-provider`
+means Confluent. To use Apicurio's Confluent-compatible API with the Confluent
+console clients, kcat Avro, or Kaskade:
 
 ```bash
 kantrip add compatible \
@@ -897,9 +917,9 @@ kantrip add compatible \
 ```
 
 For native Apicurio with Kaskade, use `--registry-provider apicurio` and the
-`/apis/registry/v3` endpoint. Create two profiles with the same Kafka connection
-when both APIs are needed. See [Compatibility](COMPATIBILITY.md) for the client
-and format requirements of each API.
+`/apis/registry/v3` endpoint. If you need both APIs, create two profiles with
+the same Kafka connection. [Compatibility](COMPATIBILITY.md) lists which
+clients and formats each API works with.
 
 ## Credential vault
 
@@ -1062,31 +1082,31 @@ secret-tool clear service kantrip application 'Python keyring library'
 
 ## Application environment from `kantrip exec`
 
-Kantrip exposes settings only to supervised children. Kafka has no
-cross-language environment standard, so applications must opt into the generic
-`KAFKA_*` values below; `KANTRIP_*` is reserved for session metadata.
+Kantrip sets these variables only for the programs it starts, never in your
+own shell. Kafka has no standard environment variables shared across
+languages, so your application has to read the `KAFKA_*` values below itself.
+`KANTRIP_*` is reserved for session details.
 
-A supported client run directly, such as `kantrip exec local -- kcat -L`,
-instead gets only its own generated files through its native options or
-variables, and none of the `*_CONFIG_FILE` variables below. Other commands and
-interactive shells get all of them.
+A supported client run as a one-off command, such as
+`kantrip exec local -- kcat -L`, gets only its own generated files, through its
+usual options or variables, and none of the `*_CONFIG_FILE` variables below.
+Other commands and subshells get all of them.
 
 ### Environment precedence
 
-For a direct child, Kantrip copies unrelated exported parent values, removes all
-`KAFKA_*`, `SCHEMA_REGISTRY_*`, `APICURIO_*`, and `KANTRIP_SANDBOX_*` variables,
-and then injects only the selected snapshot's public values and private config
-paths. It also removes `KAFKA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and
-`_JAVA_OPTIONS` so JVM property injection cannot replace the selected
-connection. Without a Registry, neither provider pair is present. The parent
-shell remains unchanged.
+For a one-off command, Kantrip passes on your other exported variables,
+removes every `KAFKA_*`, `SCHEMA_REGISTRY_*`, `APICURIO_*`, and
+`KANTRIP_SANDBOX_*` variable, and then adds only the profile's public values and
+the paths of its private config files. It also removes `KAFKA_OPTS`,
+`JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and `_JAVA_OPTIONS`, so JVM options
+can't swap in a different connection. Without a Registry, none of the Registry
+variables are set. Your own shell doesn't change.
 
-Supported interactive shells run normal user startup files and then repeat the
-reserved-namespace cleanup, restore the exact owned values (including
-`KCAT_CONFIG`), and put Kantrip's shims first on `PATH`. This establishes profile
-precedence over accidental startup configuration. Startup files and custom
-children remain trusted code and can deliberately read or change unrelated
-application variables.
+A subshell runs your usual startup files first. Then Kantrip removes the
+reserved variables again, sets its own values back exactly (including
+`KCAT_CONFIG`), and puts its wrappers first on `PATH`, so the profile wins over
+anything your startup files set by accident. Startup files and the programs you
+run are still trusted: they can read or change other variables on purpose.
 
 ### Kafka variables
 
@@ -1100,8 +1120,9 @@ application variables.
 
 ### Registry variables
 
-Only the selected provider's variables are present. Their generated properties
-file contains the provider's official serializer/deserializer URL property.
+Only the variables for the profile's provider are set. The generated
+properties file holds that provider's official serializer and deserializer URL
+property.
 
 | Variable | Meaning |
 | --- | --- |
@@ -1119,12 +1140,12 @@ file contains the provider's official serializer/deserializer URL property.
 | `KANTRIP_SESSION_ID` | Opaque session identifier |
 | `KANTRIP_SESSION_DIR` | Private temporary session directory |
 
-Prefer native generated files, fall back to these variables, and never log the
-complete environment or properties.
+In your own programs, prefer the generated config files, fall back to these
+variables, and never log the whole environment or the properties.
 
 ## Output and color
 
-Commands write results to stdout and diagnostics to stderr. Styling is disabled
+Commands write results to stdout and messages to stderr. Styling is off
 when:
 
 - `--no-color` is supplied globally or after a subcommand.
@@ -1140,10 +1161,11 @@ kantrip list --no-color
 ```
 
 `kantrip list` shows short IDs, endpoints, and labels; `kantrip describe
-PROFILE` uses sectioned human output. Both also accept JSON or YAML through
-`--output`. Kantrip syntax-highlights structured output on colored TTYs, while
-`--no-color`, `NO_COLOR`, `TERM=dumb`, and non-TTY streams remain plain and
-machine-readable. Human output remains readable without ANSI color.
+PROFILE` prints sections. Both can print JSON or YAML with `--output`, which is
+syntax-highlighted on a color terminal and plain with `--no-color`, `NO_COLOR`,
+`TERM=dumb`, or when the output isn't a terminal. Everything reads fine without
+color.
 
-Values are classified before reaching Rich. Styling neither changes exit status
-nor carries essential information.
+Sensitive values are masked before any styling is applied. Styling never
+changes the exit status, and color never carries information you'd miss
+without it.

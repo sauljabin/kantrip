@@ -7,11 +7,11 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <title>Kantrip: switch Kafka profiles like magic</title>
-<meta name="description" content="Kantrip securely manages Kafka profiles for kcat, the Apache Kafka and Confluent CLIs, Kaskade, kaf, kcl, and your own applications, keeping secrets in a dedicated vault in the OS credential store.">
+<meta name="description" content="Save a Kafka connection once and use it with kcat, the Apache Kafka and Confluent CLIs, Kaskade, kaf, kcl, and your own programs. Secrets stay in a dedicated vault in your OS credential store.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kantrip">
 <meta property="og:title" content="Kantrip: switch Kafka profiles like magic">
-<meta property="og:description" content="Secure Kafka profiles for kcat, the Kafka CLIs, Kaskade, kaf, and kcl, with secrets in a dedicated OS credential vault.">
+<meta property="og:description" content="Kafka connection profiles for kcat, the Kafka CLIs, Kaskade, kaf, and kcl, with secrets kept in a dedicated OS credential vault.">
 <meta property="og:url" content="https://sauljabin.github.io/kantrip/">
 <meta property="og:image" content="https://sauljabin.github.io/kantrip/social-preview.png">
 <meta property="og:image:width" content="1280">
@@ -55,12 +55,10 @@
 <span class="t-title">    |_|\_\__,_|_| |_|\__|_|  |_| .__/     </span>
  <svg class="wand-mark" viewBox="0 0 24 20" aria-hidden="true" focusable="false"><path class="wand-handle" d="M1.8 10H12"/><path class="wand-tip" d="M18 16V4M12.8 13L23.2 7M23.2 13L12.8 7"/></svg><span class="t-secondary"> switch kafka profiles like </span><span class="t-title">|_|</span><span class="t-secondary"> magic</span>  </span></pre>
     </div>
-    <p class="lede">Kantrip securely manages Kafka profiles for kcat, the Apache Kafka and
-      Confluent CLIs, Kaskade, kaf, kcl, and applications you run with <code>kantrip exec</code>,
-      over plaintext, verified TLS, SASL/PLAIN, SCRAM, mTLS, or OAuth where the client supports
-      it. Save a profile once, keep its secrets in Kantrip's own vault in your operating
-      system's credential store, and run your usual clients inside a scoped, supervised
-      session.</p>
+    <p class="lede">Describe a Kafka cluster once, then run kcat, the Apache Kafka and
+      Confluent CLIs, Kaskade, kaf, or kcl against it with <code>kantrip exec</code>. Each
+      client gets its own config for that run, and the secrets stay in Kantrip's own vault in
+      your operating system's credential store.</p>
     <div class="install">
       <div class="window install-window">
         <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">install</span></div>
@@ -73,16 +71,16 @@
     </div>
     <p class="release" data-release><span class="release-label">latest release</span>
       <a href="https://github.com/sauljabin/kantrip/releases">on GitHub</a></p>
-    <p class="note">Pre-release for macOS and Linux: commands, output, and stored profiles may
-      change before v0.1.0. See <a href="https://github.com/sauljabin/kantrip/releases">Releases</a>.</p>
+    <p class="note">Pre-release, for macOS and Linux. Commands, output, and stored profiles
+      may change before v0.1.0. See <a href="https://github.com/sauljabin/kantrip/releases">Releases</a>.</p>
   </section>
 
   <section id="demo" class="container section" aria-labelledby="demo-title">
     <h2 id="demo-title">A session, start to finish</h2>
     <p>Add a SCRAM profile over verified TLS, check it, create a topic with the Kafka CLIs,
-      and list it from an interactive session.
-      The password prompt shows nothing, and the secret never reaches the profile, the
-      command line, or the output. Inside the session, your own prompt can
+      then list topics from a subshell. The password prompt doesn't echo, and the password
+      never shows up in the profile, the command line, or the output. Inside the subshell,
+      your prompt can
       <a href="https://github.com/sauljabin/kantrip/blob/main/USAGE.md#displaying-the-active-profile-in-your-prompt">show the active profile</a>.</p>
     <figure class="window demo" data-demo aria-label="Terminal demo">
       <div class="window-bar" aria-hidden="true"><span class="dots"><i></i><i></i><i></i></span><span class="window-title">kantrip demo</span></div>
@@ -113,24 +111,26 @@
     <ul class="cards">
       <li class="card">
         <h3>Secrets stay in the OS store</h3>
-        <p>Passwords and client secrets are collected without echo, private keys are read from
-          files, and all of them are stored in Kantrip's own vault: a dedicated macOS keychain, or a dedicated GNOME Keyring or KDE
-          Wallet collection on Linux. They never appear in profile documents,
-          command arguments, or <code>describe</code> output.</p>
+        <p>You type passwords and client secrets at a prompt that doesn't echo, and private
+          keys are read from files. All of them go into Kantrip's own vault: a dedicated
+          keychain on macOS, or a dedicated GNOME Keyring or KDE Wallet collection on Linux.
+          They never appear in the profile, in command arguments, or in
+          <code>describe</code> output.</p>
         <p class="card-command" aria-hidden="true">kantrip add prod</p>
       </li>
       <li class="card">
-        <h3>One profile for every client</h3>
-        <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's schema console clients,
-          Kaskade, kaf, and kcl each receive private configuration generated from the same profile, with
-          connection overrides blocked.</p>
+        <h3>One profile, every client</h3>
+        <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's Schema Registry consoles,
+          Kaskade, kaf, and kcl each get their own config generated from the same profile.
+          Arguments that would point them at another cluster are rejected.</p>
         <p class="card-command" aria-hidden="true">kantrip exec prod -- kcat -L</p>
       </li>
       <li class="card">
-        <h3>Supervised, self-cleaning sessions</h3>
-        <p>Commands and Bash, Zsh, or Fish subshells run supervised, with signals forwarded and
-          exit codes preserved. Private session files are cleaned up, and stale sessions are
-          recovered automatically or with <code>kantrip doctor --repair</code>.</p>
+        <h3>Sessions clean up after themselves</h3>
+        <p>Commands and Bash, Zsh, or Fish subshells run under Kantrip, which forwards signals
+          and keeps the exit code. The session's files are deleted when it ends. If a crash
+          leaves some behind, a later run or <code>kantrip doctor --repair</code> removes
+          them.</p>
         <p class="card-command" aria-hidden="true">kantrip doctor --repair</p>
       </li>
     </ul>
@@ -159,8 +159,8 @@
       </div>
       <div>
         <dt><code>kaf</code></dt>
-        <dd>Topics, consumer groups, produce, and consume, with a private one-cluster
-          configuration and Confluent-compatible Avro. No Kafka OAuth.</dd>
+        <dd>Topics, consumer groups, produce, and consume, with Confluent-compatible Avro.
+          No Kafka OAuth.</dd>
       </div>
       <div>
         <dt><code>kcl</code></dt>
@@ -169,10 +169,10 @@
           OAuth.</dd>
       </div>
     </dl>
-    <p>Kafka connections use plaintext, verified TLS, SASL/PLAIN, SCRAM-SHA-256,
-      SCRAM-SHA-512, mTLS, or OAuth, and authentication always requires verified TLS;
-      registries use Confluent Schema Registry or Apicurio.
-      Interactive sessions support Bash, Zsh, and Fish. The
+    <p>Kafka connections can be plaintext or verified TLS, with SASL/PLAIN, SCRAM-SHA-256,
+      SCRAM-SHA-512, mTLS, or OAuth. Authentication always requires verified TLS. The
+      Registry can be Confluent Schema Registry or Apicurio, and subshells can be Bash, Zsh,
+      or Fish. The
       <a href="https://github.com/sauljabin/kantrip/blob/main/COMPATIBILITY.md">compatibility guide</a>
       lists versions and limits.</p>
   </section>
@@ -183,27 +183,27 @@
       <div>
         <h3>What Kantrip does</h3>
         <ul class="checks">
-          <li>Stores secrets only in its own vault, which does not unlock with your login, and
-            rejects other credential stores.</li>
-          <li>Keeps references, never values, in profiles; <code>describe</code> never reads
-            the credential store, and <code>doctor</code> checks that each credential is stored.</li>
-          <li>Requires verified TLS for Kafka authentication; certificate and hostname checks
-            cannot be disabled.</li>
-          <li>Writes client configuration to a private session directory, never to command
-            arguments, and removes it when the session ends.</li>
+          <li>Stores secrets only in its own vault, which doesn't unlock when you log in. It
+            won't use any other credential store.</li>
+          <li>Profiles hold references to secrets, never the values. <code>describe</code>
+            never reads the vault; <code>doctor</code> checks that each secret is there.</li>
+          <li>Kafka authentication requires verified TLS, and certificate and hostname checks
+            can't be turned off.</li>
+          <li>Client configuration goes into a private session directory, never into command
+            arguments, and is removed when the session ends.</li>
         </ul>
       </div>
       <div>
         <h3>What it cannot do</h3>
         <ul class="limits">
-          <li>The client you run receives usable credentials; Kantrip cannot control what it
-            does with them or what it prints.</li>
-          <li>Malware running as your user, or an unlocked or compromised credential store, can
-            read your secrets.</li>
-          <li><code>kantrip ping</code> proves the connection and authentication, not access to
-            topics, groups, or schemas.</li>
-          <li>A process that daemonizes can escape supervision, and a crash can leave private
-            files until the next cleanup.</li>
+          <li>The client you run gets working credentials. Kantrip can't control what it does
+            with them or what it prints.</li>
+          <li>Malware running as your user, or anything that can read an unlocked or
+            compromised credential store, can read your secrets.</li>
+          <li><code>kantrip ping</code> shows that you can connect and authenticate, not that
+            you can read topics, groups, or schemas.</li>
+          <li>A process that daemonizes escapes supervision, and a crash can leave private
+            files behind until the next cleanup.</li>
         </ul>
       </div>
     </div>
@@ -227,8 +227,8 @@
       </ul>
     </nav>
     <p>Kantrip is <a href="https://github.com/sauljabin/kantrip/blob/main/LICENSE">MIT licensed</a>
-      pre-release software. This site sets no cookies and loads nothing from third parties; it
-      only asks the GitHub API for the latest release.</p>
+      pre-release software. This site sets no cookies. The only outside request it makes is
+      to the GitHub API, for the latest release number.</p>
   </div>
 </footer>
 </body>

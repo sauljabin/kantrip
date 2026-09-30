@@ -50,7 +50,7 @@ credential vaults are faked.
 
 ## Sandbox and E2E tests
 
-The E2E suite runs every supported client against a real Kafka laboratory with
+The E2E suite runs every supported client against a real Kafka setup with
 the candidate wheel.
 
 ### Start the sandbox

@@ -1,8 +1,8 @@
 # Compatibility
 
-Use this guide to choose clients, connection methods, and file formats supported
-by the current Kantrip commands. See [Usage](USAGE.md) for command examples and
-configuration instructions.
+Which clients, connection methods, and file formats the current version of
+Kantrip supports, and where each one stops. [Usage](USAGE.md) has the command
+examples.
 
 ## Contents
 
@@ -15,24 +15,25 @@ configuration instructions.
 
 ## Client commands
 
-Kantrip recognizes commands by executable basename. [Apache Kafka's Unix binary
-archives](https://kafka.apache.org/quickstart/) name their command scripts with a
-`.sh` suffix. [Confluent Platform](https://docs.confluent.io/kafka/operations-tools/kafka-tools.html)
-installs the corresponding Kafka commands without `.sh` in
-`$CONFLUENT_HOME/bin`, alongside additional Confluent-only commands. Kantrip
-recognizes both names for the seven shared Kafka commands; the six
+Kantrip recognizes a client by the name of its executable, following symlinks
+as described in [Short command names](USAGE.md#short-command-names).
+[Apache Kafka's binary archives](https://kafka.apache.org/quickstart/) name their
+scripts with a `.sh` suffix.
+[Confluent Platform](https://docs.confluent.io/kafka/operations-tools/kafka-tools.html)
+installs the same Kafka commands without `.sh` in `$CONFLUENT_HOME/bin`, next to
+its own extra commands. Kantrip accepts both names for the seven shared Kafka
+commands. The six
 [Schema Registry console commands](https://github.com/confluentinc/schema-registry/tree/master/bin)
-are Confluent commands and are unsuffixed.
+come only with Confluent and have no suffix.
 
-Apache Kafka 2.6 is the oldest CLI surface Kantrip guarantees; newer clients can
-connect to older brokers subject to Apache Kafka's normal client/broker
-compatibility.
+The oldest supported Kafka CLI is Apache Kafka 2.6. Newer clients can talk to
+older brokers as far as Kafka's usual client/broker compatibility allows.
 
-Before every launch, from a direct command or a session shim, Kantrip reads the
-installed client's version once and rejects a release older than its minimum.
-`kantrip doctor` reports the same result for each installed client. There is no
-upper bound. Some profile features need a newer release than the minimum;
-those checks use the same version result:
+Before every launch, whether you run the client directly or from a subshell,
+Kantrip reads the installed client's version once and refuses a release older
+than the minimum. `kantrip doctor` shows the same result for each installed
+client. Some profile features need a newer release than the minimum, and those
+checks use the same version:
 
 | Client | Minimum version | Also checked for some profiles |
 | --- | --- | --- |
@@ -44,77 +45,84 @@ those checks use the same version result:
 | `kaf` | kaf 0.2.14 | None |
 | `kcl` | kcl 0.20.0 | None |
 
+kcat, Kaskade, kaf, and kcl have no upper version limit. The Java CLIs do:
+Kantrip tells Apache Kafka from Confluent Platform by the major version, and
+recognizes Apache Kafka 2 to 4 and Confluent Platform 5 to 8. A release with
+any other major version, such as Apache Kafka 5 or Confluent Platform 9, fails
+the check.
+
 Java releases may carry Confluent's `-ccs` or `-ce` suffix. For the other
-clients, a suffixed build, such as a development or pre-release one, fails the
-check. Kafka 4 brokers also need librdkafka 2.6.1 or newer for SCRAM. Kantrip
-does not check that one, because it does not know the broker's version.
+clients, a version with a suffix, such as a development or pre-release build,
+fails the check. SCRAM against Kafka 4 brokers also needs librdkafka 2.6.1 or
+newer. Kantrip doesn't check that one, because it doesn't know the broker's
+version.
 
-Interactive sessions support Bash, Zsh, and Fish on Linux and macOS. Kantrip
-loads normal user startup configuration and history, then restores its temporary
-adapter executables after startup-time aliases, functions, abbreviations, and
-`PATH` changes. When `SHELL` is unset, an installed Bash is used. Other shells
-are not supported.
+Subshells can be Bash, Zsh, or Fish, on Linux and macOS. Your usual startup
+files and history load, and then Kantrip puts its temporary client wrappers
+back in front of any aliases, functions, abbreviations, or `PATH` changes they
+made. When `SHELL` is unset, Kantrip uses Bash. Other shells aren't supported.
 
-Direct commands run in an isolated POSIX process group, while supported
-interactive shells use a PTY-owned session with terminal resizing and job
-control. Signal forwarding and stale-session recovery apply identically to every
-adapter. Detached processes and children that create a new POSIX session remain
-outside the supported lifecycle.
+A one-off command runs in its own POSIX process group. A subshell runs on a
+PTY, so resizing and job control work. Signal forwarding and stale-session
+cleanup work the same for every client. Detached processes, and children that
+start a new POSIX session, are outside what Kantrip supervises.
 
-| Supported executable(s) | Distribution | CLI version | Kafka behavior | Registry support | Notes |
+| Supported executable(s) | Distribution | Accepted versions | Kafka behavior | Registry support | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `kafka-console-consumer.sh` / `kafka-console-consumer` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Consume records | No | Injects `--bootstrap-server` and `--consumer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
-| `kafka-console-producer.sh` / `kafka-console-producer` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Produce records | No | Injects `--bootstrap-server` and `--producer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
-| `kafka-topics.sh` / `kafka-topics` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Create, list, describe, alter, and delete topics | No | Injects `--bootstrap-server` and `--command-config`. |
-| `kafka-consumer-groups.sh` / `kafka-consumer-groups` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Inspect and manage consumer groups | No | Injects `--bootstrap-server` and `--command-config`. |
-| `kafka-configs.sh` / `kafka-configs` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Inspect and alter supported dynamic configurations | No | Injects `--bootstrap-server` and `--command-config`; broker authorization still applies. |
-| `kafka-acls.sh` / `kafka-acls` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | List, add, and remove ACLs | No | Injects `--bootstrap-server` and `--command-config`; requires a configured authorizer and an authorized principal. |
-| `kafka-broker-api-versions.sh` / `kafka-broker-api-versions` | Apache / Confluent | Kafka 2.6–4.3; Confluent Platform 6.0–8.3 | Inspect broker protocol versions | No | Injects `--bootstrap-server` and `--command-config`. |
-| `kafka-avro-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Avro records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-avro-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Avro records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kafka-json-schema-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume JSON Schema records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-json-schema-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kafka-protobuf-console-consumer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-protobuf-console-producer` | Confluent | Confluent Platform / Schema Registry 5.5–8.3 | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-console-consumer.sh` / `kafka-console-consumer` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Consume records | No | Injects `--bootstrap-server` and `--consumer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
+| `kafka-console-producer.sh` / `kafka-console-producer` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Produce records | No | Injects `--bootstrap-server` and `--producer.config`; Kafka 4.3 deprecates the config flag ahead of its planned Kafka 5.0 removal. |
+| `kafka-topics.sh` / `kafka-topics` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Create, list, describe, alter, and delete topics | No | Injects `--bootstrap-server` and `--command-config`. |
+| `kafka-consumer-groups.sh` / `kafka-consumer-groups` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Inspect and manage consumer groups | No | Injects `--bootstrap-server` and `--command-config`. |
+| `kafka-configs.sh` / `kafka-configs` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Inspect and alter supported dynamic configurations | No | Injects `--bootstrap-server` and `--command-config`; broker authorization still applies. |
+| `kafka-acls.sh` / `kafka-acls` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | List, add, and remove ACLs | No | Injects `--bootstrap-server` and `--command-config`; requires a configured authorizer and an authorized principal. |
+| `kafka-broker-api-versions.sh` / `kafka-broker-api-versions` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Inspect broker protocol versions | No | Injects `--bootstrap-server` and `--command-config`. |
+| `kafka-avro-console-consumer` | Confluent | Confluent Platform 5.5–8.x | Consume Avro records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-avro-console-producer` | Confluent | Confluent Platform 5.5–8.x | Produce Avro records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-json-schema-console-consumer` | Confluent | Confluent Platform 5.5–8.x | Consume JSON Schema records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-json-schema-console-producer` | Confluent | Confluent Platform 5.5–8.x | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-protobuf-console-consumer` | Confluent | Confluent Platform 5.5–8.x | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-protobuf-console-producer` | Confluent | Confluent Platform 5.5–8.x | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kcat` / `kafkacat` | kcat | kcat 1.7.0+; librdkafka 2.6.1+ for SCRAM against Kafka 4, 2.11.0+ for OAuth with a custom token-endpoint CA | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
 | `kaf` | kaf | kaf 0.2.14+ | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. No Kafka OAuth. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
 | `kcl` | kcl | kcl 0.20.0+ | Topics, groups, cluster administration, produce, consume, and Registry administration | Confluent-compatible | Uses a private TOML file through `KCL_CONFIG_PATH` and removes inherited `KCL_*` variables. `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` keys other than the three timeouts, and `kcl profile` commands are rejected. No Kafka OAuth. Registry OAuth and native Apicurio fail before launch. |
 | `kaskade` | Kaskade | Kaskade 5.0.1+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed; other Kafka, config-file, and registry connection overrides are rejected. |
 
-“Profile-aware” means Kantrip maps the selected profile into the command. The
-Confluent console clients and kcat require `--registry-provider confluent`. This includes
-Apicurio's `/apis/ccompat/v7` endpoint, which uses Confluent framing. Native
-Apicurio `/apis/registry/v3` profiles work only with Kaskade registry
-deserializers and use Apicurio's default `contentId` framing.
+The Confluent console clients and kcat need a profile with
+`--registry-provider confluent`. That includes Apicurio's `/apis/ccompat/v7`
+endpoint, which uses Confluent's framing. Native Apicurio profiles
+(`/apis/registry/v3`) work only with Kaskade's Registry deserializers, using
+Apicurio's default `contentId` framing.
 
-Every listed Kafka adapter supports plaintext, verified TLS, SASL/PLAIN,
-SCRAM-SHA-256, SCRAM-SHA-512, and mTLS; kaf and kcl receive an encrypted mTLS
-key decrypted into a private session file. Authentication always requires verified
-TLS. TLS uses each client's default trust store
-unless a validated custom PEM CA is copied from the profile into each private
-session. The
-librdkafka adapters (`kcat`, `kafkacat`, and Kaskade) support that PEM directly.
-Java adapters
-require [Apache Kafka 2.7+](https://kafka.apache.org/27/security/encryption-and-authentication-using-ssl/)
-or Confluent Platform 6.1+, where native PEM trust stores became available;
-Kantrip checks the installed client version and fails before the Kafka operation
-when support cannot be verified. Kafka 2.6 and Confluent Platform 6.0 remain
-supported with default client trust. Native OAuth requires Apache Kafka 4.1+
-or Confluent Platform 8.1+ for Java commands, whose client-credentials
-properties Kantrip uses, and an OIDC-capable librdkafka client; kaf has no OAuth mapping
+Every client in the table supports plaintext, verified TLS, SASL/PLAIN,
+SCRAM-SHA-256, SCRAM-SHA-512, and mTLS. kaf and kcl can't read encrypted mTLS
+keys, so they get a decrypted copy in a private session file. Authentication
+always requires verified TLS.
+
+TLS uses each client's default trust store, unless the profile has a custom PEM
+CA; Kantrip validates it and copies it into each private session. The
+librdkafka clients (`kcat`, `kafkacat`, and Kaskade) read that PEM directly.
+Java clients need
+[Apache Kafka 2.7+](https://kafka.apache.org/27/security/encryption-and-authentication-using-ssl/)
+or Confluent Platform 6.1+, the first releases with PEM trust stores. Kantrip
+checks the installed version and stops before the Kafka operation if it can't
+confirm support. Kafka 2.6 and Confluent Platform 6.0 still work with their
+default trust.
+
+Kafka OAuth needs Apache Kafka 4.1+ or Confluent Platform 8.1+ for the Java
+commands, because Kantrip uses their client-credentials properties, and a
+librdkafka build with OIDC support for the others. kaf has no OAuth mapping,
 because its token client can't use the profile's token-endpoint CA, and kcl has
-no OAuth mechanism. Unsupported
-authentication is rejected before the requested operation.
+no OAuth mechanism. Unsupported authentication fails before the requested
+operation.
 
-Registry connections may use unauthenticated HTTP, or verified HTTPS with
-independent Basic, fixed-token, mTLS, or OAuth credentials. Each adapter admits
-only mappings exposed safely by that concrete client; unsupported combinations
-fail before launch. Kantrip rejects missing, provider-incompatible, and
-caller-supplied Registry settings before starting the affected client mode.
-Bash, Zsh, and Fish sessions
-apply the same checks through temporary adapters. The session removes reserved
-connection namespaces and known sandbox credentials before launch and restores
-its owned values after shell startup; see [environment precedence](USAGE.md#environment-precedence).
+The Registry can be plain HTTP without authentication, or verified HTTPS with
+its own Basic, fixed-token, mTLS, or OAuth credentials. Each client gets only
+the settings it can take safely, and any other combination fails before
+launch. So does a missing Registry, one from the wrong provider, or Registry
+settings passed on the command line. Bash, Zsh, and Fish sessions run the same
+checks through their temporary wrappers. A session removes reserved connection
+variables and known sandbox credentials before launch, and puts its own values
+back after shell startup; see [environment precedence](USAGE.md#environment-precedence).
 
 ## Kafka transport and authentication
 
@@ -142,18 +150,21 @@ its owned values after shell startup; see [environment precedence](USAGE.md#envi
 | Kafka credential inheritance / URL credentials | Rejected |
 
 Registry ping uses `GET /subjects?limit=1` for Confluent-compatible APIs and
-`GET /search/versions?limit=1` for native Apicurio v3. Confluent authorization
-classifies subject listing as `GLOBAL_READ`, not `SCHEMA_READ`; standard
-Apicurio RBAC permits version search to `sr-readonly`, `sr-developer`, and
-`sr-admin`. Authenticated profiles also require the same query to reject an
-anonymous request with 401/403 (or reject a missing client certificate for
-mTLS). A valid empty result succeeds and does not prove access to a particular
-schema. Proxies must allow the selected endpoint; no fallback probes
-`/users/me`, `/system/info`, `/schemas/types`, or artifact search. Kafka ping
-uses broker connection state and does not request topics, groups, schemas, or
-cluster descriptions. Neither probe proves write authorization. `doctor PROFILE` scopes profile checks and
-`doctor` attributes sessions by profile UUID and revision. `kafkactl` has no automatic
-adapter, even though an arbitrary executable can run as a supervised child.
+`GET /search/versions?limit=1` for native Apicurio v3. Confluent's authorization
+treats subject listing as `GLOBAL_READ`, not `SCHEMA_READ`; standard Apicurio
+RBAC allows version search for `sr-readonly`, `sr-developer`, and `sr-admin`.
+For an authenticated profile, the same query must also be refused with 401/403
+when sent without credentials (for mTLS, without a client certificate). A valid
+empty result counts as success and says nothing about access to a particular
+schema. A proxy in front of the Registry must allow that endpoint: there's no
+fallback to `/users/me`, `/system/info`, `/schemas/types`, or artifact search.
+Kafka ping looks only at broker connection state and doesn't request topics,
+groups, schemas, or cluster descriptions. Neither check proves write access.
+
+`doctor PROFILE` limits the profile checks to one profile, and `doctor` labels
+each session with its profile UUID and revision. There's no adapter for
+`kafkactl`, though you can still run it, like any other program, under
+`kantrip exec`.
 
 ## Credential storage
 
@@ -173,9 +184,9 @@ Frameworks 6.24 (`ksecretd`). See [Credential vault](USAGE.md#credential-vault).
 
 ## File formats
 
-| Format | Current accepted input | Current generated output / role |
+| Format | Accepted as input | What Kantrip generates |
 | --- | --- | --- |
-| JSON / YAML observations | No profile import or round-trip export | `list` / `describe` safe observations |
+| JSON / YAML | No profile import or round-trip export | `list` and `describe` output, without secrets |
 | Public PEM CA | Kafka, Registry, and OAuth CA file options | Validated public profile material; independent session-owned CA files |
 | Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the [credential store](#credential-storage) and private session files |
 | Java Kafka `.properties` | No file import | Private Java client session configuration |
@@ -190,8 +201,8 @@ Frameworks 6.24 (`ksecretd`). See [Credential vault](USAGE.md#credential-vault).
 
 ## Installing supported commands
 
-Kantrip does not install client programs. Install the relevant distribution and
-put its `bin` directory on `PATH` before running `kantrip exec`.
+Kantrip doesn't install clients. Install the ones you need and put their `bin`
+directory on `PATH` before running `kantrip exec`.
 
 | Commands | macOS | Linux |
 | --- | --- | --- |
@@ -202,8 +213,7 @@ put its `bin` directory on `PATH` before running `kantrip exec`.
 | `kcl` | Download `kcl_darwin_arm64.gz` or `kcl_darwin_amd64.gz` from [kcl releases](https://github.com/twmb/kcl/releases), decompress it as `kcl`, make it executable, and put it on `PATH`. | Download `kcl_linux_amd64.gz` or `kcl_linux_arm64.gz` from [kcl releases](https://github.com/twmb/kcl/releases), decompress it as `kcl`, make it executable, and put it on `PATH`. |
 | `kaskade` | `brew install kaskade` or `pipx install kaskade` | `pipx install kaskade`; see the [Kaskade installation guide](https://github.com/sauljabin/kaskade#installation). |
 
-The Confluent archive contains both its unsuffixed Kafka scripts and the Schema
-Registry console scripts in `$CONFLUENT_HOME/bin`; installing the standalone
-`confluent` management CLI does not provide these Java console clients. Keep the
-client version aligned with the Confluent Platform/Schema Registry release you
-use.
+The Confluent archive has both the unsuffixed Kafka scripts and the Schema
+Registry console scripts in `$CONFLUENT_HOME/bin`. The standalone `confluent`
+management CLI doesn't include these Java console clients. Use a client version
+that matches your Confluent Platform or Schema Registry release.

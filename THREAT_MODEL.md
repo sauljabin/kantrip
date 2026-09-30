@@ -1,17 +1,17 @@
 # Threat Model
 
-This developer security analysis follows the boundaries and decisions in
-[Architecture](ARCHITECTURE.md). It covers the implemented profile store, shared
-credential lifecycle, authenticated Kafka execution, and local diagnostics.
-Secure Registry and OAuth connections use typed profiles, independent trust and
-credentials, private generated files, bounded authenticated probes, and
-client-specific capability checks. Schema acceptance alone is not an end-to-end security guarantee. See
+What Kantrip protects, what it trusts, and what it can't defend against. It
+builds on the design in [Architecture](ARCHITECTURE.md) and covers what exists
+today: the profile store, the credential lifecycle, running authenticated Kafka
+and Registry clients, and local diagnostics. A profile that passes schema
+validation isn't automatically safe end to end: whether a client can use a
+given Registry or OAuth setup safely depends on the per-client checks listed in
 [Compatibility](COMPATIBILITY.md).
 
-Kantrip reduces accidental disclosure, profile confusion, unsafe connection
-overrides, and abandoned secret-bearing artifacts. It does not make an
-untrusted command safe and does not defend against a compromised operating
-system or user account.
+Kantrip makes it harder to leak a secret by accident, to run a command against
+the wrong profile, to override a profile's connection unsafely, or to leave
+secret-bearing files behind. It doesn't make an untrusted command safe, and it
+doesn't defend against a compromised operating system or user account.
 
 ## Contents
 
@@ -41,7 +41,7 @@ system or user account.
 
 ## Security objectives
 
-Kantrip aims to preserve these properties:
+Kantrip tries to keep these true:
 
 - Every Kafka connection is associated with an explicitly selected profile.
 - Long-lived secrets are absent from the profile database, argv, logs,
@@ -55,14 +55,16 @@ Kantrip aims to preserve these properties:
 - Profile mutations leave either the previous usable profile or the new usable
   profile, with incomplete cleanup recorded for retry.
 
-These objectives protect credential handling and connection selection. They do
-not guarantee the behavior, integrity, authorization, or data handling of the
-external client or remote service.
+They cover how credentials are handled and which connection is used. They say
+nothing about how the client or the remote service behaves, what it's
+authorized to do, or what it does with your data.
 
 ## Protected assets
 
-- Kafka PLAIN and SCRAM passwords.
-- mTLS private keys and private-key passwords.
+- Kafka PLAIN and SCRAM passwords and OAuth client secrets.
+- Registry Basic passwords, fixed bearer tokens, and OAuth client secrets.
+- Kafka and Registry mTLS private keys and private-key passwords.
+- OAuth access tokens obtained by `ping` or by the client.
 - Profile-to-broker, Registry, certificate, and secret-reference associations.
 - Migration history, checksums, internal sequence, and private pre-migration
   backups.
@@ -100,8 +102,8 @@ Kantrip treats as untrusted until validated:
 - Kafka brokers until configured server TLS verification succeeds; plaintext
   Kafka and HTTP Registry connections do not verify server identity.
 
-Remote authorization policy remains outside Kantrip. A valid identity can still
-be denied access by broker ACLs, Registry permissions, or identity-provider
+Authorization happens on the server, outside Kantrip. A valid identity can
+still be denied by broker ACLs, Registry permissions, or identity-provider
 policy.
 
 ## Trust boundaries and entry points
@@ -111,10 +113,11 @@ policy.
 Each JSON profile document crosses from the private SQLite database through
 schema validation and typed parsing. Secret references become usable only after
 the configured credential backend is approved and each exact reference
-resolves. Kafka authentication references must belong to that profile and the
-expected fully qualified field. PLAIN and SCRAM passwords, mTLS private keys,
-and optional key passwords never enter the profile document; public client
-certificate chains do and are checked against the resolved key before use.
+resolves. Kafka and Registry secret references must belong to that profile and
+the expected fully qualified field. Passwords, fixed tokens, OAuth client
+secrets, mTLS private keys, and optional key passwords never enter the profile
+document; public client certificate chains do and are checked against the
+resolved key before use.
 
 ### Credential vault boundary
 
@@ -141,9 +144,9 @@ timeout and `Prompt.Dismiss()`. See
 
 ### Execution boundary
 
-Kantrip crosses from protected state into a trusted child when it creates the
-child-only environment and private generated files. After that handoff, the
-child can read, copy, print, transmit, or retain the supplied values.
+Secrets leave Kantrip's control when it builds the child's environment and
+writes the private generated files. From then on, the child can read, copy,
+print, send, or keep them.
 
 ### Network boundary
 
@@ -505,21 +508,24 @@ filesystem, or a hostile same-user process can prevent operation.
 
 ## Security strengths
 
-- Explicit profile selection materially reduces accidental cross-environment
-  operations.
-- Long-lived secrets are isolated from portable profile metadata.
-- Typed normalization and allowlisted rendering reduce configuration injection
-  and prevent topic-specific behavior from leaking between applications.
-- Fail-closed capability checks favor confidentiality and integrity over broad
-  client compatibility.
-- Native Kafka clients avoid a custom Kafka protocol stack; shared SASL/TLS
-  renderers and per-client adapter descriptors keep adapter decisions explicit.
-- Recoverable cross-store updates and lock-based crash cleanup address failure
-  modes commonly omitted from local credential wrappers.
-- Ordered migration history and fail-closed checksum validation make schema
-  evolution explicit without coupling it to product releases.
-- Kafka and Registry security are modeled independently, reducing credential
-  reuse and accidental identity inheritance.
+- Naming the profile on every command makes it much harder to run something
+  against the wrong environment by accident.
+- Long-lived secrets are kept apart from the profile metadata.
+- Profiles hold typed fields and each client gets only allowlisted settings,
+  which limits configuration injection and keeps topic-specific settings from
+  leaking between applications.
+- When Kantrip can't confirm a client supports a setting safely, it refuses to
+  run, choosing confidentiality and integrity over compatibility.
+- Kantrip uses the real Kafka clients rather than its own protocol stack. Shared
+  SASL/TLS renderers and one descriptor per client keep each client's handling
+  in one place.
+- Updates that span the database and the vault can be recovered, and crashed
+  sessions are cleaned up using their locks. Local credential wrappers often
+  skip both.
+- The migration history is ordered and checksummed and fails closed, so schema
+  changes are explicit and independent of product releases.
+- Kafka and Registry security are separate, so credentials aren't reused and one
+  identity isn't silently inherited by the other.
 
 ## Residual weaknesses
 
@@ -558,4 +564,5 @@ filesystem, or a hostile same-user process can prevent operation.
   conversion, and arbitrary secret-provider automation.
 - Guarantees of physical or forensic erasure.
 
-Report suspected failures of the stated controls according to `SECURITY.md`.
+If you think one of these controls fails, report it as described in
+[SECURITY.md](SECURITY.md).

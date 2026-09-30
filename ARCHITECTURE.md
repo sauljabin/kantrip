@@ -1,9 +1,8 @@
 # Architecture
 
-How Kantrip is built and why. This guide records the implemented design, its
-technical decisions, and its limits; [Compatibility](COMPATIBILITY.md) owns the
-exact client and version matrix, and [Threat Model](THREAT_MODEL.md) the
-security analysis. Planned work lives in the
+How Kantrip is built, why, and where it stops. The exact client and version
+matrix is in [Compatibility](COMPATIBILITY.md), and the security analysis in
+[Threat Model](THREAT_MODEL.md). Planned work is in the
 [v0.1](https://github.com/sauljabin/kantrip/milestone/1) milestone.
 
 ## Contents
@@ -41,21 +40,21 @@ For each command or subshell, the user names a profile. Kantrip then:
 
 ![Kantrip connection data flow](images/data-flow.svg)
 
-The resolved snapshot is released from the lock before rendering or any
-network call, so a later edit or removal cannot mix generations or invalidate
-credentials already in memory. Adapters and shims never read SQLite or the vault
-again during that session.
+The lock is released before rendering or any network call. The snapshot is
+already in memory by then, so a later edit or removal can't mix two generations
+or pull credentials out from under it. Adapters and shims never read SQLite or
+the vault again during that session.
 
-Kantrip prepares the connection; the selected client performs the Kafka or
-Registry operation. The CLI is resource-oriented: `add`, `edit`, `remove`,
-`list`, and `describe` manage profiles; `doctor`, `ping`, `exec`, and `current`
-diagnose, probe, run, and report sessions. Human, JSON, and YAML output are
-observations, never round-trip documents, and omit secret values and internal
-references.
+Kantrip only prepares the connection; the client does the actual Kafka or
+Registry work. `add`, `edit`, `remove`, `list`, and `describe` manage profiles;
+`doctor` diagnoses, `ping` probes, `exec` runs, and `current` reports the
+session. Human, JSON, and YAML output is for reading, not a document you can
+import again, and it leaves out secret values and internal references.
 
 ### Design rules
 
-These rules bound every feature and are checked before an operation starts:
+Every feature follows these rules, and they're checked before an operation
+starts:
 
 - **Explicit selection.** Every network command names `PROFILE`; there is no
   globally active profile.
@@ -69,9 +68,9 @@ These rules bound every feature and are checked before an operation starts:
   trust and credentials are configured separately and never inherited.
 - **Typed fields only.** Profiles accept no arbitrary Java or librdkafka
   property maps; only typed connection fields reach the renderers.
-- **Capability checks name the gap.** An unsupported client and mechanism
-  combination fails before the operation, naming both. Library support does not
-  imply that a CLI built on it exposes the setting.
+- **Unsupported combinations fail early.** A client and mechanism that don't
+  work together fail before the operation, and the error names both. A library
+  supporting a setting doesn't mean a CLI built on it exposes that setting.
 
 ### Out of scope
 
@@ -91,7 +90,7 @@ for clients with a versioned, tested contract.
 
 | Area | Modules | Responsibility |
 | --- | --- | --- |
-| CLI | `cli.py`, `cli_options.py`, `cli_inputs.py`, `console.py`, `profile_output.py`, `redaction.py` | Commands and presentation; `add`/`edit` options declared once per field; typed inputs and no-echo secret prompts; safe observations |
+| CLI | `cli.py`, `cli_options.py`, `cli_inputs.py`, `console.py`, `profile_output.py`, `redaction.py` | Commands and presentation; `add`/`edit` options declared once per field; typed inputs and no-echo secret prompts; output without secrets |
 | Profiles | `profiles.py`, `profile_storage.py`, `profile_auth.py`, `profile_documents.py` | Mutation orchestration and snapshot resolution; SQLite paths, locks, and loading; pure authentication and document planning |
 | Consistency | `credential_mutations.py`, `mutation_outcomes.py`, `reconciliation.py`, `migrations.py`, `maintenance.py` | Cross-store staging and retirement; commit classification; the cleanup journal; the migration chain; `doctor --repair` |
 | Credentials | `secret_store.py`, `macos_vault.py`, `linux_vault.py`, `secret_value.py` | The `SecretStore` protocol and its two vaults; `Secret`, which never renders itself |
@@ -234,8 +233,8 @@ dedicated-keychain model as aws-vault. `security create-keychain` and
 - **Unlocking** allows three attempts (exit status 51 is a wrong password);
   Ctrl-C leaves the vault locked and reports a cancellation.
 
-File keychains and `SecKeychain*` are deprecated but work on macOS 27; the macOS
-CI job would show their removal.
+File keychains and `SecKeychain*` are deprecated but still work on macOS 27;
+the macOS CI job would catch their removal.
 
 ### Linux Secret Service vault
 
@@ -319,7 +318,7 @@ stays in the private session directory, written with mode `0600`.
   client's.
 
 - **Custom CAs.** A selected CA bundle is validated and copied into the profile
-  as public material, then materialized per session. librdkafka uses native PEM
+  as public material, then written into each session. librdkafka uses native PEM
   properties; Java adapters first verify Apache Kafka 2.7+ or Confluent Platform
   6.1+, which introduced PEM trust stores, and fail otherwise.
 - **Kafka OAuth** acquisition and refresh are delegated to the Apache Java
@@ -517,23 +516,26 @@ the test touches it while waiting.
 
 Strengths:
 
-- Explicit profile selection prevents ambient context drift.
-- Long-lived secrets stay in a dedicated vault and are resolved only for the
-  selected execution.
-- One typed model and native renderers prevent dialect mixing and arbitrary
-  configuration passthrough; capability checks fail before authentication can
-  degrade.
-- Immutable references and reconciliation keep a usable profile across partial
-  vault failures; ordered, checksummed migrations with backups make schema
-  changes auditable.
-- Process boundaries, liveness locks, and recovery bound the life of temporary
-  secrets; native clients keep the Kafka protocol.
+- Every command names its profile, so there's no hidden global selection that
+  can drift from the cluster you think you're using.
+- Long-lived secrets stay in a dedicated vault and are read only for the
+  command being run.
+- One typed connection model with a renderer per client format keeps Java and
+  librdkafka settings from mixing, and leaves no way to pass arbitrary
+  properties through. Unsupported combinations fail before a weaker
+  authentication could be used.
+- Immutable references and the cleanup journal keep a working profile through
+  partial vault failures. Ordered, checksummed migrations with backups make
+  schema changes auditable.
+- Process groups, liveness locks, and cleanup limit how long temporary secrets
+  stay on disk. The real clients speak the Kafka protocol; Kantrip doesn't
+  implement it.
 
 Limitations:
 
-- Kantrip delivers credentials; it is not a sandbox. The client, its
-  descendants, and shell startup code can read what they receive, and
-  same-user, kernel, or administrator compromise defeats local controls.
+- Kantrip hands out credentials; it isn't a sandbox. The client, its
+  children, and shell startup code can read what they get, and a compromised
+  user account, kernel, or administrator defeats every local control.
 - Secrets live briefly in memory and private files; deletion is not forensic.
 - SQLite and vault updates are recoverable, not atomic; losing both the journal
   and the referenced state can leave undiscoverable orphans.
@@ -543,4 +545,5 @@ Limitations:
   only after logout. Its windows need an unlocked graphical session, and CI
   covers GNOME Keyring only.
 - Migrations are forward-only: an older Kantrip cannot open a newer database.
-- Compatibility depends on external client interfaces and the tested versions.
+- Compatibility depends on the clients' own interfaces and on the versions
+  that were tested.
