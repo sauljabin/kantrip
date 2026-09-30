@@ -214,7 +214,8 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 }:
                     self.assertTrue(record["registry_config_exists"], record)
                     self.assertEqual(0o600, record["registry_config_mode"])
-                    self.assertEqual("http://registry.invalid:8081", record["registry_url"])
+                    # The shim passes the URL as an argument; the shell exports none.
+                    self.assertIsNone(record["registry_url"])
                     self.assertIn(
                         "schema.registry.url=http://registry.invalid:8081\n",
                         record["config_contents"],

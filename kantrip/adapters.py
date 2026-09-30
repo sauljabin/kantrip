@@ -41,7 +41,9 @@ from kantrip.adapter_policy import (
     check_kaskade_arguments,
     check_kcat_arguments,
     check_kcl_arguments,
+    java_option_variables,
     prepare_java_command,
+    prepare_java_environment,
     prepare_kaf_command,
     prepare_kaf_environment,
     prepare_kaskade_command,
@@ -398,6 +400,7 @@ JAVA_CLI_ADAPTER = ClientAdapter(
     missing_command=_missing_java_command,
     minimum_version=JavaReleaseGate(),
     feature_checks=(_java_pem_support, _java_oauth_support),
+    prepare_environment=prepare_java_environment,
 )
 KAF_ADAPTER = ClientAdapter(
     "kaf",
@@ -511,7 +514,7 @@ def create_subshell_shims(
     *,
     bootstrap_servers: str,
     java_config_path: Path,
-    kcat_config_path: Path,
+    librdkafka_config_path: Path,
     kaskade_config_path: Path,
     kaskade_registry_config_path: Path,
     environment: Mapping[str, str],
@@ -528,7 +531,7 @@ def create_subshell_shims(
     configuration = ClientConfiguration(
         bootstrap_servers=bootstrap_servers,
         java_config=java_config_path,
-        kcat_config=kcat_config_path,
+        librdkafka_config=librdkafka_config_path,
         kaskade_config=kaskade_config_path,
         kaskade_registry_config=kaskade_registry_config_path,
         schema_registry_java_config=schema_registry_java_config_path,
@@ -782,6 +785,7 @@ __all__ = [
     "VersionProbe",
     "client_adapter",
     "create_subshell_shims",
+    "java_option_variables",
     "missing_command_message",
     "prepare_command",
     "prepare_command_environment",

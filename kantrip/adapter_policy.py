@@ -25,6 +25,7 @@ KCL_ENVIRONMENT_PREFIX = "KCL_"
 KCL_CONFIG_PATH_VARIABLE = "KCL_CONFIG_PATH"
 KCAT_EXECUTABLES = frozenset({"kcat", "kafkacat"})
 KCAT_CONFIG_VARIABLE = "KCAT_CONFIG"
+_JAVA_OPTION_VARIABLES = ("KAFKA_OPTS", "SCHEMA_REGISTRY_OPTS")
 KAFKA_CONSOLE_CONSUMER_EXECUTABLES = frozenset(
     {"kafka-console-consumer", "kafka-console-consumer.sh"}
 )
@@ -67,13 +68,15 @@ class ClientConfiguration:
 
     bootstrap_servers: str
     java_config: Path
-    kcat_config: Path
+    librdkafka_config: Path
     kaskade_config: Path
     kaskade_registry_config: Path
     schema_registry_java_config: Path | None = None
     registry_oauth_ssl_cert_file: Path | None = None
     kaf_config: Path | None = None
     kcl_config: Path | None = None
+    # JVM options Kafka's Java OAuth login needs; None without OAuth.
+    java_oauth_options: str | None = None
 
 
 @dataclass(frozen=True)
@@ -347,7 +350,22 @@ def prepare_kcat_environment(
     environment: MutableMapping[str, str], configuration: ClientConfiguration
 ) -> None:
     """Select the private librdkafka configuration through kcat's `KCAT_CONFIG`."""
-    environment[KCAT_CONFIG_VARIABLE] = str(configuration.kcat_config)
+    environment[KCAT_CONFIG_VARIABLE] = str(configuration.librdkafka_config)
+
+
+def java_option_variables(configuration: ClientConfiguration) -> dict[str, str]:
+    """Return the run-class JVM option variables the profile's Java OAuth login needs."""
+    options = configuration.java_oauth_options
+    if options is None:
+        return {}
+    return dict.fromkeys(_JAVA_OPTION_VARIABLES, options)
+
+
+def prepare_java_environment(
+    environment: MutableMapping[str, str], configuration: ClientConfiguration
+) -> None:
+    """Pass the OAuth JVM options to the Kafka and Schema Registry run-class scripts."""
+    environment.update(java_option_variables(configuration))
 
 
 def prepare_kaf_environment(
@@ -755,7 +773,9 @@ __all__ = [
     "check_kaskade_arguments",
     "check_kcat_arguments",
     "check_kcl_arguments",
+    "java_option_variables",
     "prepare_java_command",
+    "prepare_java_environment",
     "prepare_kaf_environment",
     "prepare_kaskade_command",
     "prepare_kcat_command",

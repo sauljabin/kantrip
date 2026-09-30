@@ -80,10 +80,12 @@
   data with its tests; update all three with schema changes. Release-bundled
   schemas are authoritative; profile documents omit application versions, and
   SQLite has its own version.
-- The environment documented in `USAGE.md` is the current contract. Use
-  `KAFKA_*` for application values and reserve `KANTRIP_*` for Kantrip-owned
-  profile and session metadata. Inject it only into supervised children, never
-  into the caller, and add no separate JSON schema for it.
+- The environment documented in `USAGE.md` is the current contract. Export
+  only what a supported client reads, the `*_CONFIG_FILE` paths of the private
+  config files, and `KANTRIP_*` session metadata; never connection values or
+  secrets. A client's own variable (such as `KCAT_CONFIG`) belongs to its
+  adapter and shim, not the shared environment. Inject it only into supervised
+  children, never into the caller, and add no separate JSON schema for it.
 - Store profiles in the private SQLite database resolved through
   `KANTRIP_DATABASE`, `XDG_DATA_HOME`, then the default data directory:
   directory `0700`, database and sidecars `0600`, WAL, and writes in bounded

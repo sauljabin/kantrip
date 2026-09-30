@@ -20,6 +20,7 @@ from kantrip.adapters import (
     ClientConfiguration,
     client_adapter,
     create_subshell_shims,
+    java_option_variables,
     missing_command_message,
     prepare_command,
     prepare_command_environment,
@@ -229,7 +230,6 @@ class _ClientFiles:
     """Rendered client configuration shared by adapters and the child environment."""
 
     configuration: ClientConfiguration
-    kcat_properties: Mapping[str, str]
     variables: Mapping[str, Path]
 
 
@@ -247,18 +247,12 @@ def _run_in_runtime(
     kafka_material = _plan_kafka_material(files, kafka)
     registry_material = _plan_registry_material(files, registry)
     clients = _plan_client_files(files, kafka, kafka_material, registry, registry_material)
-    child_environment = _child_environment(
-        runtime,
-        profile_name,
-        environment,
-        clients,
-        kafka,
-        registry,
-    )
+    child_environment = _child_environment(runtime, profile_name, environment)
     if not has_command or client_adapter(Path(executable).name) is None:
         # Shells and custom commands read every documented file variable.
         files.write_all()
         child_environment.update({name: str(path) for name, path in clients.variables.items()})
+        child_environment.update(java_option_variables(clients.configuration))
     try:
         if has_command:
             arguments = _prepare_command(
@@ -406,7 +400,7 @@ def _plan_client_files(
     registry_material: _RegistryMaterial,
 ) -> _ClientFiles:
     try:
-        kcat_properties = librdkafka_properties(
+        rdkafka_properties = librdkafka_properties(
             kafka,
             ca_location=kafka_material.ca,
             client_certificate_location=kafka_material.certificate,
@@ -432,29 +426,25 @@ def _plan_client_files(
         registry_material.certificate,
         registry_material.private_key,
     )
-    rendered_kafka = _render_properties(kcat_properties)
-    kcat_config = files.plan("kcat.conf", _text(rendered_kafka), *librdkafka_files)
+    rendered_kafka = _render_properties(rdkafka_properties)
+    librdkafka_config = files.plan(
+        "librdkafka.properties", _text(rendered_kafka), *librdkafka_files
+    )
     java_config_path = files.plan(
-        "kafka.properties", _text(_render_java_properties(java_config)), *java_files
+        "java.properties", _text(_render_java_properties(java_config)), *java_files
     )
     kaskade_config = files.plan(
         "kaskade.ini", _text(f"[kafka]\n{rendered_kafka}"), *librdkafka_files
     )
     kaskade_registry_config = files.directory / "kaskade-registry.ini"
-    schema_registry_java_config = files.directory / "schema-registry-kafka.properties"
+    schema_registry_java_config: Path | None = None
     variables = {
         "KAFKA_JAVA_CONFIG_FILE": java_config_path,
-        "KAFKA_LIBRDKAFKA_CONFIG_FILE": kcat_config,
-        "KCAT_CONFIG": kcat_config,
+        "KAFKA_LIBRDKAFKA_CONFIG_FILE": librdkafka_config,
     }
     if registry is not None:
         kaskade_registry = _render_properties(
             _registry_properties(kaskade_registry_properties, registry, registry_material)
-        )
-        console_registry = (
-            _registry_properties(confluent_console_properties, registry, registry_material)
-            if registry.provider != APICURIO_PROVIDER
-            else {}
         )
         files.plan(
             kaskade_registry_config.name,
@@ -462,30 +452,35 @@ def _plan_client_files(
             *librdkafka_files,
             *registry_files,
         )
-        # Confluent's Java serializers carry the Registry client key inline.
-        files.plan(
-            schema_registry_java_config.name,
-            _text(_render_java_properties(java_config | console_registry)),
-            *java_files,
-            registry_material.ca,
-        )
         prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
         variables[f"{prefix}_REGISTRY_CONFIG_FILE"] = files.plan(
             "registry.properties", _text(kaskade_registry), *registry_files
         )
+    if registry is not None and registry.provider != APICURIO_PROVIDER:
+        console_registry = _registry_properties(
+            confluent_console_properties, registry, registry_material
+        )
+        # Confluent's Java serializers carry the Registry client key inline.
+        schema_registry_java_config = files.plan(
+            "schema-registry-kafka.properties",
+            _text(_render_java_properties(java_config | console_registry)),
+            *java_files,
+            registry_material.ca,
+        )
         variables["SCHEMA_REGISTRY_KAFKA_CONFIG_FILE"] = schema_registry_java_config
     configuration = ClientConfiguration(
-        bootstrap_servers=kcat_properties["bootstrap.servers"],
+        bootstrap_servers=rdkafka_properties["bootstrap.servers"],
         java_config=java_config_path,
-        kcat_config=kcat_config,
+        librdkafka_config=librdkafka_config,
         kaskade_config=kaskade_config,
         kaskade_registry_config=kaskade_registry_config,
         schema_registry_java_config=schema_registry_java_config,
         registry_oauth_ssl_cert_file=registry_material.oauth_ca,
         kaf_config=_plan_kaf_config(files, kafka, kafka_material, registry),
         kcl_config=_plan_kcl_config(files, kafka, kafka_material, registry, registry_material),
+        java_oauth_options=_java_oauth_options(kafka, registry),
     )
-    return _ClientFiles(configuration, kcat_properties, variables)
+    return _ClientFiles(configuration, variables)
 
 
 def _plan_kaf_config(
@@ -660,9 +655,6 @@ def _child_environment(
     runtime: SessionRuntime,
     profile_name: str,
     environment: Mapping[str, str],
-    clients: _ClientFiles,
-    kafka: KafkaConnection,
-    registry: RegistryConnection | None,
 ) -> dict[str, str]:
     child_environment = {
         name: value
@@ -671,16 +663,16 @@ def _child_environment(
     }
     child_environment.update(
         {
-            "KAFKA_BOOTSTRAP_SERVERS": clients.kcat_properties["bootstrap.servers"],
-            "KAFKA_SECURITY_PROTOCOL": clients.kcat_properties["security.protocol"],
             "KANTRIP_PROFILE": profile_name,
             "KANTRIP_SESSION_DIR": str(runtime.path),
             "KANTRIP_SESSION_ID": runtime.session_id,
         }
     )
-    if registry is not None:
-        prefix = "APICURIO" if registry.provider == APICURIO_PROVIDER else "SCHEMA"
-        child_environment[f"{prefix}_REGISTRY_URL"] = registry.url
+    return child_environment
+
+
+def _java_oauth_options(kafka: KafkaConnection, registry: RegistryConnection | None) -> str | None:
+    """Return the JVM allowlist Kafka's Java OAuth login needs for the token endpoints."""
     allowed_oauth_urls: list[str] = []
     if kafka.auth_type == "oauth":
         assert kafka.oauth is not None
@@ -692,13 +684,11 @@ def _child_environment(
     ):
         assert registry.oauth is not None
         allowed_oauth_urls.append(registry.oauth.token_url)
-    if allowed_oauth_urls:
-        allowed_urls_property = "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=" + ",".join(
-            dict.fromkeys(allowed_oauth_urls)
-        )
-        child_environment["KAFKA_OPTS"] = allowed_urls_property
-        child_environment["SCHEMA_REGISTRY_OPTS"] = allowed_urls_property
-    return child_environment
+    if not allowed_oauth_urls:
+        return None
+    return "-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=" + ",".join(
+        dict.fromkeys(allowed_oauth_urls)
+    )
 
 
 def _prepare_subshell(
@@ -715,7 +705,7 @@ def _prepare_subshell(
         bootstrap_servers=configuration.bootstrap_servers,
         java_config_path=configuration.java_config,
         schema_registry_java_config_path=configuration.schema_registry_java_config,
-        kcat_config_path=configuration.kcat_config,
+        librdkafka_config_path=configuration.librdkafka_config,
         kaskade_config_path=configuration.kaskade_config,
         kaskade_registry_config_path=configuration.kaskade_registry_config,
         kaf_config_path=configuration.kaf_config,
@@ -737,7 +727,6 @@ def _prepare_subshell(
             name: value
             for name, value in child_environment.items()
             if name.startswith(("KAFKA_", "SCHEMA_REGISTRY_", "APICURIO_", "KANTRIP_"))
-            or name == "KCAT_CONFIG"
         },
     )
     child_environment.update(plan.environment_overrides)

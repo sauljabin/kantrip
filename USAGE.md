@@ -672,7 +672,8 @@ can't read, doesn't start, and the error names the release to install.
 
 ### kcat
 
-Each session points `KCAT_CONFIG` at a private librdkafka properties file.
+Kantrip points kcat's `KCAT_CONFIG` at the session's private librdkafka
+properties file.
 
 ```bash
 kantrip exec local -- kcat -L
@@ -1051,61 +1052,60 @@ secret-tool clear service kantrip application 'Python keyring library'
 
 Kantrip sets these variables only for the programs it starts, never in your
 own shell. Kafka has no standard environment variables shared across
-languages, so your application has to read the `KAFKA_*` values below itself.
-`KANTRIP_*` is reserved for Kantrip.
+languages, so Kantrip passes no connection values such as broker addresses or
+credentials as variables. Your application reads one of the private config
+files below instead, which hold the whole connection. `KANTRIP_*` is reserved
+for Kantrip.
 
-Every program gets the connection values, the Registry URL, and the session
-variables. The variables that point at generated files (`KCAT_CONFIG` and the
-`*_CONFIG_FILE` variables) go only to subshells and to programs Kantrip has no
-adapter for. A supported client run as a one-off command, such as
-`kantrip exec local -- kcat -L`, gets just the file it reads, through its usual
-option or variable. A few clients also get variables of their own, described
-in their sections: [kaf](#kaf) runs with `HOME=/dev/null`, [kcl](#kcl) with
-`KCL_CONFIG_PATH`, and [Kaskade](#kaskade) Registry OAuth with `SSL_CERT_FILE`.
+Subshells and programs Kantrip has no adapter for get the config file
+variables and the session variables. A supported client run as a one-off
+command, such as `kantrip exec local -- kcat -L`, gets the session variables
+and just the file it reads, through its usual option or variable. Some clients
+also get variables of their own, described in their sections: [kcat](#kcat)
+gets `KCAT_CONFIG`, [kaf](#kaf) runs with `HOME=/dev/null`, [kcl](#kcl) gets
+`KCL_CONFIG_PATH`, and [Kaskade](#kaskade) Registry OAuth gets `SSL_CERT_FILE`.
+With OAuth, only the Java tools get `KAFKA_OPTS` and `SCHEMA_REGISTRY_OPTS`.
 
 ### Environment precedence
 
 For a one-off command, Kantrip passes on your other exported variables,
 removes every `KAFKA_*`, `SCHEMA_REGISTRY_*`, and `APICURIO_*` variable, and then
-adds only the profile's public values and the paths of its private config
-files. It also removes `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, and
-`_JAVA_OPTIONS`, so JVM options can't swap in a different connection;
-`KAFKA_OPTS` and `SCHEMA_REGISTRY_OPTS` are removed with their prefixes and set
-again only for OAuth, as the tables below describe. Without a Registry, none of
-the Registry variables are set.
+adds only the variables described above. It also removes `JAVA_TOOL_OPTIONS`,
+`JDK_JAVA_OPTIONS`, and `_JAVA_OPTIONS`, so JVM options can't swap in a
+different connection; `KAFKA_OPTS` and `SCHEMA_REGISTRY_OPTS` are removed with
+their prefixes and set again only for OAuth, as the tables below describe.
+Without a Registry, none of the Registry variables are set.
 
 A subshell runs your usual startup files first. Then Kantrip removes the
-reserved variables again, sets its own values back exactly (including
-`KCAT_CONFIG`), and puts its wrappers first on `PATH`, so the profile wins over
-anything your startup files set by accident. Startup files and the programs you
-run are still trusted: they can read or change other variables on purpose.
+reserved variables again, sets its own values back exactly, and puts its
+wrappers first on `PATH`, so the profile wins over anything your startup files
+set by accident. The kcat wrapper sets `KCAT_CONFIG` itself when it starts
+kcat. Startup files and the programs you run are still trusted: they can read
+or change other variables on purpose.
 
 ### Kafka variables
 
 | Variable | Meaning |
 | --- | --- |
-| `KAFKA_BOOTSTRAP_SERVERS` | Comma-separated broker addresses |
-| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL` (TLS or mTLS), or `SASL_SSL` (PLAIN, SCRAM, or OAuth) |
-| `KAFKA_JAVA_CONFIG_FILE` | Generated Java Kafka properties path |
-| `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Generated librdkafka properties path |
-| `KCAT_CONFIG` | Generated librdkafka properties path read natively by kcat |
+| `KAFKA_JAVA_CONFIG_FILE` | Private Java client properties (`java.properties`) with the whole Kafka connection, credentials included |
+| `KAFKA_LIBRDKAFKA_CONFIG_FILE` | Private librdkafka properties (`librdkafka.properties`) with the same connection, for librdkafka-based clients |
 | `KAFKA_OPTS` | Set only when Kafka or a Confluent Registry uses OAuth: `-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=` with the token endpoint URLs, which Kafka's Java clients require before they call a token endpoint |
 
 ### Registry variables
 
-The `*_REGISTRY_URL` and `*_REGISTRY_CONFIG_FILE` variables are set only for the
-profile's provider, and that file holds the provider's official serializer and
-deserializer URL property. `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` is set for either
-provider.
+The `*_REGISTRY_CONFIG_FILE` variable is set only for the profile's provider.
+Its file, `registry.properties`, holds the Registry URL and the client
+settings the profile needs, credentials included, under the same keys as the
+`[registry]` section of Kaskade's config file. Kantrip leaves it empty when
+that format can't describe the profile, as for an Apicurio Registry with an
+encrypted client key.
 
 | Variable | Meaning |
 | --- | --- |
-| `SCHEMA_REGISTRY_URL` | Confluent-compatible registry URL |
-| `SCHEMA_REGISTRY_CONFIG_FILE` | Generated file containing `schema.registry.url` |
-| `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` | Private Java properties with the Kafka connection and, for a Confluent Registry, the prefixed Registry client settings |
+| `SCHEMA_REGISTRY_CONFIG_FILE` | Confluent-compatible Registry client properties: `provider=confluent`, `url`, then `ssl.ca.location`, `ssl.certificate.location`, and `ssl.key.location` when the profile has them, and `basic.auth.*` or `bearer.auth.*` for Basic, fixed-token, or OAuth authentication |
+| `SCHEMA_REGISTRY_KAFKA_CONFIG_FILE` | Set only for a Confluent-compatible Registry: private Java properties (`schema-registry-kafka.properties`) with the Kafka connection and the `schema.registry.*` settings of Confluent's Java serializers |
 | `SCHEMA_REGISTRY_OPTS` | The same value as `KAFKA_OPTS`, set under the same condition, for Confluent's Schema Registry console scripts |
-| `APICURIO_REGISTRY_URL` | Native Apicurio Core Registry API v3 URL |
-| `APICURIO_REGISTRY_CONFIG_FILE` | Generated file containing `apicurio.registry.url` |
+| `APICURIO_REGISTRY_CONFIG_FILE` | Native Apicurio Registry client properties: `provider=apicurio`, `apicurio.registry.url`, then `apicurio.registry.tls.*` and `apicurio.registry.auth.*` when the profile has them |
 
 ### Kantrip session metadata
 
@@ -1115,8 +1115,8 @@ provider.
 | `KANTRIP_SESSION_ID` | Opaque session identifier |
 | `KANTRIP_SESSION_DIR` | Private temporary session directory |
 
-In your own programs, prefer the generated config files, fall back to these
-variables, and never log the whole environment or the properties.
+In your own programs, read the generated config files, and never log the whole
+environment or the files' contents.
 
 ## Output and color
 
