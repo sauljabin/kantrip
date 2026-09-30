@@ -427,7 +427,8 @@ does not promise exactly-once command invocation across process termination.
 also prints a hint to stderr. Kantrip validates
 every profile whenever it reads or updates the database.
 
-Human list output includes labels. Filter by an exact pair with `-l` or
+Human list output includes labels and a short profile ID, the first eight
+characters of the profile's immutable UUID. Filter by an exact pair with `-l` or
 `--label`; repeated filters use logical AND:
 
 ```bash
@@ -435,8 +436,8 @@ kantrip list --label environment=development --label owner=platform
 ```
 
 Use `--output json` or `--output yaml` (`-o` for short) for a stable structured
-summary. On a colored TTY, Kantrip applies syntax highlighting; `--no-color` or
-output redirection emits plain machine-readable content without ANSI escapes.
+summary. On a colored TTY, Kantrip applies syntax highlighting; `--no-color`
+or output redirection emits plain machine-readable content without ANSI escapes.
 Structured empty results are an empty sequence.
 
 ## Profile workflow
@@ -904,7 +905,16 @@ Kantrip keeps passwords, private keys, tokens, and client secrets in its own
 vault named `kantrip`, not in your login keychain or default keyring, so your
 login alone does not unlock them. The operating system owns the vault password:
 Kantrip never reads, stores, or passes it. Each item is labeled like
-`Kantrip kafka/password (profile UUID)`.
+`Kantrip kafka/password (profile UUID)`. `kantrip list` shows the first eight
+characters of that UUID, and `kantrip describe PROFILE` shows all of it. In
+scripts, look it up in structured output:
+
+```bash
+kantrip list -o json | jq -r '.[] | select(.id == "PROFILE-UUID") | .name'
+```
+
+Delete credentials with `kantrip remove` or replace them with `kantrip edit`,
+not in the vault itself, or the profile can no longer connect.
 
 Only commands that need a credential open the vault: `add` and `edit` when they
 store a secret, `remove` of a profile with credentials, `exec`, `ping`, and
@@ -1127,11 +1137,11 @@ kantrip --no-color list
 kantrip list --no-color
 ```
 
-`kantrip list` shows profile endpoints and labels; `kantrip describe PROFILE`
-uses sectioned human output. Both also accept JSON or YAML through `--output`.
-Kantrip syntax-highlights structured output on colored TTYs, while `--no-color`,
-`NO_COLOR`, `TERM=dumb`, and non-TTY streams remain plain and machine-readable.
-Human output remains readable without ANSI color.
+`kantrip list` shows short IDs, endpoints, and labels; `kantrip describe
+PROFILE` uses sectioned human output. Both also accept JSON or YAML through
+`--output`. Kantrip syntax-highlights structured output on colored TTYs, while
+`--no-color`, `NO_COLOR`, `TERM=dumb`, and non-TTY streams remain plain and
+machine-readable. Human output remains readable without ANSI color.
 
 Values are classified before reaching Rich. Styling neither changes exit status
 nor carries essential information.
