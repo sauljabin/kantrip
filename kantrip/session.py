@@ -24,6 +24,7 @@ from kantrip.adapters import (
     prepare_command,
     prepare_command_environment,
     require_adapter_capability,
+    resolve_client_command,
 )
 from kantrip.kafka import (
     CA_BUNDLE_FILENAME,
@@ -121,6 +122,7 @@ def run_profile_session(
 
     if command:
         _validate_executable(executable, env)
+        executable = arguments[0] = resolve_client_command(executable, env.get("PATH"))
     _validate_kcat_arguments(arguments)
     try:
         kafka = resolved_kafka or kafka_connection(profile)

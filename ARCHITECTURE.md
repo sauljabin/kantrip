@@ -383,6 +383,14 @@ Interactive Bash, Zsh, and Fish sessions keep the user's startup files and
 history, neutralize aliases, functions, and abbreviations that would bypass an
 adapter, and never make persistent changes.
 
+- **Linked names.** A client is identified by its executable base name. A
+  command under another name that is a symlink to a client, such as
+  `ksk -> kaskade`, is adapted as the first link target with a supported name,
+  for direct commands and shims alike; a session also gets a shim for each such
+  link that is the command its `PATH` would run. Kantrip follows only symlinks:
+  aliases and functions exist only inside the shell, and a wrapper script can do
+  anything before it calls a client, so neither can be identified reliably.
+
 ## Process supervision
 
 ![Kantrip exec sequence](images/exec-sequence.svg)

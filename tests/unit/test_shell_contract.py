@@ -194,7 +194,10 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
-            self.assertEqual(len(ADAPTER_EXECUTABLES) + 4 + len(KCAT_EXECUTABLES), len(records))
+            self.assertEqual(len(ADAPTER_EXECUTABLES) + 5 + len(KCAT_EXECUTABLES), len(records))
+            linked = [record for record in records if "linked-contract" in record["argv"]]
+            self.assertEqual(["kaskade"], [record["name"] for record in linked])
+            self.assertEqual(["consumer", "--config-file"], linked[0]["argv"][:2])
             for record in records:
                 self.assertEqual("contract", record["profile"])
                 self.assertTrue(record["config_exists"], record)
@@ -267,6 +270,8 @@ def _write_fake_clients(directory: Path) -> None:
         path = directory / executable
         path.write_text(contents, encoding="utf-8")
         path.chmod(0o700)
+    # A user's shorter name for a client, such as `ln -s kaskade ksk`.
+    (directory / "ksk").symlink_to("kaskade")
 
 
 def _isolate_shell(shell_name: str, shell: str, root: Path) -> str:
@@ -396,6 +401,7 @@ def _adapter_commands() -> list[str]:
             "kaskade admin",
             "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
             "kaskade consumer -v registry",
+            "ksk consumer --topic linked-contract",
             "kaf topics",
             "env KCL_SEED_BROKERS=other.invalid:9092 KCL_NO_CONFIG_FILE=1 kcl topic list",
         )

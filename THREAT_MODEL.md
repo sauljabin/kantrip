@@ -364,8 +364,10 @@ that bypass the selected profile.
 
 Controls:
 
-- Match supported clients by validated executable basename and use argument
-  arrays rather than constructed shell commands.
+- Match supported clients by validated executable basename, following a symlink
+  under another name to the first target with a supported basename, so a linked
+  name gets the same adapter instead of bypassing it. Use argument arrays rather
+  than constructed shell commands.
 - Reject bootstrap, config-path, TLS, authentication, Registry, and other
   connection overrides covered by each adapter contract.
 - Version-gate Java custom PEM trust and client identities, and reject unsupported
