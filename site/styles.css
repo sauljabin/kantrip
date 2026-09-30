@@ -662,6 +662,27 @@ pre {
   color: var(--warning);
 }
 
+/* Thanks: copies of the README badges, which draw their own colors. */
+.thanks {
+  text-align: center;
+}
+
+.thanks-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.thanks-links a {
+  display: inline-flex;
+}
+
+.thanks-links a:hover {
+  opacity: 0.82;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cursor {
     animation: none;
