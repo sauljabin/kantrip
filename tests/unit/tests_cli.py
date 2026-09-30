@@ -102,12 +102,15 @@ class TestCli(unittest.TestCase):
         with self.runner.isolated_filesystem():
             database_path = Path("profiles.db")
             _add_test_profile(database_path, registry=True)
-            environment = {"KANTRIP_DATABASE": str(database_path.resolve())}
+            environment = {"KANTRIP_DATABASE": str(database_path.resolve()), "COLUMNS": "120"}
+            profile_id = load_profiles(database_path).profile("local")["id"]
 
             listed = self.runner.invoke(cli, ["list"], env=environment)
             described = self.runner.invoke(cli, ["describe", "local"], env=environment)
 
         self.assertIn("Profile", listed.output)
+        self.assertIn(profile_id[:8], listed.output)
+        self.assertNotIn(profile_id, listed.output)
         self.assertIn("Description", listed.output)
         self.assertIn("Kafka", listed.output)
         self.assertIn("Registry", listed.output)
@@ -278,6 +281,7 @@ class TestCli(unittest.TestCase):
                 database_path,
                 labels={"environment": "production", "owner": "data"},
             )
+            environment["COLUMNS"] = "120"
 
             result = self.runner.invoke(
                 cli,

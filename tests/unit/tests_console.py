@@ -64,11 +64,17 @@ class TestConsole(unittest.TestCase):
         stream = TerminalBuffer()
         console = create_console(stream=stream, environment={})
 
-        console.print(create_profile_table({"local": {"description": "Local development"}}))
+        profile = {
+            "id": "018f8f13-7c21-7cee-8000-000000000010",
+            "description": "Local development",
+        }
+        console.print(create_profile_table({"local": profile}))
 
         self.assertIn("\x1b[", stream.getvalue())
         self.assertIn("Profile", stream.getvalue())
         self.assertIn("local", stream.getvalue())
+        self.assertRegex(stream.getvalue(), r"018f8f13\b")
+        self.assertNotIn("018f8f13-7c21", stream.getvalue())
         self.assertIn("Local development", stream.getvalue())
 
     def test_profile_table_displays_labels_with_stable_presentation_colors(self) -> None:
@@ -143,7 +149,8 @@ class TestConsole(unittest.TestCase):
         self.assertEqual("heading", table.header_style)
         self.assertEqual("secondary", table.columns[0].style)
         self.assertEqual(12, table.columns[0].min_width)
-        self.assertEqual(12, table.columns[1].min_width)
+        self.assertEqual("ID", table.columns[1].header)
+        self.assertEqual(12, table.columns[2].min_width)
 
     def test_profile_text_is_not_interpreted_as_rich_markup(self) -> None:
         stream = io.StringIO()
@@ -198,6 +205,7 @@ class TestConsole(unittest.TestCase):
             }
         }
 
+        console.width = 120
         console.print(create_profile_table(profiles))
 
         output = stream.getvalue()
