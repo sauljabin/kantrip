@@ -20,6 +20,7 @@ doesn't defend against a compromised operating system or user account.
 - [Actors and trust assumptions](#actors-and-trust-assumptions)
 - [Trust boundaries and entry points](#trust-boundaries-and-entry-points)
   - [Profile storage boundary](#profile-storage-boundary)
+  - [Imported document boundary](#imported-document-boundary)
   - [Credential vault boundary](#credential-vault-boundary)
   - [Execution boundary](#execution-boundary)
   - [Network boundary](#network-boundary)
@@ -118,6 +119,24 @@ the expected fully qualified field. Passwords, fixed tokens, OAuth client
 secrets, mTLS private keys, and optional key passwords never enter the profile
 document; public client certificate chains do and are checked against the
 resolved key before use.
+
+### Imported document boundary
+
+`add --from-strimzi` reads a Kubernetes Secret that the user exported, from a
+regular file or stdin. Kantrip treats it as untrusted input: at most 1 MiB of
+UTF-8, exactly one document, no YAML anchors or aliases, no duplicate keys, and
+bounded nesting. It accepts only the `v1` Secret shape the Strimzi user
+operator generates for one SCRAM-SHA-512 or TLS `KafkaUser`, reads the
+password or the certificate and key, and rejects unknown keys. Parser errors
+name keys and rules, never values or source lines. The imported values go
+through the same validation, vault staging, and journal as values typed at a
+prompt; the document itself is neither stored nor modified.
+
+The Secret's `ca.crt` is the clients CA that signed the user certificate.
+Kantrip ignores it rather than trusting it for the listener, which a
+compromised or misconfigured clients CA could otherwise impersonate. The
+exported file is itself a plaintext credential that Kantrip doesn't manage;
+piping `kubectl` output to `--from-strimzi -` avoids writing it to disk.
 
 ### Credential vault boundary
 

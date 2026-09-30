@@ -568,6 +568,7 @@ def _export_credentials(credentials: Mapping[str, str]) -> None:
     generated["KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE_PASSWORD"] = _secret_value(
         "kantrip-mtls-no-acl", "user.password"
     ).decode()
+    _export_strimzi_secrets(generated)
     wrong_ca = STATE_ROOT / "wrong-kafka-ca.crt"
     _write_private_bytes(wrong_ca, _secret_value("kantrip-cluster-ca-cert", "ca.crt"))
     generated["KANTRIP_SANDBOX_WRONG_KAFKA_CA"] = str(wrong_ca)
@@ -575,6 +576,32 @@ def _export_credentials(credentials: Mapping[str, str]) -> None:
     content = "".join(f"{key}={shlex.quote(value)}\n" for key, value in combined.items())
     _write_private_text(STATE_FILE, content)
     _write_client_properties(combined)
+
+
+def _export_strimzi_secrets(generated: dict[str, str]) -> None:
+    """Export the user operator's own Secrets, unchanged, as `--from-strimzi` inputs."""
+    for key, secret_name, filename in (
+        ("KANTRIP_SANDBOX_STRIMZI_SCRAM_SECRET", "kantrip-scram", "strimzi-scram-secret.yaml"),
+        ("KANTRIP_SANDBOX_STRIMZI_MTLS_SECRET", "kantrip-mtls", "strimzi-mtls-secret.yaml"),
+    ):
+        result = _run(
+            (
+                "kubectl",
+                "--context",
+                KUBECTL_CONTEXT,
+                "-n",
+                NAMESPACE,
+                "get",
+                "secret",
+                secret_name,
+                "-o",
+                "yaml",
+            ),
+            capture_output=True,
+        )
+        target = STATE_ROOT / filename
+        _write_private_text(target, result.stdout)
+        generated[key] = str(target)
 
 
 def _write_client_properties(values: Mapping[str, str]) -> None:

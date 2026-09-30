@@ -154,7 +154,7 @@ explains creating, unlocking, and deleting it.
 | Java Kafka `.properties` | No file import | Private Java client session configuration |
 | librdkafka properties | No file import yet | Private librdkafka configuration, passed to kcat through `KCAT_CONFIG` and to other programs through `KAFKA_LIBRDKAFKA_CONFIG_FILE` |
 | Confluent-generated client properties | No file or stdin import yet | Not a retained vendor config/cache |
-| Strimzi generated Secret JSON / YAML | No file or stdin import | No Kubernetes resource output |
+| Strimzi generated Secret JSON / YAML | One SCRAM-SHA-512 or TLS `KafkaUser` Secret through `add --from-strimzi FILE`, or `-` for stdin; see [First profile](USAGE.md#first-profile) | No Kubernetes resource output |
 | Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |
 | Registry properties | No file import | Private HTTP endpoint configuration only |
 | kcl TOML | No file import | Private kcl session configuration selected through `KCL_CONFIG_PATH` |

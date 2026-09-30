@@ -314,6 +314,39 @@ Kantrip asks for the client secret at a prompt that doesn't echo. Repeat
 fields you don't mention alone; `--unset kafka.auth.oauth.scopes` and
 `--unset kafka.auth.oauth.ca` remove them.
 
+If Strimzi manages the Kafka user, import the Secret its user operator
+generated for a SCRAM-SHA-512 or TLS `KafkaUser` instead of copying credentials
+by hand. Pipe it from `kubectl` so the Secret never lands on disk:
+
+```bash
+kubectl get secret application -n kafka -o yaml |
+  kantrip add production-strimzi \
+    --from-strimzi - \
+    --bootstrap-server kafka.example.com:9093 \
+    --ca-file ./cluster-ca.pem
+```
+
+`--from-strimzi FILE` reads a saved JSON or YAML Secret instead, and leaves the
+file unchanged. A SCRAM Secret becomes `scram-sha-512` authentication for the
+`KafkaUser`; a TLS Secret becomes mTLS with its `user.crt` and `user.key`. As
+with the options above, the password or private key goes to the
+[credential vault](#credential-vault) and the certificate into the profile.
+Nothing prompts, and Kantrip never contacts Kubernetes.
+
+The Secret names no brokers, so `--bootstrap-server` is required. Its `ca.crt`
+is the clients CA that signed the user certificate, not the listener's CA, so
+Kantrip ignores it. For a listener signed by the Strimzi cluster CA, pass the
+`ca.crt` from the `CLUSTER-cluster-ca-cert` Secret with `--ca-file`. Other
+options fill in what the Secret leaves out, such as `--description` or a
+Registry. `--transport`, `--auth`, and `--username` must match the Secret, and
+other Kafka credential options fail.
+
+The input must be one `v1` Secret of at most 1 MiB with the
+`strimzi.io/kind: KafkaUser` label that the operator adds. Anything else, such
+as the `KafkaUser` resource itself, a list, several documents, or a Secret with
+both SCRAM and TLS credentials, fails with exit status 2 and a message that
+never repeats a value from the file.
+
 To give several brokers, repeat `-b/--bootstrap-server` or separate the
 addresses with commas. Either way the order is kept and duplicates are
 rejected:
