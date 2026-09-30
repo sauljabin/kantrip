@@ -13,6 +13,7 @@ from kantrip.adapters import (
     AdapterError,
     create_subshell_shims,
     require_adapter_capability,
+    resolve_client_command,
 )
 from kantrip.kafka import KafkaConnection
 from kantrip.registry import RegistryConnection
@@ -143,6 +144,88 @@ def _write_java_client(path: Path, version: str, probes: Path) -> None:
 
 def _probe_count(probes: Path) -> int:
     return len(probes.read_text(encoding="utf-8").splitlines()) if probes.exists() else 0
+
+
+def _write_echo_client(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    path.chmod(0o700)
+
+
+class TestSymlinkedClients(unittest.TestCase):
+    """A symlink to a supported client under another name is adapted as that client."""
+
+    def setUp(self) -> None:
+        use_supported_client_versions(self)
+
+    def test_resolves_a_chain_of_links_to_the_first_client_name(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            _write_echo_client(root_path / "venv" / "bin" / "kaskade")
+            (root_path / "bin").mkdir()
+            (root_path / "bin" / "kaskade").symlink_to("../venv/bin/kaskade")
+            (root_path / "bin" / "ksk").symlink_to(root_path / "bin" / "kaskade")
+            search_path = str(root_path / "bin")
+
+            self.assertEqual(
+                str(root_path / "bin" / "kaskade"), resolve_client_command("ksk", search_path)
+            )
+            self.assertEqual(
+                str(root_path / "bin" / "kaskade"),
+                resolve_client_command(str(root_path / "bin" / "ksk"), search_path),
+            )
+            self.assertEqual("kaskade", resolve_client_command("kaskade", search_path))
+
+    def test_leaves_other_commands_and_link_loops_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            _write_echo_client(root_path / "tool")
+            (root_path / "other").symlink_to("tool")
+            (root_path / "loop-a").symlink_to("loop-b")
+            (root_path / "loop-b").symlink_to("loop-a")
+
+            for command in ("tool", "other", "loop-a", "missing"):
+                with self.subTest(command=command):
+                    self.assertEqual(command, resolve_client_command(command, root))
+
+    def test_session_shims_cover_client_links_the_shell_would_run(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            _write_echo_client(root_path / "clients" / "kaskade")
+            _write_echo_client(root_path / "first" / "shadowed")
+            (root_path / "later").mkdir()
+            (root_path / "later" / "ksk").symlink_to("../clients/kaskade")
+            (root_path / "later" / "shadowed").symlink_to("../clients/kaskade")
+            (root_path / "later" / "unrelated").symlink_to("../first/shadowed")
+            search_path = os.pathsep.join(
+                str(root_path / name) for name in ("first", "later", "clients")
+            )
+
+            shim_directory = create_subshell_shims(
+                root_path / "session",
+                bootstrap_servers="localhost:9092",
+                java_config_path=root_path / "kafka.properties",
+                kcat_config_path=root_path / "kcat.conf",
+                kaskade_config_path=root_path / "kaskade.ini",
+                kaskade_registry_config_path=root_path / "kaskade-registry.ini",
+                environment={"PATH": search_path},
+            )
+            result = subprocess.run(
+                [shim_directory / "ksk", "admin"],
+                env={},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(
+                ["kaskade", "ksk"], sorted(path.name for path in shim_directory.iterdir())
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                ["admin", "--config-file", str(root_path / "kaskade.ini")],
+                result.stdout.splitlines(),
+            )
 
 
 class TestProfileSession(unittest.TestCase):
@@ -1245,6 +1328,26 @@ class TestProfileSession(unittest.TestCase):
                 assert isinstance(environment, dict)
                 self.assertNotIn("KASKADE_CLIENT_CONFIG", environment)
 
+    def test_adapts_a_direct_command_linked_to_kaskade_under_another_name(self) -> None:
+        observed: list[str] = []
+
+        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
+            del options
+            observed.extend(arguments)
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            _write_echo_client(root_path / "kaskade")
+            (root_path / "ksk").symlink_to("kaskade")
+            with patch("kantrip.session._run_child", side_effect=inspect_run):
+                run_profile_session(
+                    "local", self.profile, ["ksk", "admin"], environment={"PATH": root}
+                )
+
+        self.assertEqual([str(root_path / "kaskade"), "admin", "--config-file"], observed[:3])
+        self.assertEqual("kaskade.ini", Path(observed[3]).name)
+
     def test_kaskade_registry_deserializer_uses_profile_registry_config(self) -> None:
         observed: dict[str, object] = {}
 
@@ -1913,6 +2016,13 @@ class TestSessionFiles(unittest.TestCase):
                     {name for name in environment if name.endswith("_CONFIG_FILE")},
                     "a supported client reads no documented file variable",
                 )
+
+    def test_a_linked_client_writes_only_the_files_of_the_client_it_runs(self) -> None:
+        with patch("kantrip.session.resolve_client_command", return_value="/opt/bin/kaskade"):
+            files, environment = self.run_session(["ksk", "admin"], self.registry)
+
+        self.assertEqual({"kaskade.ini", *_KAFKA_MATERIAL}, files)
+        self.assertFalse({name for name in environment if name.endswith("_CONFIG_FILE")})
 
     def test_kaf_writes_only_its_config_and_unencrypted_key(self) -> None:
         # kaf maps no mTLS Registry, so this case runs without one.

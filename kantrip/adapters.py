@@ -444,6 +444,39 @@ def client_adapter(executable_name: str) -> ClientAdapter | None:
     return _ADAPTERS_BY_EXECUTABLE.get(executable_name)
 
 
+# Matches the usual POSIX symlink resolution limit (SYMLOOP_MAX).
+_SYMLINK_HOPS = 40
+
+
+def resolve_client_command(command: str, search_path: str | None) -> str:
+    """Return `command`, or the supported client it names through symlinks.
+
+    A link such as `ksk -> kaskade` runs that client, so it is adapted as the
+    first link target whose base name is a supported executable. Aliases,
+    functions, and wrapper scripts are not links and are never resolved.
+    """
+    if Path(command).name in ADAPTER_EXECUTABLES:
+        return command
+    located = shutil.which(command, path=search_path)
+    if located is None:
+        return command
+    return _linked_client(Path(located)) or command
+
+
+def _linked_client(path: Path) -> str | None:
+    for _ in range(_SYMLINK_HOPS):
+        try:
+            target = os.readlink(path)
+        except OSError:
+            return None
+        # A relative target is relative to the link's directory; leaving `..`
+        # unnormalized lets the OS resolve it through linked directories.
+        path = path.parent / target
+        if path.name in ADAPTER_EXECUTABLES:
+            return str(path)
+    return None
+
+
 def prepare_command(
     arguments: Sequence[str],
     configuration: ClientConfiguration,
@@ -503,29 +536,68 @@ def create_subshell_shims(
         kaf_config=kaf_config_path,
         kcl_config=kcl_config_path,
     )
-    installed = _installed_executables(environment.get("PATH", os.defpath))
+    search_path = environment.get("PATH", os.defpath)
+    installed = [*_installed_executables(search_path), *_linked_executables(search_path)]
     versions = VersionProbe(environment)
-    versions.prefetch((adapter.minimum_version, executable) for adapter, _, executable in installed)
+    versions.prefetch((client.adapter.minimum_version, client.path) for client in installed)
     needs = KafkaNeeds(kafka_auth_type, require_java_pem, kafka_oauth_ca)
     directory.mkdir(mode=0o700)
-    for adapter, name, executable in installed:
+    for client in installed:
+        adapter = client.adapter
         inputs = ShimInputs(
             configuration,
             registry,
             kafka_auth_type,
-            _capability_error(adapter, executable, needs, registry, versions),
+            _capability_error(adapter, client.path, needs, registry, versions),
         )
-        write_executable(directory / name, adapter.render_shim(name, executable, inputs))
+        write_executable(
+            directory / client.command, adapter.render_shim(client.name, client.path, inputs)
+        )
     return directory
 
 
-def _installed_executables(search_path: str) -> list[tuple[ClientAdapter, str, str]]:
+@dataclass(frozen=True)
+class _InstalledClient:
+    """One shim: the `command` typed in the shell runs executable `name` at `path`."""
+
+    adapter: ClientAdapter
+    command: str
+    name: str
+    path: str
+
+
+def _installed_executables(search_path: str) -> list[_InstalledClient]:
     return [
-        (adapter, name, resolved)
+        _InstalledClient(adapter, name, name, resolved)
         for adapter in CLIENT_ADAPTERS
         for name in sorted(adapter.executables)
         if (resolved := shutil.which(name, path=search_path)) is not None
     ]
+
+
+def _linked_executables(search_path: str) -> list[_InstalledClient]:
+    """Find other names on PATH that are symlinks to supported clients."""
+    linked: dict[str, _InstalledClient] = {}
+    for directory in filter(None, search_path.split(os.pathsep)):
+        for entry in _symlinks(directory):
+            if entry.name in ADAPTER_EXECUTABLES or entry.name in linked:
+                continue
+            target = _linked_client(Path(entry.path))
+            # Only the command the shell would run gets a shim, not a shadowed one.
+            if target is not None and shutil.which(entry.name, path=search_path) == entry.path:
+                name = Path(target).name
+                linked[entry.name] = _InstalledClient(
+                    _ADAPTERS_BY_EXECUTABLE[name], entry.name, name, target
+                )
+    return sorted(linked.values(), key=lambda client: client.command)
+
+
+def _symlinks(directory: str) -> list[os.DirEntry[str]]:
+    try:
+        with os.scandir(directory) as entries:
+            return [entry for entry in entries if entry.is_symlink()]
+    except OSError:
+        return []
 
 
 def _capability_error(
@@ -716,4 +788,5 @@ __all__ = [
     "rendered_release",
     "require_adapter_capability",
     "require_minimum_version",
+    "resolve_client_command",
 ]
