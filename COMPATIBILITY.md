@@ -153,7 +153,7 @@ explains creating, unlocking, and deleting it.
 | Client PEM certificate / private key | Kafka and Registry certificate/key options | Public certificate in the profile; private key in the [credential store](#credential-storage) and private session files |
 | Java Kafka `.properties` | The Kafka connection through `add --from-properties FILE`, or `-` for stdin: brokers, PEM trust, PLAIN, SCRAM, PEM mTLS, and OAuth client credentials; see [First profile](USAGE.md#first-profile) | Private Java client session configuration |
 | librdkafka properties | The same Kafka connection through `add --from-properties FILE` or `-`, told apart from Java by its keys | Private librdkafka configuration, passed to kcat through `KCAT_CONFIG` and to other programs through `KAFKA_LIBRDKAFKA_CONFIG_FILE` |
-| Confluent-generated client properties | The Java output of `confluent kafka client-config create java` through `add --from-properties`, once placeholders are filled and Schema Registry lines removed | Not a retained vendor config/cache |
+| Confluent-generated client properties | Java and librdkafka output of `confluent kafka client-config create` through `add --from-properties`, as generated without a Schema Registry key, or with its Registry lines removed | Not a retained vendor config/cache |
 | Strimzi generated Secret JSON / YAML | One SCRAM-SHA-512 or TLS `KafkaUser` Secret through `add --from-strimzi FILE`, or `-` for stdin; see [First profile](USAGE.md#first-profile) | No Kubernetes resource output |
 | Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |
 | Registry properties | No file import; Registry keys in `--from-properties` input fail | Private HTTP endpoint configuration only |
