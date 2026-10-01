@@ -604,84 +604,26 @@ def _export_strimzi_secrets(generated: dict[str, str]) -> None:
         generated[key] = str(target)
 
 
+OAUTH_TOKEN_URL = "https://localhost:8443/realms/kantrip/protocol/openid-connect/token"
+# Password listeners: file name, port, mechanism, and the credential variable prefix.
+_PASSWORD_PROPERTIES = (
+    ("plain", 9097, "PLAIN", "KANTRIP_SANDBOX_KAFKA_PLAIN"),
+    ("scram-256", 9098, "SCRAM-SHA-256", "KANTRIP_SANDBOX_KAFKA_SCRAM_256"),
+    ("scram", 9094, "SCRAM-SHA-512", "KANTRIP_SANDBOX_KAFKA_SCRAM"),
+    ("no-acl", 9097, "PLAIN", "KANTRIP_SANDBOX_KAFKA_NO_ACL"),
+    ("scram-256-no-acl", 9098, "SCRAM-SHA-256", "KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL"),
+    ("scram-no-acl", 9094, "SCRAM-SHA-512", "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL"),
+)
+
+
 def _write_client_properties(values: Mapping[str, str]) -> None:
-    ca = values["KANTRIP_SANDBOX_CA"]
-    common_tls = f"ssl.truststore.type=PEM\nssl.truststore.location={ca}\n"
+    """Write Java (`kafka-*`) and librdkafka (`librdkafka-*`) properties for every listener."""
     properties = {
-        "kafka-tls.properties": "security.protocol=SSL\n" + common_tls,
-        "kafka-scram.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=SCRAM-SHA-512\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
-            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME"]}" '
-            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"]}";\n' + common_tls
-        ),
-        "kafka-plain.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=PLAIN\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required "
-            f'username="{values["KANTRIP_SANDBOX_KAFKA_PLAIN_USERNAME"]}" '
-            f'password="{values["KANTRIP_SANDBOX_KAFKA_PLAIN_PASSWORD"]}";\n' + common_tls
-        ),
-        "kafka-scram-256.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=SCRAM-SHA-256\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
-            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_USERNAME"]}" '
-            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_PASSWORD"]}";\n' + common_tls
-        ),
-        "kafka-no-acl.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=PLAIN\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required "
-            f'username="{values["KANTRIP_SANDBOX_KAFKA_NO_ACL_USERNAME"]}" '
-            f'password="{values["KANTRIP_SANDBOX_KAFKA_NO_ACL_PASSWORD"]}";\n' + common_tls
-        ),
-        "kafka-scram-256-no-acl.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=SCRAM-SHA-256\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
-            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_USERNAME"]}" '
-            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_256_NO_ACL_PASSWORD"]}";\n'
-            + common_tls
-        ),
-        "kafka-scram-no-acl.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=SCRAM-SHA-512\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required "
-            f'username="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_USERNAME"]}" '
-            f'password="{values["KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_PASSWORD"]}";\n' + common_tls
-        ),
-        "kafka-mtls.properties": (
-            "security.protocol=SSL\n"
-            + common_tls
-            + "ssl.keystore.type=PKCS12\n"
-            + f'ssl.keystore.location={values["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE"]}\n'
-            + "ssl.keystore.password="
-            + f'{values["KANTRIP_SANDBOX_KAFKA_MTLS_KEYSTORE_PASSWORD"]}\n'
-        ),
-        "kafka-mtls-no-acl.properties": (
-            "security.protocol=SSL\n"
-            + common_tls
-            + "ssl.keystore.type=PKCS12\n"
-            + f'ssl.keystore.location={values["KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE"]}\n'
-            + "ssl.keystore.password="
-            + f'{values["KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL_KEYSTORE_PASSWORD"]}\n'
-        ),
-        "kafka-oauth.properties": (
-            "security.protocol=SASL_SSL\n"
-            "sasl.mechanism=OAUTHBEARER\n"
-            "sasl.login.callback.handler.class="
-            "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler\n"
-            "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule "
-            f'required ssl.truststore.type="PEM" ssl.truststore.location="{ca}";\n'
-            "sasl.oauthbearer.client.credentials.client.id="
-            f'{values["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID"]}\n'
-            "sasl.oauthbearer.client.credentials.client.secret="
-            f'{values["KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET"]}\n'
-            "sasl.oauthbearer.token.endpoint.url="
-            "https://localhost:8443/realms/kantrip/protocol/openid-connect/token\n" + common_tls
-        ),
+        **{f"kafka-{name}.properties": text for name, text in _java_properties(values).items()},
+        **{
+            f"librdkafka-{name}.properties": text
+            for name, text in _librdkafka_properties(values).items()
+        },
     }
     for filename, content in properties.items():
         _write_private_text(STATE_ROOT / filename, content)
@@ -703,12 +645,112 @@ def _write_client_properties(values: Mapping[str, str]) -> None:
     )
 
 
+def _java_properties(values: Mapping[str, str]) -> dict[str, str]:
+    """Java client properties: PEM trust, JAAS for SASL, PKCS12 and inline PEM mTLS."""
+    ca = values["KANTRIP_SANDBOX_CA"]
+    trust = f"ssl.truststore.type=PEM\nssl.truststore.location={ca}\n"
+    properties = {
+        "plaintext": _bootstrap(9092) + "security.protocol=PLAINTEXT\n",
+        "tls": _bootstrap(9093) + "security.protocol=SSL\n" + trust,
+    }
+    for name, port, mechanism, prefix in _PASSWORD_PROPERTIES:
+        module = "plain.PlainLoginModule" if mechanism == "PLAIN" else "scram.ScramLoginModule"
+        properties[name] = (
+            _bootstrap(port)
+            + f"security.protocol=SASL_SSL\nsasl.mechanism={mechanism}\n"
+            + f"sasl.jaas.config=org.apache.kafka.common.security.{module} required "
+            + f'username="{values[prefix + "_USERNAME"]}" '
+            + f'password="{values[prefix + "_PASSWORD"]}";\n'
+            + trust
+        )
+    for name, prefix in (
+        ("mtls", "KANTRIP_SANDBOX_KAFKA_MTLS"),
+        ("mtls-no-acl", "KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL"),
+    ):
+        properties[name] = (
+            _bootstrap(9095)
+            + "security.protocol=SSL\n"
+            + trust
+            + "ssl.keystore.type=PKCS12\n"
+            + f"ssl.keystore.location={values[prefix + '_KEYSTORE']}\n"
+            + f"ssl.keystore.password={values[prefix + '_KEYSTORE_PASSWORD']}\n"
+        )
+    properties["mtls-pem"] = (
+        _bootstrap(9095)
+        + "security.protocol=SSL\n"
+        + trust
+        + "ssl.keystore.type=PEM\n"
+        + _java_pem(
+            "ssl.keystore.certificate.chain", values["KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE"]
+        )
+        + _java_pem("ssl.keystore.key", values["KANTRIP_SANDBOX_KAFKA_MTLS_KEY"])
+    )
+    properties["oauth"] = (
+        _bootstrap(9096) + "security.protocol=SASL_SSL\n"
+        "sasl.mechanism=OAUTHBEARER\n"
+        "sasl.login.callback.handler.class="
+        "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler\n"
+        "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule "
+        f'required ssl.truststore.type="PEM" ssl.truststore.location="{ca}";\n'
+        f"sasl.oauthbearer.client.credentials.client.id={values['KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID']}\n"
+        "sasl.oauthbearer.client.credentials.client.secret="
+        f"{values['KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET']}\n"
+        f"sasl.oauthbearer.token.endpoint.url={OAUTH_TOKEN_URL}\n" + trust
+    )
+    return properties
+
+
+def _librdkafka_properties(values: Mapping[str, str]) -> dict[str, str]:
+    """librdkafka `key=value` properties with PEM files for trust and mTLS."""
+    ca = values["KANTRIP_SANDBOX_CA"]
+    trust = f"ssl.ca.location={ca}\n"
+    properties = {
+        "plaintext": _bootstrap(9092) + "security.protocol=PLAINTEXT\n",
+        "tls": _bootstrap(9093) + "security.protocol=SSL\n" + trust,
+        "mtls": (
+            _bootstrap(9095)
+            + "security.protocol=SSL\n"
+            + trust
+            + f"ssl.certificate.location={values['KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE']}\n"
+            + f"ssl.key.location={values['KANTRIP_SANDBOX_KAFKA_MTLS_KEY']}\n"
+        ),
+        "oauth": (
+            _bootstrap(9096) + "security.protocol=SASL_SSL\n"
+            "sasl.mechanism=OAUTHBEARER\n"
+            "sasl.oauthbearer.method=oidc\n"
+            f"sasl.oauthbearer.token.endpoint.url={OAUTH_TOKEN_URL}\n"
+            f"sasl.oauthbearer.client.id={values['KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_ID']}\n"
+            f"sasl.oauthbearer.client.secret={values['KANTRIP_SANDBOX_KAFKA_OAUTH_CLIENT_SECRET']}\n"
+            f"https.ca.location={ca}\n" + trust
+        ),
+    }
+    for name, port, mechanism, prefix in _PASSWORD_PROPERTIES[:3]:
+        properties[name] = (
+            _bootstrap(port)
+            + f"security.protocol=SASL_SSL\nsasl.mechanism={mechanism}\n"
+            + f"sasl.username={values[prefix + '_USERNAME']}\n"
+            + f"sasl.password={values[prefix + '_PASSWORD']}\n"
+            + trust
+        )
+    return properties
+
+
+def _bootstrap(port: int) -> str:
+    return f"bootstrap.servers=localhost:{port}\n"
+
+
+def _java_pem(key: str, path: str) -> str:
+    """Write a PEM file as one Java property whose escaped newlines continue the line."""
+    lines = Path(path).read_text(encoding="utf-8").strip().splitlines()
+    return f"{key}=" + "\\n\\\n    ".join(lines) + "\n"
+
+
 def _request_access_token(client_id: str, client_secret: str) -> str:
     if not CA_FILE.is_file():
         raise SandboxFailure("sandbox CA is unavailable; run 'python -m sandbox up'")
     encoded_auth = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     request = urllib.request.Request(
-        "https://localhost:8443/realms/kantrip/protocol/openid-connect/token",
+        OAUTH_TOKEN_URL,
         data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
         headers={
             "Authorization": f"Basic {encoded_auth}",

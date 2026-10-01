@@ -138,6 +138,29 @@ compromised or misconfigured clients CA could otherwise impersonate. The
 exported file is itself a plaintext credential that Kantrip doesn't manage;
 piping `kubectl` output to `--from-strimzi -` avoids writing it to disk.
 
+`add --from-properties` reads Java or librdkafka client properties under the
+same 1 MiB, UTF-8, regular-file-or-stdin rules. It rejects duplicate keys, more
+than 4096 properties, malformed escapes, and files whose dialect it can't
+decide, instead of guessing which value a client would use. `sasl.jaas.config`
+goes through a JAAS tokenizer, not pattern matching, so a crafted quote or
+comment can't make Kantrip read a different credential than the client would.
+The mapping is closed: only the Kafka connection keys it names are read, and
+unknown keys in the `sasl.`, `ssl.`, `security.`, and `https.` namespaces fail
+rather than being dropped, because each could change what the connection
+trusts. It never imports a weaker connection than the file describes:
+`SASL_PLAINTEXT`, disabled certificate or hostname verification, unsecured
+JWTs, custom login or callback classes, and HTTP token endpoints all fail.
+Application keys are ignored and reported by name only, and only names made of
+letters, digits, dots, hyphens, and underscores are printed.
+
+PEM paths in the file are read once, through the same bounded regular-file
+readers as the CA and key options, and copied into the profile or the vault;
+Kantrip keeps no path, so later changes to those files don't reach a profile.
+Relative paths resolve against the file's directory; stdin has no directory,
+so its paths must be absolute. After importing secrets from a file, from either
+option, `add` notes on stderr that the file still holds them. Kantrip never
+deletes or changes it, since other clients may still read it.
+
 ### Credential vault boundary
 
 On macOS, credentials cross into the dedicated Kantrip keychain through

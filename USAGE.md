@@ -314,6 +314,67 @@ Kantrip asks for the client secret at a prompt that doesn't echo. Repeat
 fields you don't mention alone; `--unset kafka.auth.oauth.scopes` and
 `--unset kafka.auth.oauth.ca` remove them.
 
+If a client already connects with a Java `client.properties` file or a
+librdkafka configuration, import its Kafka connection instead of typing it
+again:
+
+```bash
+kantrip add production-client --from-properties ./client.properties
+```
+
+Kantrip tells the two dialects apart by their keys: `sasl.jaas.config` or
+`ssl.truststore.location` means Java, and `sasl.username` or `ssl.ca.location`
+means librdkafka. A file that mixes them fails. A file with only keys both
+share, such as `bootstrap.servers` and `security.protocol`, imports when Java
+and librdkafka read it the same way. Java files follow Java's properties
+syntax, with `\` escapes, `\uXXXX`, and continued lines. Kafka's Java tools read
+them as ISO-8859-1, so write any other character as a `\uXXXX` escape.
+librdkafka files are plain `key=value` lines with `#` comments.
+
+The import reads `bootstrap.servers`, `security.protocol` (`PLAINTEXT`, `SSL`,
+or `SASL_SSL`), and the broker CA and authentication below. Security keys need
+an explicit `security.protocol`.
+
+| Setting | Java | librdkafka |
+| --- | --- | --- |
+| Broker CA | `ssl.truststore.type=PEM` with `ssl.truststore.location` or `ssl.truststore.certificates` | `ssl.ca.location` or `ssl.ca.pem` |
+| PLAIN, SCRAM-SHA-256, SCRAM-SHA-512 | `sasl.mechanism` and a `sasl.jaas.config` with `username` and `password` | `sasl.mechanism` or `sasl.mechanisms`, `sasl.username`, `sasl.password` |
+| mTLS | `ssl.keystore.type=PEM`, `ssl.keystore.certificate.chain`, `ssl.keystore.key`, optional `ssl.key.password` | `ssl.certificate.location` or `ssl.certificate.pem`, `ssl.key.location` or `ssl.key.pem`, optional `ssl.key.password` |
+| OAuth client credentials | `sasl.login.callback.handler.class` set to `OAuthBearerLoginCallbackHandler`, `sasl.oauthbearer.token.endpoint.url`, the client ID and secret as `sasl.oauthbearer.client.credentials.*` or as `clientId` and `clientSecret` JAAS options, optional scope, and the token endpoint's CA from the JAAS `ssl.truststore.*` options | `sasl.oauthbearer.method=oidc`, `sasl.oauthbearer.token.endpoint.url`, `.client.id`, `.client.secret`, optional `.scope`, and the token endpoint's CA from `https.ca.location` or `https.ca.pem` |
+
+Relative PEM paths resolve against the file's directory. With
+`--from-properties -`, which reads stdin, they must be absolute. Kantrip copies
+the certificates into the profile and the secrets into the
+[credential vault](#credential-vault), and keeps no path. Nothing prompts.
+After importing secrets from a file, `add` reminds you on stderr that the file
+still holds them, so you can delete it if nothing else needs it. Kantrip never
+changes or deletes the file.
+
+Options fill in what the file leaves out, such as `--bootstrap-server` when it
+has no `bootstrap.servers`, `--description`, or a Registry.
+`--bootstrap-server`, `--transport`, `--ca-file`, `--auth`, and `--username`
+must match what the file sets, and other Kafka credential options fail when the
+file sets `security.protocol`. `--from-properties` can't be combined with
+`--from-strimzi`.
+
+Settings outside a Kafka connection, such as `acks`, `group.id`, or
+`client.dns.lookup`, are ignored, and `add` lists up to ten of their names on
+stderr. These fail with exit status 2 and a message that names keys, never
+values:
+
+- other keys under `sasl.`, `ssl.`, `security.`, or `https.`, such as
+  `ssl.protocol`
+- `SASL_PLAINTEXT`, GSSAPI (Kerberos), JKS or PKCS12 stores, custom login or
+  callback classes, unsecured JWTs, HTTP token endpoints, and disabled
+  certificate or hostname verification
+- Schema Registry keys, such as `schema.registry.url` or `basic.auth.user.info`:
+  remove them, then add the Registry with `kantrip edit`
+- unfilled `{{ … }}` placeholders
+- a repeated key, or a file larger than 1 MiB
+
+A file from `confluent kafka client-config create java` imports once its
+placeholders are filled and its Schema Registry lines are removed.
+
 If Strimzi manages the Kafka user, import the Secret its user operator
 generated for a SCRAM-SHA-512 or TLS `KafkaUser` instead of copying credentials
 by hand. Pipe it from `kubectl` so the Secret never lands on disk:
@@ -326,8 +387,8 @@ kubectl get secret application -n kafka -o yaml |
     --ca-file ./cluster-ca.pem
 ```
 
-`--from-strimzi FILE` reads a saved JSON or YAML Secret instead, and leaves the
-file unchanged. A SCRAM Secret becomes `scram-sha-512` authentication for the
+`--from-strimzi FILE` reads a saved JSON or YAML Secret instead, leaves the file
+unchanged, and reminds you on stderr that it still holds the credentials. A SCRAM Secret becomes `scram-sha-512` authentication for the
 `KafkaUser`; a TLS Secret becomes mTLS with its `user.crt` and `user.key`. As
 with the options above, the password or private key goes to the
 [credential vault](#credential-vault) and the certificate into the profile.
@@ -339,7 +400,8 @@ Kantrip ignores it. For a listener signed by the Strimzi cluster CA, pass the
 `ca.crt` from the `CLUSTER-cluster-ca-cert` Secret with `--ca-file`. Other
 options fill in what the Secret leaves out, such as `--description` or a
 Registry. `--transport`, `--auth`, and `--username` must match the Secret, and
-other Kafka credential options fail.
+other Kafka credential options fail. `--from-strimzi` can't be combined with
+`--from-properties`.
 
 The input must be one `v1` Secret of at most 1 MiB with the
 `strimzi.io/kind: KafkaUser` label that the operator adds. Anything else, such

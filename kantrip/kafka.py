@@ -45,6 +45,9 @@ _PRIVATE_KEY_PATTERN = re.compile(
 )
 
 
+BROKER_ADDRESS = re.compile(r"(?:\[[0-9A-Fa-f:]+\]|[^\s,:\[\]]+):([0-9]{1,5})")
+
+
 class KafkaProfileError(ValueError):
     """Raised when Kafka connection metadata is unsafe or unsupported."""
 
@@ -107,9 +110,20 @@ def read_client_certificate(path: Path) -> str:
 
 def read_private_key(path: Path, *, password: Secret | None = None) -> Secret:
     """Read and validate a bounded PEM private key without exposing its value."""
-    contents = Secret(_read_bounded_pem(path, MAX_CLIENT_PEM_BYTES, "Kafka client private key"))
+    contents = read_private_key_text(path)
     validate_private_key(contents, password=password)
     return contents
+
+
+def read_private_key_text(path: Path) -> Secret:
+    """Read a bounded PEM private key for validation once its password is known."""
+    return Secret(_read_bounded_pem(path, MAX_CLIENT_PEM_BYTES, "Kafka client private key"))
+
+
+def valid_broker_address(server: str) -> bool:
+    """Return whether a broker is one ``host:port`` address with a port in 1-65535."""
+    match = BROKER_ADDRESS.fullmatch(server)
+    return match is not None and 1 <= int(match.group(1)) <= 65535
 
 
 def validate_ca_bundle(contents: str) -> str:
@@ -773,6 +787,7 @@ def _contains_only_certificates(
 
 
 __all__ = [
+    "BROKER_ADDRESS",
     "CA_BUNDLE_FILENAME",
     "CLIENT_CERTIFICATE_FILENAME",
     "CLIENT_KEY_FILENAME",
@@ -789,8 +804,10 @@ __all__ = [
     "read_ca_bundle",
     "read_client_certificate",
     "read_private_key",
+    "read_private_key_text",
     "resolve_kafka_connection",
     "unencrypted_pem_key",
+    "valid_broker_address",
     "validate_ca_bundle",
     "validate_client_certificate",
     "validate_client_identity",

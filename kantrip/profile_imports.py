@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import stat
 from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO
 
 from kantrip.secret_value import Secret
@@ -24,14 +25,40 @@ class ProfileImportError(ValueError):
 
 @dataclass(frozen=True)
 class ImportedConnection:
-    """Kafka connection fields an import sets; ``None`` leaves a field to the options."""
+    """Kafka connection fields an import sets; ``None`` leaves a field to the options.
 
+    ``ignored_keys`` names the application settings the source held but a
+    profile doesn't keep.
+    """
+
+    bootstrap_servers: tuple[str, ...] | None = None
     transport: str | None = None
+    ca_certificates: str | None = None
     auth_type: str | None = None
     username: str | None = None
     password: Secret | None = None
     client_certificate: str | None = None
     private_key: Secret | None = None
+    private_key_password: Secret | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_scopes: tuple[str, ...] | None = None
+    oauth_client_secret: Secret | None = None
+    oauth_ca_certificates: str | None = None
+    ignored_keys: tuple[str, ...] = ()
+
+    @property
+    def has_secrets(self) -> bool:
+        """Return whether the import carried a credential."""
+        secrets = (self.password, self.private_key, self.private_key_password)
+        return any(secret is not None for secret in (*secrets, self.oauth_client_secret))
+
+
+def source_directory(source: str) -> Path | None:
+    """Return the directory relative paths in a source resolve against, or ``None`` for stdin."""
+    if source == STDIN_SOURCE:
+        return None
+    return Path(os.path.abspath(source)).parent
 
 
 def read_import_source(source: str, *, stdin: BinaryIO, label: str) -> str:
@@ -71,4 +98,5 @@ __all__ = [
     "ImportedConnection",
     "ProfileImportError",
     "read_import_source",
+    "source_directory",
 ]

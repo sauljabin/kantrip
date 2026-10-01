@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from sandbox.__main__ import CA_FILE, STATE_FILE, load_credentials
+from sandbox.__main__ import CA_FILE, STATE_FILE, STATE_ROOT, load_credentials
 from scripts import TerminalTimeout, run_terminal
 from tests.e2e.adapters import kaf_user_config_state
 from tests.e2e.registry_oauth import RegistryOAuthFailure, exercise_registry_oauth_renewal
@@ -136,6 +136,17 @@ NO_ACL_CASES = (
     ),
 )
 
+# Each Kafka mechanism's sandbox exports: the Java file and the librdkafka file.
+PROPERTIES_IMPORTS = (
+    ("plaintext", "plaintext"),
+    ("tls", "tls"),
+    ("plain", "plain"),
+    ("scram-256", "scram-256"),
+    ("scram", "scram"),
+    ("mtls-pem", "mtls"),
+    ("oauth", "oauth"),
+)
+
 REGISTRY_CASES = (
     RegistryAuthCase(
         "schema-registry-basic",
@@ -220,6 +231,7 @@ def main() -> None:
                 profiles.append(profile)
                 _exercise_profile(profile, case, environment)
             _exercise_strimzi_imports(credentials, environment, profiles)
+            _exercise_properties_imports(credentials, environment, profiles)
             for case in NO_ACL_CASES:
                 profile = f"auth-{case.name}"
                 _add_profile(profile, case, credentials, environment)
@@ -460,7 +472,50 @@ def _exercise_strimzi_imports(
         profiles.append(profile)
         if credentials["KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD"] in output:
             raise AuthSmokeFailure(f"{profile} import printed a credential")
+        if ("still holds the imported credentials" in output) != (input_text is None):
+            raise AuthSmokeFailure(f"{profile} import printed the wrong source-file hint")
         _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
+
+
+def _exercise_properties_imports(
+    credentials: Mapping[str, str],
+    environment: Mapping[str, str],
+    profiles: list[str],
+) -> None:
+    """Import each mechanism's Java export from its file and librdkafka export from stdin."""
+    secrets = [
+        value
+        for field, value in credentials.items()
+        if value and ("PASSWORD" in field or "SECRET" in field)
+    ]
+    for java_name, librdkafka_name in PROPERTIES_IMPORTS:
+        java = STATE_ROOT / f"kafka-{java_name}.properties"
+        librdkafka = STATE_ROOT / f"librdkafka-{librdkafka_name}.properties"
+        if not java.is_file() or not librdkafka.is_file():
+            raise AuthSmokeFailure(
+                "Kafka properties exports are missing; run `python -m sandbox up`"
+            )
+        has_secrets = java_name not in ("plaintext", "tls")
+        for profile, source, input_text in (
+            (f"auth-properties-java-{java_name}", str(java), None),
+            (
+                f"auth-properties-librdkafka-{librdkafka_name}",
+                "-",
+                librdkafka.read_text(encoding="utf-8"),
+            ),
+        ):
+            output = _run(
+                (*_cli(), "add", profile, "--from-properties", source),
+                environment,
+                input_text=input_text,
+            )
+            profiles.append(profile)
+            if any(secret in output for secret in secrets):
+                raise AuthSmokeFailure(f"{profile} import printed a credential")
+            hinted = "still holds the imported credentials" in output
+            if hinted != (has_secrets and input_text is None):
+                raise AuthSmokeFailure(f"{profile} import printed the wrong source-file hint")
+            _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
 
 
 def _exercise_profile(

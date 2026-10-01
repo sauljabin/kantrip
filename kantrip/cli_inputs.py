@@ -118,6 +118,7 @@ class AddOptions:
     them first; `kafka_auth_type` and `add` apply the defaults afterwards.
     """
 
+    from_properties: str | None
     from_strimzi: str | None
     bootstrap_servers: tuple[str, ...] | None
     description: str | None
