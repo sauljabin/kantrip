@@ -302,8 +302,24 @@ COSMIC (Pop!_OS 24.04).
 - **Windows are bounded.** The provider shows a window only when its prompt
   runs. An unanswered window blocks forever and stays on screen, so Kantrip
   waits at most 60 seconds, then calls `Prompt.Dismiss()`; Ctrl-C dismisses it
-  too. A prompt dismissed within a second was never shown (no display over SSH,
-  a locked GNOME screen), and Kantrip asks for an unlocked desktop session.
+  too. GNOME closes the window; KDE only reports the prompt as dismissed and
+  leaves its window open, so the timeout message asks the user to close it. A
+  prompt dismissed within a second was never shown (no display over SSH, a
+  locked GNOME screen), and Kantrip asks for an unlocked desktop session.
+- **KDE requires a Classic wallet.** A GPG-encrypted wallet has no KDE password
+  window: `ksecretd` decrypts it synchronously through gpgme, and gpg-agent's
+  pinentry asks for the key passphrase, also right after the creation wizard.
+  Measured with GnuPG 2.4.8 ([#104](https://github.com/sauljabin/kantrip/issues/104)):
+  while the pinentry waits, `ksecretd` answers no D-Bus call from any client,
+  so `Prompt.Dismiss()` blocks and the 60-second bound and Ctrl-C hold only
+  until pinentry's own timeout (60 seconds by default, configurable); Cancel, a
+  terminal pinentry (which fails without a TTY), and a timeout all leave KDE
+  error boxes that Kantrip cannot tell apart; and gpg-agent's passphrase cache
+  (10 minutes, up to 2 hours) reopens the vault with no window and no
+  detectable sign. Kantrip therefore reads the cipher byte of the
+  `kantrip.kwl` header (no secret, no window): it removes a new GPG wallet
+  right after creation, refuses an existing one before any `Unlock`, and
+  doctor warns about it.
 - **No terminal, no window.** Without a controlling terminal, Kantrip still calls
   `Unlock`: if no prompt is needed, the vault is used; otherwise the unshown
   prompt is dismissed and the command fails at once.
@@ -334,7 +350,8 @@ On macOS, doctor also reads the lock policy of an unlocked vault
 (`SecKeychainCopySettings` with interaction disabled) and warns about an empty
 password or a missing vault still in the search list, which `--repair`
 removes. On Linux, doctor warns when the vault is the default collection, has an
-empty password, or is a KDE wallet listed without its file; warnings learned
+empty password, is a KDE wallet listed without its file, or is a GPG-encrypted
+KDE wallet; warnings learned
 while opening the vault follow the profile checks. `--repair` never moves the
 default collection, because it cannot know which one the user wants.
 

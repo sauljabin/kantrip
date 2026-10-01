@@ -322,7 +322,11 @@ window asks for a new password.
 - GNOME and COSMIC: leave the password empty and accept it. `add` fails with
   `must not be empty; the new vault was removed`. Run `add` again with a real
   password: `Created /org/freedesktop/secrets/collection/kantrip.` appears.
-- KDE: choose Classic in the wizard (GPG is preselected), then a password.
+- KDE: if you have a GPG key, first keep GPG in the wizard, pick your key,
+  and enter its passphrase in GnuPG's window. `add` fails with
+  `must be a Classic wallet, not GPG; the new wallet was removed`, and no
+  `kantrip.kwl` remains. Then run `add` again (or the first time without a GPG
+  key), choose Classic, then a password.
   `Created ~/.local/share/kwalletd/kantrip.kwl.` appears, and System Settings
   still shows your previous default wallet.
 
@@ -343,7 +347,8 @@ kantrip ping qa-linux     # the terminal says a window is waiting; a window open
 - Lock it and run `ping` again, then click Cancel:
   `Error: Kantrip vault unlock was cancelled`.
 - Lock it, run `ping`, and leave the window alone. After 60 seconds, expect
-  `got no answer within 60 seconds`, with the window gone.
+  `got no answer within 60 seconds`. GNOME and COSMIC close the window; KDE
+  leaves it open, so click Cancel.
 
 **No terminal.** A script must fail at once instead of opening a window.
 

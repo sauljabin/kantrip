@@ -160,7 +160,8 @@
   guessing. Bound every window with the 60-second timeout and
   `Prompt.Dismiss()`; without a terminal, proceed only when the vault opens
   without a window. Restore KDE's `default` alias around create and unlock, and
-  never move it in `--repair`.
+  never move it in `--repair`. Accept only Classic KDE wallets: detect GPG from
+  the `kantrip.kwl` header, never by unlocking.
 - Unit tests replace the OS layer (`KeychainSystem`, `SecretServiceSystem`) with
   fakes and never touch a real store; tests that reach `load_secret_store`
   patch it.

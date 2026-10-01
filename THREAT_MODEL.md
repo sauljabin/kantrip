@@ -299,6 +299,9 @@ Controls:
 - Refuse an empty vault password at creation and report one in `doctor`, since
   it lets anyone at the account unlock the vault without a prompt; on GNOME it
   also stores the keyring file in plain text.
+- Refuse a GPG-encrypted KDE vault at creation, before any unlock, and in
+  `doctor`: gpg-agent's passphrase cache reopens it without asking, and its
+  pinentry blocks KDE Wallet beyond Kantrip's timeout.
 - Warn when a Linux vault opens without asking for its password, which reveals
   GNOME's "Automatically unlock this keyring whenever I'm logged in" or an empty
   password, and warn in `doctor` when the vault is the desktop's default

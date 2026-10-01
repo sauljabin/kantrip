@@ -32,6 +32,9 @@ LOGIN = "/org/freedesktop/secrets/collection/login"
 KDEWALLET = "/org/freedesktop/secrets/collection/kdewallet"
 ENCRYPTED = b"GnomeKeyring\n\r\0\n" + b"\x00" * 16
 PLAIN = b"[keyring]\ndisplay-name=kantrip\n"
+# KWallet magic, then major and minor version, cipher, and hash.
+CLASSIC_WALLET = b"KWALLET\n\r\0\r\n" + bytes([0, 1, 3, 2]) + b"\x00" * 16
+GPG_WALLET = b"KWALLET\n\r\0\r\n" + bytes([0, 0, 2, 0]) + b"\x00" * 16
 
 
 class TestLinuxVaultStorage(unittest.TestCase):
@@ -374,6 +377,53 @@ class TestKDEVault(unittest.TestCase):
         )
         self.assertEqual("unlocked", status.state)
 
+    def test_gpg_vault_is_refused_without_unlocking_or_a_window(self) -> None:
+        # gpg-agent's pinentry blocks ksecretd beyond any timeout Kantrip sets.
+        self.fake.add_vault(locked=True, gpg=True)
+
+        with self.assertRaisesRegex(VaultError, "is encrypted with GPG") as raised:
+            self.vault.get(self.reference)
+        with self.assertRaisesRegex(VaultError, "is encrypted with GPG"):
+            self.vault.delete(self.reference)
+
+        self.assertIn("choosing Classic", str(raised.exception))
+        self.assertIn("--replace-secret", str(raised.exception))
+        self.assertEqual([], self.fake.unlock_requests)
+        self.assertEqual([], self.fake.prompts_run)
+        self.assertEqual([], self.fake.locked_reads)
+
+    def test_unlocked_gpg_vault_is_refused_too(self) -> None:
+        # A cached GPG passphrase opens the wallet without asking.
+        self.fake.add_vault(locked=False, gpg=True)
+
+        with self.assertRaisesRegex(VaultError, "is encrypted with GPG"):
+            self.vault.set(self.reference, "synthetic")
+
+        self.assertEqual({}, self.fake.vault_collection().items)
+
+    def test_gpg_vault_status_is_a_warning(self) -> None:
+        self.fake.add_vault(locked=True, gpg=True)
+
+        status = self.vault.vault_status()
+
+        self.assertEqual("locked", status.state)
+        (warning,) = status.warnings
+        self.assertIn("is encrypted with GPG, which Kantrip does not support", warning)
+        self.assertEqual([], self.fake.unlock_requests)
+
+    def test_new_gpg_wallet_is_removed_and_classic_is_asked_for(self) -> None:
+        self.fake.creates_gpg_wallet = True
+        self.fake.answers = ["accept"]
+
+        with self.assertRaisesRegex(VaultError, "the new wallet was removed"):
+            self.vault.set(self.reference, "synthetic")
+
+        self.assertEqual([KDE_VAULT_PATH], self.fake.deleted)
+        self.assertFalse(self.fake.wallet_file.exists())
+        self.assertNotIn(VAULT_ALIAS, self.fake.aliases)
+        self.assertEqual(KDEWALLET, self.fake.aliases["default"])
+        self.assertEqual("missing", self.vault.vault_status().state)
+
     def test_default_wallet_vault_is_a_warning(self) -> None:
         self.fake.add_vault(locked=True)
         self.fake.aliases["default"] = KDE_VAULT_PATH
@@ -439,6 +489,8 @@ class FakeSecretService:
         self.created: list[tuple[str, str]] = []
         self.create_path = GNOME_VAULT_PATH
         self.creates_plain_file = False
+        self.creates_gpg_wallet = False
+        self.deleted: list[str] = []
         self.opens_without_window = False
         # KDE makes a wallet the default when it is first created or opened.
         self.first_use_takeover = False
@@ -482,8 +534,9 @@ class FakeSecretService:
     def add_collection(self, path: str, label: str, *, locked: bool = True) -> None:
         self.collections_by_path[path] = FakeCollection(label, locked)
 
-    def add_vault(self, *, locked: bool) -> None:
+    def add_vault(self, *, locked: bool, gpg: bool = False) -> None:
         self.add_collection(self.create_path, VAULT_LABEL, locked=locked)
+        self.creates_gpg_wallet = gpg
         self._write_vault_file(plain=False)
         if self.kde_provider:
             self.aliases[VAULT_ALIAS] = self.create_path
@@ -536,7 +589,13 @@ class FakeSecretService:
         return NO_OBJECT, self._prompt(create)
 
     def delete_collection(self, collection: str) -> str:
+        self.deleted.append(collection)
         del self.collections_by_path[collection]
+        if self.kde_provider:
+            self.wallet_file.unlink()
+            self.aliases = {
+                alias: path for alias, path in self.aliases.items() if path != collection
+            }
         return NO_OBJECT
 
     def prompt(self, prompt: str, timeout: float) -> tuple[bool, str]:
@@ -611,9 +670,14 @@ class FakeSecretService:
         return found
 
     def _write_vault_file(self, *, plain: bool) -> None:
-        path = self.wallet_file if self.kde_provider else self.keyring_file
+        if self.kde_provider:
+            path = self.wallet_file
+            content = GPG_WALLET if self.creates_gpg_wallet else CLASSIC_WALLET
+        else:
+            path = self.keyring_file
+            content = PLAIN if plain else ENCRYPTED
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(PLAIN if plain else ENCRYPTED)
+        path.write_bytes(content)
 
 
 def _home(test: unittest.TestCase) -> Path:

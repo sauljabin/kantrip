@@ -137,12 +137,13 @@ explains what `ping` checks and which Registry permissions it needs.
 | --- | --- | --- |
 | macOS | The Kantrip vault, a dedicated keychain at `~/Library/Keychains/kantrip.keychain-db`, read and written only through `/usr/bin/security` | Locks after 15 idle minutes and on sleep unless you change it in Keychain Access; unlocks on the terminal |
 | Linux with GNOME Keyring (GNOME, COSMIC, and other desktops that run it) | The Kantrip vault, a dedicated keyring `kantrip` at `~/.local/share/keyrings/kantrip.keyring` | Locks only at logout; unlocks in a desktop window |
-| Linux with KDE Wallet (KDE Plasma) | The Kantrip vault, a dedicated wallet `kantrip` at `~/.local/share/kwalletd/kantrip.kwl` | Locks at logout, or when unused for the time set in KDE's settings; unlocks in a desktop window |
+| Linux with KDE Wallet (KDE Plasma) | The Kantrip vault, a dedicated Classic (Blowfish) wallet `kantrip` at `~/.local/share/kwalletd/kantrip.kwl`; GPG-encrypted wallets are refused | Locks at logout, or when unused for the time set in KDE's settings; unlocks in a desktop window |
 | Windows, and other Secret Service providers such as KeePassXC | Unsupported | Not applicable |
 
 The Linux vault was tested with GNOME Keyring 46 and 50 and with KDE
-Frameworks 6.24 (`ksecretd`). [Credential vault](USAGE.md#credential-vault)
-explains creating, unlocking, and deleting it.
+Frameworks 6.24 (`ksecretd`) with GnuPG 2.4. [Credential vault](USAGE.md#credential-vault)
+explains creating, unlocking, and deleting it, and why KDE needs a Classic
+wallet.
 
 ## File formats
 
