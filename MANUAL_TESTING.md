@@ -7,9 +7,9 @@ with the built wheel. Each platform takes about 30 minutes.
 
 | Section | macOS | Linux |
 | --- | --- | --- |
-| 0–6 | Yes | Yes |
-| 7. macOS vault | Yes | No |
-| 8. Linux vault | No | Yes, on each desktop: Ubuntu (GNOME), Pop!_OS (COSMIC), Kubuntu (KDE) |
+| 0–7 | Yes | Yes |
+| 8. macOS vault | Yes | No |
+| 9. Linux vault | No | Yes, on each desktop: Ubuntu (GNOME), Pop!_OS (COSMIC), Kubuntu (KDE) |
 
 Record the candidate commit, OS and desktop, shell, and the result of each
 section. For a failure, add the command and its sanitized output.
@@ -88,7 +88,7 @@ kantrip ping qa-scram
 ```
 
 Paste the SCRAM password (see section 0) when `add` asks. If you have no vault
-yet, `add` creates one first (see section 7 or 8).
+yet, `add` creates one first (see section 8 or 9).
 
 Expect:
 
@@ -198,7 +198,54 @@ kantrip doctor
 Expect the first `doctor` to name the missing field, `edit` to ask for the
 password again, and the second `doctor` to pass.
 
-## 7. macOS vault
+## 7. Imports take credentials from files you already have
+
+An import must read a real client file or Secret without prompting, keep its
+secrets only in the vault, say plainly what it skipped, and leave the file as
+it was.
+
+```bash
+cp sandbox/.state/kafka-scram.properties "$QA/client.properties"
+printf 'acks=all\ngroup.id=qa\n' >> "$QA/client.properties"
+cp "$QA/client.properties" "$QA/client.properties.orig"
+kantrip add qa-properties --from-properties "$QA/client.properties"
+cmp "$QA/client.properties" "$QA/client.properties.orig" && echo "file unchanged"
+kubectl --context kind-kantrip-sandbox -n kantrip-sandbox get secret kantrip-mtls -o yaml |
+  kantrip add qa-strimzi --from-strimzi - -b localhost:9095 --ca-file sandbox/.state/ca.crt
+kantrip add qa-registry \
+  --from-properties sandbox/.state/registry-schema-registry-basic.properties
+kantrip describe qa-registry
+kantrip ping qa-properties && kantrip ping qa-strimzi && kantrip ping qa-registry
+printf 'security.protocol=SASL_PLAINTEXT\n' | kantrip add qa-bad --from-properties -
+echo "exit status $?"
+```
+
+Expect:
+
+- No prompt appears.
+- `add qa-properties` prints two clear lines on stderr: the ignored settings
+  `acks, group.id` by name, and a reminder that the file still holds the
+  imported credentials. `add qa-registry` prints only the reminder, and the
+  Strimzi import from stdin prints neither.
+- `cmp` prints `file unchanged`.
+- `describe qa-registry` shows the Confluent Registry with Basic
+  authentication and `registry.auth.password` as `configured`, never a value.
+- Your vault manager shows new `Kantrip kafka/password`,
+  `Kantrip kafka/tls/private-key`, and `Kantrip registry/password` items in the
+  `kantrip` vault, and nothing in `login` or `kdewallet`.
+- Every `ping` succeeds.
+- The `SASL_PLAINTEXT` import fails with one message that explains why, exit
+  status `2`, and creates no profile.
+
+Remove the import profiles:
+
+```bash
+kantrip remove qa-properties --yes
+kantrip remove qa-strimzi --yes
+kantrip remove qa-registry --yes
+```
+
+## 8. macOS vault
 
 Only on macOS. Every prompt appears in the terminal; no macOS window may appear.
 Record the wording if one does.
@@ -250,7 +297,7 @@ unlock it`.
 `kantrip ping qa-mac`, sleep the Mac for a minute, wake it, and run
 `kantrip doctor`: it asks for the password and reports `(locked)`.
 
-## 8. Linux vault
+## 9. Linux vault
 
 Only on Linux. Run it on each desktop in the table at the top, logged in to the
 desktop, from a terminal on that desktop. Password windows are desktop windows;
