@@ -315,8 +315,8 @@ fields you don't mention alone; `--unset kafka.auth.oauth.scopes` and
 `--unset kafka.auth.oauth.ca` remove them.
 
 If a client already connects with a Java `client.properties` file or a
-librdkafka configuration, import its Kafka connection instead of typing it
-again:
+librdkafka configuration, import its Kafka and Registry connections instead of
+typing them again:
 
 ```bash
 kantrip add production-client --from-properties ./client.properties
@@ -324,7 +324,9 @@ kantrip add production-client --from-properties ./client.properties
 
 Kantrip tells the two dialects apart by their keys: `sasl.jaas.config` or
 `ssl.truststore.location` means Java, and `sasl.username` or `ssl.ca.location`
-means librdkafka. A file that mixes them fails. A file with only keys both
+means librdkafka. Registry TLS keys (`schema.registry.ssl.*`) and Apicurio keys
+are read only by Java serializers, so they mean Java too. A file that mixes the
+dialects fails. A file with only keys both
 share, such as `bootstrap.servers` and `security.protocol`, imports when Java
 and librdkafka read it the same way. Java files follow Java's properties
 syntax, with `\` escapes, `\uXXXX`, and continued lines. Kafka's Java tools read
@@ -342,6 +344,24 @@ an explicit `security.protocol`.
 | mTLS | `ssl.keystore.type=PEM`, `ssl.keystore.certificate.chain`, `ssl.keystore.key`, optional `ssl.key.password` | `ssl.certificate.location` or `ssl.certificate.pem`, `ssl.key.location` or `ssl.key.pem`, optional `ssl.key.password` |
 | OAuth client credentials | `sasl.login.callback.handler.class` set to `OAuthBearerLoginCallbackHandler`, `sasl.oauthbearer.token.endpoint.url`, the client ID and secret as `sasl.oauthbearer.client.credentials.*` or as `clientId` and `clientSecret` JAAS options, optional scope, and the token endpoint's CA from the JAAS `ssl.truststore.*` options | `sasl.oauthbearer.method=oidc`, `sasl.oauthbearer.token.endpoint.url`, `.client.id`, `.client.secret`, optional `.scope`, and the token endpoint's CA from `https.ca.location` or `https.ca.pem` |
 
+The file can also set one Registry, Confluent-compatible or native Apicurio.
+The provider follows from the keys, and keys from both fail:
+
+| Setting | Confluent | Apicurio |
+| --- | --- | --- |
+| URL | `schema.registry.url` | `apicurio.registry.url` |
+| CA | `schema.registry.ssl.truststore.type=PEM` with `schema.registry.ssl.truststore.location` or `.certificates` | `apicurio.registry.tls.certificates` (inline PEM or comma-separated files), or `apicurio.registry.tls.truststore.type=PEM` with `apicurio.registry.tls.truststore.location` |
+| Basic | `basic.auth.credentials.source=USER_INFO` and `basic.auth.user.info` as `USER:PASSWORD` | `apicurio.registry.auth.username` and `apicurio.registry.auth.password` |
+| Fixed token | `bearer.auth.credentials.source=STATIC_TOKEN` and `bearer.auth.token` | Not supported |
+| OAuth client credentials | `bearer.auth.credentials.source=OAUTHBEARER`, `bearer.auth.issuer.endpoint.url`, `.client.id`, `.client.secret`, optional `.scope`, `.logical.cluster`, and `.identity.pool.id` | `apicurio.registry.auth.service.token.endpoint`, `.client.id`, `.client.secret`, optional `.client.scope` |
+| mTLS | `schema.registry.ssl.keystore.type=PEM`, `schema.registry.ssl.keystore.certificate.chain`, `schema.registry.ssl.keystore.key`, optional `schema.registry.ssl.key.password` | `apicurio.registry.tls.client-certificate` and `apicurio.registry.tls.client-key`, inline PEM or files, without a key password |
+
+`basic.auth.*` and `bearer.auth.*` may also carry the `schema.registry.` prefix,
+but not both spellings at once. Bare `ssl.*` keys always configure Kafka, never
+the Registry. Both clients use the Registry's CA for its OAuth token endpoint
+too, so the profile keeps the same CA for both. A Registry with authentication
+or a CA needs an `https://` URL.
+
 Relative PEM paths resolve against the file's directory. With
 `--from-properties -`, which reads stdin, they must be absolute. Kantrip copies
 the certificates into the profile and the secrets into the
@@ -354,11 +374,14 @@ Options fill in what the file leaves out, such as `--bootstrap-server` when it
 has no `bootstrap.servers`, `--description`, or a Registry.
 `--bootstrap-server`, `--transport`, `--ca-file`, `--auth`, and `--username`
 must match what the file sets, and other Kafka credential options fail when the
-file sets `security.protocol`. `--from-properties` can't be combined with
-`--from-strimzi`.
+file sets `security.protocol`. Likewise, `--registry-provider`,
+`--registry-url`, `--registry-ca-file`, `--registry-auth`, and
+`--registry-username` must match the file's Registry, and the other Registry
+credential options fail when it sets one. `--from-properties` can't be
+combined with `--from-strimzi`.
 
-Settings outside a Kafka connection, such as `acks`, `group.id`, or
-`client.dns.lookup`, are ignored, and `add` lists up to ten of their names on
+Settings outside a connection, such as `acks`, `group.id`,
+`client.dns.lookup`, or `auto.register.schemas`, are ignored, and `add` lists up to ten of their names on
 stderr. These fail with exit status 2 and a message that names keys, never
 values:
 
@@ -367,15 +390,19 @@ values:
 - `SASL_PLAINTEXT`, GSSAPI (Kerberos), JKS or PKCS12 stores, custom login or
   callback classes, unsecured JWTs, HTTP token endpoints, and disabled
   certificate or hostname verification
-- Schema Registry keys, such as `schema.registry.url` or `basic.auth.user.info`:
-  remove them, then add the Registry with `kantrip edit`
+- other Registry connection keys, such as `bearer.auth.custom.provider.class`
+  or `apicurio.registry.proxy.host`
+- Registry credentials in the URL (`basic.auth.credentials.source=URL`),
+  Kafka credential inheritance (`SASL_INHERIT`, `SASL_OAUTHBEARER_INHERIT`),
+  custom credential providers, `apicurio.registry.tls.trust-all=true`, and a
+  Registry with several authentications or URLs
 - unfilled `{{ … }}` placeholders
 - a repeated key, or a file larger than 1 MiB
 
 Files from `confluent kafka client-config create`, such as `create java` or
-`create python`, import as they are when created without a Schema Registry key,
-because the Confluent CLI then comments out the Registry lines. With
-`--schema-registry-api-key`, remove those lines before importing.
+`create python`, import as they are, Registry lines included. Without a Schema
+Registry key, the Confluent CLI comments those lines out, so only Kafka is
+imported.
 
 If Strimzi manages the Kafka user, import the Secret its user operator
 generated for a SCRAM-SHA-512 or TLS `KafkaUser` instead of copying credentials

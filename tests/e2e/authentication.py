@@ -147,6 +147,15 @@ PROPERTIES_IMPORTS = (
     ("oauth", "oauth"),
 )
 
+# Sandbox Registry exports; the Apicurio OAuth one is imported from stdin.
+REGISTRY_PROPERTIES_IMPORTS = (
+    "schema-registry-basic",
+    "schema-registry-oauth",
+    "schema-registry-mtls",
+    "apicurio-basic",
+    "apicurio-oauth",
+)
+
 REGISTRY_CASES = (
     RegistryAuthCase(
         "schema-registry-basic",
@@ -244,6 +253,7 @@ def main() -> None:
                 _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
                 _exercise_kaf_registry_refusal(profile, registry_case, environment)
                 _exercise_kcl_registry(profile, registry_case, environment)
+            _exercise_registry_properties_imports(credentials, environment, profiles)
             _exercise_invalid_credentials(credentials, environment, profiles)
             _exercise_invalid_registry_credentials(directory, credentials, environment, profiles)
             _exercise_invalid_mtls(directory, environment, profiles)
@@ -516,6 +526,38 @@ def _exercise_properties_imports(
             if hinted != (has_secrets and input_text is None):
                 raise AuthSmokeFailure(f"{profile} import printed the wrong source-file hint")
             _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
+
+
+def _exercise_registry_properties_imports(
+    credentials: Mapping[str, str],
+    environment: Mapping[str, str],
+    profiles: list[str],
+) -> None:
+    """Import each Registry export with its plaintext Kafka connection, then ping both."""
+    secrets = [
+        value
+        for field, value in credentials.items()
+        if value and ("PASSWORD" in field or "SECRET" in field)
+    ]
+    for name in REGISTRY_PROPERTIES_IMPORTS:
+        path = STATE_ROOT / f"registry-{name}.properties"
+        if not path.is_file():
+            raise AuthSmokeFailure(
+                "Registry properties exports are missing; run `python -m sandbox up`"
+            )
+        stdin = name == "apicurio-oauth"
+        profile = f"auth-properties-{name}"
+        output = _run(
+            (*_cli(), "add", profile, "--from-properties", "-" if stdin else str(path)),
+            environment,
+            input_text=path.read_text(encoding="utf-8") if stdin else None,
+        )
+        profiles.append(profile)
+        if any(secret in output for secret in secrets):
+            raise AuthSmokeFailure(f"{profile} import printed a credential")
+        if ("still holds the imported credentials" in output) == stdin:
+            raise AuthSmokeFailure(f"{profile} import printed the wrong source-file hint")
+        _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
 
 
 def _exercise_profile(

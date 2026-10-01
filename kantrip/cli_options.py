@@ -208,8 +208,8 @@ add_profile_options = _options(
             "--from-properties",
             metavar="FILE",
             help=(
-                "Import the Kafka connection from Java or librdkafka client properties; "
-                "- reads stdin."
+                "Import the Kafka and Registry connections from Java or librdkafka client "
+                "properties; - reads stdin."
             ),
         ),
         cloup.option(
@@ -273,9 +273,7 @@ add_profile_options = _options(
         _choice(
             "--registry-auth",
             _REGISTRY_AUTH_TYPES,
-            "Registry authentication mechanism.",
-            default="none",
-            show_default=True,
+            "Registry authentication mechanism; defaults to none.",
         ),
         _name("--registry-username", "Registry Basic authentication username."),
         _pem_file(

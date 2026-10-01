@@ -92,7 +92,7 @@ for clients with a versioned, tested contract.
 | --- | --- | --- |
 | CLI | `cli.py`, `cli_options.py`, `cli_inputs.py`, `cli_imports.py`, `console.py`, `profile_output.py`, `redaction.py` | Commands and presentation; `add`/`edit` options declared once per field; typed inputs and no-echo secret prompts; merging an import with explicit options; output without secrets |
 | Profiles | `profiles.py`, `profile_storage.py`, `profile_auth.py`, `profile_documents.py` | Mutation orchestration and snapshot resolution; SQLite paths, locks, and loading; pure authentication and document planning |
-| Imports | `profile_imports.py`, `strimzi.py`, `properties_syntax.py`, `client_properties.py` | Bounded import sources, the typed imported connection, the Strimzi `KafkaUser` Secret parser, Java properties, librdkafka properties, and JAAS readers, and the closed Kafka mapping from client properties |
+| Imports | `profile_imports.py`, `strimzi.py`, `properties_syntax.py`, `client_properties.py`, `registry_properties.py`, `property_mapping.py` | Bounded import sources, the typed imported connection, the Strimzi `KafkaUser` Secret parser, Java properties, librdkafka properties, and JAAS readers, and the closed Kafka and Registry mappings from client properties over one key-by-key reader |
 | Consistency | `credential_mutations.py`, `mutation_outcomes.py`, `reconciliation.py`, `migrations.py`, `maintenance.py` | Cross-store staging and retirement; commit classification; the cleanup journal; the migration chain; `doctor --repair` |
 | Credentials | `secret_store.py`, `macos_vault.py`, `linux_vault.py`, `secret_value.py` | The `SecretStore` protocol and its two vaults; `Secret`, which never renders itself |
 | Connections | `kafka.py`, `registry.py`, `oauth.py` | Validated connection models and canonical properties |
@@ -201,7 +201,9 @@ Client properties have no dialect marker, so `client_properties.py` reads the
 text as Java properties and as librdkafka `key=value` lines, then decides by
 the keys each reader found. Dialect-specific keys pick one reader; keys from
 both fail, since the file would mean different things to different clients.
-With only shared keys, both readings must agree, which rules out Java escapes,
+Registry TLS keys (`schema.registry.ssl.*`) and Apicurio keys count as Java,
+since only Java serializers read them. With only shared keys, both readings
+must agree, which rules out Java escapes,
 continuations, and `:` or space separators that librdkafka would take
 literally. The Java reader follows `Properties.load` and requires ASCII,
 because Kafka's Java tools load properties as ISO-8859-1. `sasl.jaas.config`
@@ -215,6 +217,19 @@ while carrying settings Kantrip would silently drop. Security namespaces
 (`sasl.`, `ssl.`, `security.`, `https.`) are closed too: an unknown key there
 may change what the connection trusts, so it fails. Any other key is an
 application setting and is ignored and listed by name.
+
+Registry keys go to `registry_properties.py`, which picks Confluent or Apicurio
+from the key namespaces and fails on keys from both. The Registry namespaces
+(`schema.registry.`, `basic.auth.`, `bearer.auth.`, and Apicurio's `url`,
+`auth.`, `tls.`, and `proxy.` keys) are closed the same way, while serializer
+settings such as `auto.register.schemas` are application keys. Confluent's
+serializers accept `basic.auth.*` and `bearer.auth.*` with or without the
+`schema.registry.` prefix, so the mapping strips that prefix and fails when a
+key is spelled both ways. Only the prefixed `schema.registry.ssl.*` configures
+Registry TLS: bare `ssl.*` is Kafka's, and guessing that one CA or key serves
+both services could send a Kafka identity to the Registry. Both serializers use
+the Registry's trust for its OAuth token endpoint, so an imported OAuth
+Registry keeps one CA for both, as the session renderers require.
 
 ## Credential vault
 

@@ -471,7 +471,7 @@ class TestRejectedProperties(unittest.TestCase):
                 f"sasl.password={PASSWORD}\nsasl.password={PASSWORD}\n",
                 "repeats key sasl.password",
             ),
-            "empty": ("# nothing\n", "set no Kafka connection key"),
+            "empty": ("# nothing\n", "set no Kafka or Registry connection key"),
         }
         for name, (text, message) in cases.items():
             with self.subTest(name):
@@ -539,11 +539,6 @@ class TestRejectedProperties(unittest.TestCase):
             "unknown security key": (
                 _properties(*java_ssl, "ssl.protocol=TLSv1.3"),
                 "ssl.protocol",
-            ),
-            "Registry key": (CONFLUENT_JAVA_KAFKA + CONFLUENT_REGISTRY, "kantrip edit PROFILE"),
-            "librdkafka Registry key": (
-                CONFLUENT_LIBRDKAFKA_KAFKA + CONFLUENT_REGISTRY,
-                "kantrip edit PROFILE",
             ),
             # The CLI fills these; they remain only in a template copied by hand.
             "placeholder": (
@@ -773,7 +768,7 @@ class TestAddFromProperties(unittest.TestCase):
         ca = str(self.write(pki.ca, "ca.pem"))
         cases = {
             "brokers": (("-b", "other.invalid:9092"), "--bootstrap-server does not match"),
-            "auth": (("--auth", "scram-sha-512"), "--auth does not match the Kafka properties"),
+            "auth": (("--auth", "scram-sha-512"), "--auth does not match the Client properties"),
             "username": (("--username", "other"), "--username does not match"),
             "transport": (("--transport", "plaintext"), "--transport does not match"),
             "credential": (
@@ -800,7 +795,7 @@ class TestAddFromProperties(unittest.TestCase):
         result = self.invoke("tls", "--from-properties", str(path), "--ca-file", str(wrong))
 
         self.assertEqual(2, result.exit_code, result.output)
-        self.assertIn("--ca-file does not match the Kafka properties", result.output)
+        self.assertIn("--ca-file does not match the Client properties", result.output)
 
     def test_invalid_import_exits_2_without_values(self) -> None:
         result = self.invoke(

@@ -1,9 +1,9 @@
-"""Import a Kafka connection from Java or librdkafka client properties.
+"""Import Kafka and Registry connections from Java or librdkafka client properties.
 
-The dialect comes from the keys, and a closed mapping turns the recognized keys
-into an `ImportedConnection`. Security keys outside that mapping fail by name;
-keys outside the security namespaces are application settings and are ignored.
-Errors name keys and rules, never values.
+The dialect comes from the keys, and closed mappings turn the recognized keys
+into an `ImportedConnection`. Security and Registry keys outside those mappings
+fail by name; other keys are application settings and are ignored. Errors name
+keys and rules, never values.
 """
 
 from __future__ import annotations
@@ -12,20 +12,16 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from kantrip.kafka import (
-    KafkaProfileError,
     read_ca_bundle,
     read_client_certificate,
     read_private_key_text,
     valid_broker_address,
     validate_ca_bundle,
     validate_client_certificate,
-    validate_client_identity,
-    validate_sasl_credential,
 )
-from kantrip.oauth import OAuthProfileError, validate_oauth_endpoint
 from kantrip.profile_imports import ImportedConnection, ProfileImportError
 from kantrip.properties_syntax import (
     JaasEntry,
@@ -36,9 +32,18 @@ from kantrip.properties_syntax import (
     parse_librdkafka_properties,
     reportable_key,
 )
+from kantrip.property_mapping import (
+    LABEL,
+    PropertyReader,
+    check_hostname_verification,
+    client_identity,
+    java_pem_identity,
+    java_pem_trust,
+    split_scopes,
+)
+from kantrip.registry_properties import is_registry_key, parse_registry_properties
 from kantrip.secret_value import Secret
 
-LABEL = "Kafka properties"
 JAVA = "Java"
 LIBRDKAFKA = "librdkafka"
 
@@ -88,6 +93,9 @@ _JAVA_MARKERS = (
     "ssl.truststore.",
     "ssl.keystore.",
     "sasl.oauthbearer.client.credentials.",
+    # Only JVM serdes read these Registry keys: Apicurio's and Confluent Java's TLS.
+    "apicurio.registry.",
+    "schema.registry.ssl.",
 )
 _LIBRDKAFKA_MARKERS = (
     "sasl.username",
@@ -104,14 +112,6 @@ _LIBRDKAFKA_MARKERS = (
     "https.ca.",
 )
 _SECURITY_PREFIXES = ("sasl.", "ssl.", "security.", "https.", "enable.ssl.", "enable.sasl.")
-_REGISTRY_PREFIXES = (
-    "schema.registry.",
-    "basic.auth.",
-    "bearer.auth.",
-    "apicurio.registry.url",
-    "apicurio.registry.auth.",
-    "apicurio.registry.tls.",
-)
 _UNSUPPORTED_REASONS = (
     ("sasl.kerberos.", "Kerberos is not supported"),
     ("sasl.login.class", "custom login classes are not supported"),
@@ -142,11 +142,9 @@ _OAUTH_CALLBACK_HANDLER = (
 )
 _SUPPORTED_MECHANISMS = "PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, or OAUTHBEARER"
 
-Parsed = TypeVar("Parsed")
-
 
 def parse_client_properties(text: str, *, base_directory: Path | None) -> ImportedConnection:
-    """Return the Kafka connection Java or librdkafka client properties describe.
+    """Return the Kafka and Registry connections client properties describe.
 
     Relative PEM paths resolve against ``base_directory``; ``None`` (stdin)
     requires absolute paths.
@@ -154,19 +152,26 @@ def parse_client_properties(text: str, *, base_directory: Path | None) -> Import
     dialect, properties = _dialect_properties(text)
     known = {JAVA: _JAVA_KEYS, LIBRDKAFKA: _LIBRDKAFKA_KEYS}.get(dialect, _SHARED_KEYS)
     connection: dict[str, str] = {}
+    registry: dict[str, str] = {}
     ignored: list[str] = []
     for key, value in properties.items():
         if key in known:
             connection[key] = value
+        elif is_registry_key(key):
+            registry[key] = value
         else:
             _reject_security_key(key)
             ignored.append(key)
-    _reject_placeholders(connection)
-    if not connection:
-        raise ProfileImportError(f"{LABEL} set no Kafka connection key")
-    reader = _Properties(connection, base_directory)
+    _reject_placeholders({**connection, **registry})
+    if not connection and not registry:
+        raise ProfileImportError(f"{LABEL} set no Kafka or Registry connection key")
+    reader = PropertyReader(connection, base_directory)
     mapping = _JavaMapping() if dialect != LIBRDKAFKA else _LibrdkafkaMapping()
-    return replace(_connection(reader, mapping), ignored_keys=tuple(ignored))
+    return replace(
+        _connection(reader, mapping),
+        registry=parse_registry_properties(registry, base_directory) if registry else None,
+        ignored_keys=tuple(ignored),
+    )
 
 
 # Dialect inference
@@ -269,12 +274,7 @@ def _raise_mixed(java: str | None, librdkafka: str | None) -> None:
 
 
 def _reject_security_key(key: str) -> None:
-    """Fail for Registry and unsupported security keys; others are application keys."""
-    if key.startswith(_REGISTRY_PREFIXES):
-        raise ProfileImportError(
-            f"{LABEL} set the Schema Registry {key_name(key)}; remove the Registry keys, "
-            "then add the Registry with 'kantrip edit PROFILE --registry-url URL'"
-        )
+    """Fail for unsupported security keys; others are application keys."""
     if key.startswith(_SECURITY_PREFIXES):
         reason = next(
             (reason for prefix, reason in _UNSUPPORTED_REASONS if key.startswith(prefix)),
@@ -294,108 +294,7 @@ def _reject_placeholders(properties: Mapping[str, str]) -> None:
 # Property access
 
 
-class _Properties:
-    """Connection keys that the mapping takes one by one; leftovers fail."""
-
-    def __init__(
-        self, values: Mapping[str, str], base_directory: Path | None, *, owner: str = ""
-    ) -> None:
-        self._values = dict(values)
-        self._taken: set[str] = set()
-        self._base = base_directory
-        self._owner = owner
-
-    def name(self, key: str) -> str:
-        return f"{self._owner}{key}"
-
-    def has(self, key: str) -> bool:
-        return key in self._values
-
-    def take(self, key: str) -> str | None:
-        self._taken.add(key)
-        return self._values.get(key)
-
-    def require(self, key: str, purpose: str) -> str:
-        value = self.take(key)
-        if not value:
-            raise ProfileImportError(f"{LABEL} need {self.name(key)} for {purpose}")
-        return value
-
-    def child(self, values: Mapping[str, str], owner: str) -> _Properties:
-        return _Properties(values, self._base, owner=owner)
-
-    def reject_unused(self, context: str) -> None:
-        unused = sorted(set(self._values) - self._taken)
-        if unused:
-            key = unused[0]
-            shown = self.name(key) if reportable_key(key) else "a key with unsupported characters"
-            raise ProfileImportError(f"{LABEL} set {shown}, which {context} does not use")
-
-    def path(self, key: str, value: str) -> Path:
-        path = Path(value)
-        if path.is_absolute():
-            return path
-        if self._base is None:
-            raise ProfileImportError(
-                f"{LABEL} read from stdin need an absolute path in {self.name(key)}"
-            )
-        return self._base / path
-
-    def pem(
-        self,
-        inline_key: str,
-        location_key: str,
-        *,
-        validate: Callable[[str], Parsed],
-        read: Callable[[Path], Parsed],
-    ) -> Parsed | None:
-        """Read PEM given inline or as a file, never both."""
-        inline = self.take(inline_key)
-        location = self.take(location_key)
-        if inline is not None and location is not None:
-            raise ProfileImportError(
-                f"{LABEL} set both {self.name(inline_key)} and {self.name(location_key)}"
-            )
-        key = inline_key if inline is not None else location_key
-        try:
-            if inline is not None:
-                return validate(_normalized_pem(inline))
-            if location is not None:
-                return read(self.path(location_key, location))
-        except KafkaProfileError as error:
-            raise ProfileImportError(f"{LABEL} {self.name(key)} is invalid: {error}") from error
-        return None
-
-    def secret(self, key: str, purpose: str) -> Secret:
-        value = Secret(self.require(key, purpose))
-        try:
-            validate_sasl_credential(value)
-        except KafkaProfileError as error:
-            raise ProfileImportError(
-                f"{LABEL} {self.name(key)} is empty or contains controls"
-            ) from error
-        return value
-
-
-_PEM_BLOCK = re.compile(
-    r"-----BEGIN (?P<label>[A-Z0-9 ]+)-----(?P<body>[A-Za-z0-9+/=\s]*?)-----END (?P=label)-----"
-)
-
-
-def _normalized_pem(value: str) -> str:
-    """Rewrap PEM blocks that a properties file flattened onto one line."""
-    blocks = []
-    for match in _PEM_BLOCK.finditer(value):
-        body = "".join(match.group("body").split())
-        lines = [body[index : index + 64] for index in range(0, len(body), 64)]
-        label = match.group("label")
-        blocks.append("\n".join((f"-----BEGIN {label}-----", *lines, f"-----END {label}-----")))
-    if not blocks or _PEM_BLOCK.sub("", value).strip():
-        return value
-    return "\n".join(blocks) + "\n"
-
-
-def _bootstrap_servers(reader: _Properties) -> tuple[str, ...] | None:
+def _bootstrap_servers(reader: PropertyReader) -> tuple[str, ...] | None:
     value = reader.take("bootstrap.servers")
     if value is None:
         return None
@@ -409,17 +308,7 @@ def _bootstrap_servers(reader: _Properties) -> tuple[str, ...] | None:
     return servers
 
 
-def _check_hostname_verification(reader: _Properties) -> None:
-    """Reject disabled hostname verification."""
-    algorithm = reader.take("ssl.endpoint.identification.algorithm")
-    if algorithm is not None and algorithm.lower() != "https":
-        raise ProfileImportError(
-            f"{LABEL} {reader.name('ssl.endpoint.identification.algorithm')} must be https; "
-            "Kantrip does not import disabled hostname verification"
-        )
-
-
-def _check_certificate_verification(reader: _Properties) -> None:
+def _check_certificate_verification(reader: PropertyReader) -> None:
     """Reject librdkafka's disabled certificate verification."""
     verification = reader.take("enable.ssl.certificate.verification")
     if verification is not None and verification.lower() != "true":
@@ -429,30 +318,12 @@ def _check_certificate_verification(reader: _Properties) -> None:
         )
 
 
-def _scopes(value: str | None, key: str) -> tuple[str, ...]:
-    scopes = tuple(value.split()) if value else ()
-    if len(set(scopes)) != len(scopes):
-        raise ProfileImportError(f"{LABEL} {key} repeats a scope")
-    return scopes
-
-
-def _token_url(reader: _Properties) -> str:
-    url = reader.require("sasl.oauthbearer.token.endpoint.url", "OAuth client credentials")
-    try:
-        return validate_oauth_endpoint(url)
-    except OAuthProfileError as error:
-        raise ProfileImportError(
-            f"{LABEL} sasl.oauthbearer.token.endpoint.url must use https:// without "
-            "credentials, a query, or a fragment"
-        ) from error
-
-
 # Connection mapping
 
 
-def _connection(reader: _Properties, mapping: _Mapping) -> ImportedConnection:
+def _connection(reader: PropertyReader, mapping: _Mapping) -> ImportedConnection:
     servers = _bootstrap_servers(reader)
-    _check_hostname_verification(reader)
+    check_hostname_verification(reader)
     _check_certificate_verification(reader)
     protocol = reader.take("security.protocol")
     if protocol is None:
@@ -485,27 +356,18 @@ def _connection(reader: _Properties, mapping: _Mapping) -> ImportedConnection:
 class _Mapping(Protocol):
     """The dialect-specific keys for trust, client identity, and SASL."""
 
-    def trust(self, reader: _Properties) -> str | None: ...
+    def trust(self, reader: PropertyReader) -> str | None: ...
 
-    def identity(self, reader: _Properties) -> ImportedConnection: ...
+    def identity(self, reader: PropertyReader) -> ImportedConnection: ...
 
-    def sasl(self, reader: _Properties) -> ImportedConnection: ...
+    def sasl(self, reader: PropertyReader) -> ImportedConnection: ...
 
 
 def _mtls(certificate: str | None, key: Secret | None, password: str | None) -> ImportedConnection:
-    if certificate is None and key is None:
+    identity = client_identity(certificate, key, password)
+    if identity is None:
         return ImportedConnection(auth_type="none")
-    if certificate is None or key is None:
-        raise ProfileImportError(f"{LABEL} need both a client certificate and a private key")
-    if password == "":
-        raise ProfileImportError(f"{LABEL} ssl.key.password is empty")
-    key_password = Secret(password) if password is not None else None
-    try:
-        validated_certificate, validated_key = validate_client_identity(
-            certificate, key, password=key_password
-        )
-    except KafkaProfileError as error:
-        raise ProfileImportError(f"{LABEL} client identity is invalid: {error}") from error
+    validated_certificate, validated_key, key_password = identity
     return ImportedConnection(
         auth_type="mtls",
         client_certificate=validated_certificate,
@@ -532,30 +394,13 @@ def _unsupported_mechanism(mechanism: str) -> ProfileImportError:
 
 
 class _JavaMapping(_Mapping):
-    def trust(self, reader: _Properties) -> str | None:
-        store_type = reader.take("ssl.truststore.type")
-        present = reader.has("ssl.truststore.certificates") or reader.has("ssl.truststore.location")
-        _require_pem_store(reader, "ssl.truststore.type", store_type, required=present)
-        return reader.pem(
-            "ssl.truststore.certificates",
-            "ssl.truststore.location",
-            validate=validate_ca_bundle,
-            read=read_ca_bundle,
-        )
+    def trust(self, reader: PropertyReader) -> str | None:
+        return java_pem_trust(reader)
 
-    def identity(self, reader: _Properties) -> ImportedConnection:
-        store_type = reader.take("ssl.keystore.type")
-        chain = reader.take("ssl.keystore.certificate.chain")
-        key = reader.take("ssl.keystore.key")
-        present = chain is not None or key is not None
-        _require_pem_store(reader, "ssl.keystore.type", store_type, required=present)
-        return _mtls(
-            _normalized_pem(chain) if chain is not None else None,
-            Secret(_normalized_pem(key)) if key is not None else None,
-            reader.take("ssl.key.password") if present else None,
-        )
+    def identity(self, reader: PropertyReader) -> ImportedConnection:
+        return _mtls(*java_pem_identity(reader))
 
-    def sasl(self, reader: _Properties) -> ImportedConnection:
+    def sasl(self, reader: PropertyReader) -> ImportedConnection:
         mechanism = reader.take("sasl.mechanism") or "GSSAPI"
         if mechanism not in _LOGIN_MODULES:
             raise _unsupported_mechanism(mechanism)
@@ -569,18 +414,7 @@ class _JavaMapping(_Mapping):
         return _password_authentication(mechanism, username, password)
 
 
-def _require_pem_store(
-    reader: _Properties, key: str, store_type: str | None, *, required: bool
-) -> None:
-    if store_type is None and not required:
-        return
-    if store_type != "PEM":
-        raise ProfileImportError(
-            f"{LABEL} {reader.name(key)} must be PEM; JKS and PKCS12 stores are not supported"
-        )
-
-
-def _jaas(reader: _Properties, login_module: str) -> JaasEntry:
+def _jaas(reader: PropertyReader, login_module: str) -> JaasEntry:
     text = reader.require("sasl.jaas.config", "SASL")
     try:
         entries = parse_jaas_entries(text)
@@ -599,7 +433,7 @@ def _jaas(reader: _Properties, login_module: str) -> JaasEntry:
     return entry
 
 
-def _java_oauth(reader: _Properties, jaas: JaasEntry) -> ImportedConnection:
+def _java_oauth(reader: PropertyReader, jaas: JaasEntry) -> ImportedConnection:
     if reader.take("sasl.login.callback.handler.class") != _OAUTH_CALLBACK_HANDLER:
         raise ProfileImportError(
             f"{LABEL} OAUTHBEARER needs sasl.login.callback.handler.class "
@@ -607,23 +441,23 @@ def _java_oauth(reader: _Properties, jaas: JaasEntry) -> ImportedConnection:
             "are not supported"
         )
     options = reader.child(jaas.options, "sasl.jaas.config option ")
-    token_url = _token_url(reader)
+    token_url = reader.https_url("sasl.oauthbearer.token.endpoint.url", "OAuth client credentials")
     client_id, client_secret = _java_client_credentials(reader, options)
     scope = _one_of(reader, "sasl.oauthbearer.scope", options, "scope")
-    _check_hostname_verification(options)
-    ca = _JavaMapping().trust(options)
+    check_hostname_verification(options)
+    ca = java_pem_trust(options)
     options.reject_unused("OAuth client credentials")
     return ImportedConnection(
         auth_type="oauth",
         oauth_token_url=token_url,
         oauth_client_id=client_id,
-        oauth_scopes=_scopes(scope, "OAuth scope"),
+        oauth_scopes=split_scopes(scope, "OAuth scope"),
         oauth_client_secret=client_secret,
         oauth_ca_certificates=ca,
     )
 
 
-def _java_client_credentials(reader: _Properties, options: _Properties) -> tuple[str, Secret]:
+def _java_client_credentials(reader: PropertyReader, options: PropertyReader) -> tuple[str, Secret]:
     """Read the client ID and secret from properties or from JAAS options, not both."""
     prefix = "sasl.oauthbearer.client.credentials."
     in_properties = reader.has(prefix + "client.id") or reader.has(prefix + "client.secret")
@@ -642,7 +476,7 @@ def _java_client_credentials(reader: _Properties, options: _Properties) -> tuple
     return client_id, source.secret(secret_key, "OAuth client credentials")
 
 
-def _one_of(reader: _Properties, key: str, options: _Properties, option: str) -> str | None:
+def _one_of(reader: PropertyReader, key: str, options: PropertyReader, option: str) -> str | None:
     value = reader.take(key)
     jaas_value = options.take(option)
     if value is not None and jaas_value is not None:
@@ -653,12 +487,12 @@ def _one_of(reader: _Properties, key: str, options: _Properties, option: str) ->
 
 
 class _LibrdkafkaMapping(_Mapping):
-    def trust(self, reader: _Properties) -> str | None:
+    def trust(self, reader: PropertyReader) -> str | None:
         return reader.pem(
             "ssl.ca.pem", "ssl.ca.location", validate=validate_ca_bundle, read=read_ca_bundle
         )
 
-    def identity(self, reader: _Properties) -> ImportedConnection:
+    def identity(self, reader: PropertyReader) -> ImportedConnection:
         certificate = reader.pem(
             "ssl.certificate.pem",
             "ssl.certificate.location",
@@ -671,7 +505,7 @@ class _LibrdkafkaMapping(_Mapping):
         present = certificate is not None or key is not None
         return _mtls(certificate, key, reader.take("ssl.key.password") if present else None)
 
-    def sasl(self, reader: _Properties) -> ImportedConnection:
+    def sasl(self, reader: PropertyReader) -> ImportedConnection:
         mechanism = reader.take("sasl.mechanism")
         alias = reader.take("sasl.mechanisms")
         if mechanism is not None and alias is not None:
@@ -687,13 +521,13 @@ class _LibrdkafkaMapping(_Mapping):
         )
 
 
-def _librdkafka_oauth(reader: _Properties) -> ImportedConnection:
+def _librdkafka_oauth(reader: PropertyReader) -> ImportedConnection:
     if (reader.take("sasl.oauthbearer.method") or "default").lower() != "oidc":
         raise ProfileImportError(
             f"{LABEL} OAUTHBEARER needs sasl.oauthbearer.method oidc; "
             "unsecured JWTs are not supported"
         )
-    token_url = _token_url(reader)
+    token_url = reader.https_url("sasl.oauthbearer.token.endpoint.url", "OAuth client credentials")
     client_id = reader.require("sasl.oauthbearer.client.id", "OAuth client credentials")
     client_secret = reader.secret("sasl.oauthbearer.client.secret", "OAuth client credentials")
     scope = reader.take("sasl.oauthbearer.scope")
@@ -704,7 +538,7 @@ def _librdkafka_oauth(reader: _Properties) -> ImportedConnection:
         auth_type="oauth",
         oauth_token_url=token_url,
         oauth_client_id=client_id,
-        oauth_scopes=_scopes(scope, "sasl.oauthbearer.scope"),
+        oauth_scopes=split_scopes(scope, "sasl.oauthbearer.scope"),
         oauth_client_secret=client_secret,
         oauth_ca_certificates=ca,
     )

@@ -135,7 +135,7 @@ class AddOptions:
     oauth_ca_file: str | None
     registry_provider: str | None
     registry_url: str | None
-    registry_auth: str
+    registry_auth: str | None
     registry_username: str | None
     registry_client_certificate_file: Path | None
     registry_client_key_file: Path | None
@@ -151,6 +151,11 @@ class AddOptions:
     def kafka_auth_type(self) -> str:
         """Return `--auth`, defaulting to no authentication."""
         return self.auth_type or "none"
+
+    @property
+    def registry_auth_type(self) -> str:
+        """Return `--registry-auth`, defaulting to no authentication."""
+        return self.registry_auth or "none"
 
     @property
     def resolved_transport(self) -> str:
@@ -269,7 +274,7 @@ def add_rule_violation(options: AddOptions) -> str | None:
         kafka_auth=options.kafka_auth_type,
         registry_provider=options.registry_provider or "confluent",
         registry_url=options.registry_url,
-        registry_auth=options.registry_auth,
+        registry_auth=options.registry_auth_type,
         registry_tls=options.registry_ca_file is not None
         or options.registry_client_certificate_file is not None,
     )
@@ -301,11 +306,13 @@ def edit_rule_violation(options: EditOptions, current: Mapping[str, Any]) -> str
 
 
 def add_authentication(
-    options: AddOptions, imported: KafkaAuthInput | None = None
+    options: AddOptions,
+    imported: KafkaAuthInput | None = None,
+    imported_registry: RegistryAuthInput | None = None,
 ) -> tuple[KafkaAuthInput, RegistryAuthInput | None]:
     """Build the Kafka and Registry authentication inputs for `add`.
 
-    Imported Kafka authentication already carries its secrets, so nothing is prompted for it.
+    Imported authentication already carries its secrets, so nothing is prompted for it.
     """
     auth_type = options.kafka_auth_type
     auth = imported or kafka_auth_input(
@@ -320,11 +327,13 @@ def add_authentication(
         oauth_ca_certificates=options.oauth_ca_file,
         oauth_secret_required=auth_type == "oauth",
     )
+    if imported_registry is not None:
+        return auth, imported_registry
     certificate, key, key_password = _registry_identity(
         options.registry_client_certificate_file, options.registry_client_key_file, None
     )
     registry = registry_auth_input(
-        options.registry_auth,
+        options.registry_auth_type,
         options.registry_username,
         registry_url=options.registry_url,
         ca_certificates=options.registry_ca_file,

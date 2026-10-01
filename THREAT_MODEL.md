@@ -150,6 +150,12 @@ rather than being dropped, because each could change what the connection
 trusts. It never imports a weaker connection than the file describes:
 `SASL_PLAINTEXT`, disabled certificate or hostname verification, unsecured
 JWTs, custom login or callback classes, and HTTP token endpoints all fail.
+The Registry keys get the same closed treatment: credentials in the Registry
+URL, reused Kafka credentials (`SASL_INHERIT`, `SASL_OAUTHBEARER_INHERIT`),
+custom credential providers, `apicurio.registry.tls.trust-all`, disabled
+hostname verification, and authentication over plain HTTP fail, as do keys
+from both Confluent and Apicurio. Bare `ssl.*` keys never configure the
+Registry, so a Kafka client identity can't be sent to a Registry by accident.
 Application keys are ignored and reported by name only, and only names made of
 letters, digits, dots, hyphens, and underscores are printed.
 
