@@ -13,6 +13,7 @@ from sandbox.__main__ import (
     SandboxFailure,
     _java_properties,
     _librdkafka_properties,
+    _registry_properties,
     _reject_legacy_topology,
     load_credentials,
     load_or_create_credentials,
@@ -43,65 +44,91 @@ def resource(name: str, kind: str, resource_name: str) -> dict[str, object]:
 class TestSandboxClientProperties(unittest.TestCase):
     """The sandbox exports import as the mechanism each listener expects."""
 
-    def test_every_export_imports_except_the_pkcs12_keystores(self) -> None:
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
         pki = synthetic_pki()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            values = {field: f"synthetic-{index}" for index, field in enumerate(SECRET_FIELDS)}
-            values.update(
-                {
-                    "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME": "kantrip-scram",
-                    "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD": "synthetic-scram",
-                    "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_USERNAME": "kantrip-scram-no-acl",
-                    "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_PASSWORD": "synthetic-scram-no-acl",
-                }
-            )
-            for field, contents in (
-                ("KANTRIP_SANDBOX_CA", pki.ca),
-                ("KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE", pki.client_certificate),
-                ("KANTRIP_SANDBOX_KAFKA_MTLS_KEY", pki.client_key),
-            ):
-                path = root / field.lower()
-                path.write_text(contents, encoding="utf-8")
-                values[field] = str(path)
-            for prefix in ("KANTRIP_SANDBOX_KAFKA_MTLS", "KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL"):
-                values[f"{prefix}_KEYSTORE"] = str(root / "user.p12")
-                values[f"{prefix}_KEYSTORE_PASSWORD"] = "synthetic-keystore"
-            exports = {
-                **{("Java", name): text for name, text in _java_properties(values).items()},
-                **{
-                    ("librdkafka", name): text
-                    for name, text in _librdkafka_properties(values).items()
-                },
+        values = {field: f"synthetic-{index}" for index, field in enumerate(SECRET_FIELDS)}
+        values.update(
+            {
+                "KANTRIP_SANDBOX_KAFKA_SCRAM_USERNAME": "kantrip-scram",
+                "KANTRIP_SANDBOX_KAFKA_SCRAM_PASSWORD": "synthetic-scram",
+                "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_USERNAME": "kantrip-scram-no-acl",
+                "KANTRIP_SANDBOX_KAFKA_SCRAM_NO_ACL_PASSWORD": "synthetic-scram-no-acl",
             }
-            expected = {
-                "plaintext": ("plaintext", "none", 9092),
-                "tls": ("tls", "none", 9093),
-                "scram": ("tls", "scram-sha-512", 9094),
-                "scram-no-acl": ("tls", "scram-sha-512", 9094),
-                "mtls": ("tls", "mtls", 9095),
-                "mtls-pem": ("tls", "mtls", 9095),
-                "oauth": ("tls", "oauth", 9096),
-                "plain": ("tls", "plain", 9097),
-                "no-acl": ("tls", "plain", 9097),
-                "scram-256": ("tls", "scram-sha-256", 9098),
-                "scram-256-no-acl": ("tls", "scram-sha-256", 9098),
-            }
-            # The PKCS12 keystores serve external Java clients, not imports.
-            rejected = {("Java", "mtls"), ("Java", "mtls-no-acl")}
-            for (dialect, name), text in exports.items():
-                with self.subTest(dialect=dialect, name=name):
-                    if (dialect, name) in rejected:
-                        with self.assertRaises(ProfileImportError):
-                            parse_client_properties(text, base_directory=None)
-                        continue
-                    imported = parse_client_properties(text, base_directory=None)
-                    transport, auth_type, port = expected[name]
-                    self.assertEqual(
-                        (transport, auth_type), (imported.transport, imported.auth_type)
-                    )
-                    self.assertEqual((f"localhost:{port}",), imported.bootstrap_servers)
-                    self.assertEqual((), imported.ignored_keys)
+        )
+        for field, contents in (
+            ("KANTRIP_SANDBOX_CA", pki.ca),
+            ("KANTRIP_SANDBOX_KAFKA_MTLS_CERTIFICATE", pki.client_certificate),
+            ("KANTRIP_SANDBOX_KAFKA_MTLS_KEY", pki.client_key),
+            ("KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE", pki.client_certificate),
+            ("KANTRIP_SANDBOX_REGISTRY_MTLS_KEY", pki.client_key),
+        ):
+            path = root / field.lower()
+            path.write_text(contents, encoding="utf-8")
+            values[field] = str(path)
+        for prefix in ("KANTRIP_SANDBOX_KAFKA_MTLS", "KANTRIP_SANDBOX_KAFKA_MTLS_NO_ACL"):
+            values[f"{prefix}_KEYSTORE"] = str(root / "user.p12")
+            values[f"{prefix}_KEYSTORE_PASSWORD"] = "synthetic-keystore"
+        self.values = values
+
+    def test_registry_exports_import_kafka_and_their_registry(self) -> None:
+        expected = {
+            "schema-registry-basic": ("confluent", "https://localhost:8083", "basic"),
+            "schema-registry-oauth": ("confluent", "https://localhost:8085", "oauth"),
+            "schema-registry-mtls": ("confluent", "https://localhost:8086", "mtls"),
+            "apicurio-basic": ("apicurio", "https://localhost:8084/apis/registry/v3", "basic"),
+            "apicurio-oauth": ("apicurio", "https://localhost:8084/apis/registry/v3", "oauth"),
+        }
+        exports = _registry_properties(self.values)
+
+        self.assertEqual(set(expected), set(exports))
+        for name, text in exports.items():
+            with self.subTest(name):
+                imported = parse_client_properties(text, base_directory=None)
+
+                registry = imported.registry
+                assert registry is not None and registry.auth is not None
+                self.assertEqual(("localhost:9092",), imported.bootstrap_servers)
+                self.assertEqual(
+                    expected[name], (registry.provider, registry.url, registry.auth.auth_type)
+                )
+                self.assertIsNotNone(registry.auth.ca_certificates)
+                self.assertEqual((), imported.ignored_keys)
+
+    def test_every_kafka_export_imports_except_the_pkcs12_keystores(self) -> None:
+        values = self.values
+        exports = {
+            **{("Java", name): text for name, text in _java_properties(values).items()},
+            **{("librdkafka", name): text for name, text in _librdkafka_properties(values).items()},
+        }
+        expected = {
+            "plaintext": ("plaintext", "none", 9092),
+            "tls": ("tls", "none", 9093),
+            "scram": ("tls", "scram-sha-512", 9094),
+            "scram-no-acl": ("tls", "scram-sha-512", 9094),
+            "mtls": ("tls", "mtls", 9095),
+            "mtls-pem": ("tls", "mtls", 9095),
+            "oauth": ("tls", "oauth", 9096),
+            "plain": ("tls", "plain", 9097),
+            "no-acl": ("tls", "plain", 9097),
+            "scram-256": ("tls", "scram-sha-256", 9098),
+            "scram-256-no-acl": ("tls", "scram-sha-256", 9098),
+        }
+        # The PKCS12 keystores serve external Java clients, not imports.
+        rejected = {("Java", "mtls"), ("Java", "mtls-no-acl")}
+        for (dialect, name), text in exports.items():
+            with self.subTest(dialect=dialect, name=name):
+                if (dialect, name) in rejected:
+                    with self.assertRaises(ProfileImportError):
+                        parse_client_properties(text, base_directory=None)
+                    continue
+                imported = parse_client_properties(text, base_directory=None)
+                transport, auth_type, port = expected[name]
+                self.assertEqual((transport, auth_type), (imported.transport, imported.auth_type))
+                self.assertEqual((f"localhost:{port}",), imported.bootstrap_servers)
+                self.assertEqual((), imported.ignored_keys)
         both = {name for dialect, name in exports if dialect == "librdkafka"}
         self.assertEqual({"plaintext", "tls", "scram", "mtls", "oauth", "plain", "scram-256"}, both)
 

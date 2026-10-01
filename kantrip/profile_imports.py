@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
+from kantrip.profile_auth import RegistryAuthInput
 from kantrip.secret_value import Secret
 
 MAX_IMPORT_BYTES = 1024 * 1024
@@ -24,11 +25,28 @@ class ProfileImportError(ValueError):
 
 
 @dataclass(frozen=True)
-class ImportedConnection:
-    """Kafka connection fields an import sets; ``None`` leaves a field to the options.
+class ImportedRegistry:
+    """The Registry an import sets; ``auth`` is ``None`` without authentication or TLS."""
 
-    ``ignored_keys`` names the application settings the source held but a
-    profile doesn't keep.
+    provider: str
+    url: str
+    auth: RegistryAuthInput | None = None
+
+    @property
+    def has_secrets(self) -> bool:
+        auth = self.auth
+        if auth is None:
+            return False
+        secrets = (auth.password, auth.token, auth.private_key, auth.private_key_password)
+        return any(secret is not None for secret in (*secrets, auth.oauth_client_secret))
+
+
+@dataclass(frozen=True)
+class ImportedConnection:
+    """Connection fields an import sets; ``None`` leaves a field to the options.
+
+    ``registry`` is the imported Registry, and ``ignored_keys`` names the
+    application settings the source held but a profile doesn't keep.
     """
 
     bootstrap_servers: tuple[str, ...] | None = None
@@ -45,13 +63,17 @@ class ImportedConnection:
     oauth_scopes: tuple[str, ...] | None = None
     oauth_client_secret: Secret | None = None
     oauth_ca_certificates: str | None = None
+    registry: ImportedRegistry | None = None
     ignored_keys: tuple[str, ...] = ()
 
     @property
     def has_secrets(self) -> bool:
         """Return whether the import carried a credential."""
         secrets = (self.password, self.private_key, self.private_key_password)
-        return any(secret is not None for secret in (*secrets, self.oauth_client_secret))
+        registry = self.registry is not None and self.registry.has_secrets
+        return registry or any(
+            secret is not None for secret in (*secrets, self.oauth_client_secret)
+        )
 
 
 def source_directory(source: str) -> Path | None:
@@ -96,6 +118,7 @@ __all__ = [
     "MAX_IMPORT_BYTES",
     "STDIN_SOURCE",
     "ImportedConnection",
+    "ImportedRegistry",
     "ProfileImportError",
     "read_import_source",
     "source_directory",

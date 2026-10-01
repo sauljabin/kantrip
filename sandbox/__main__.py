@@ -617,12 +617,17 @@ _PASSWORD_PROPERTIES = (
 
 
 def _write_client_properties(values: Mapping[str, str]) -> None:
-    """Write Java (`kafka-*`) and librdkafka (`librdkafka-*`) properties for every listener."""
+    """Write Java (`kafka-*`) and librdkafka (`librdkafka-*`) properties for every listener,
+    and Java properties (`registry-*`) for every authenticated Registry."""
     properties = {
         **{f"kafka-{name}.properties": text for name, text in _java_properties(values).items()},
         **{
             f"librdkafka-{name}.properties": text
             for name, text in _librdkafka_properties(values).items()
+        },
+        **{
+            f"registry-{name}.properties": text
+            for name, text in _registry_properties(values).items()
         },
     }
     for filename, content in properties.items():
@@ -733,6 +738,76 @@ def _librdkafka_properties(values: Mapping[str, str]) -> dict[str, str]:
             + trust
         )
     return properties
+
+
+def _registry_properties(values: Mapping[str, str]) -> dict[str, str]:
+    """Java properties for the plaintext listener plus one authenticated Registry each.
+
+    Basic uses the unprefixed `basic.auth.*` that Confluent's CLI generates and
+    OAuth the `schema.registry.`-prefixed spelling, so both spellings are exercised.
+    """
+    ca = values["KANTRIP_SANDBOX_CA"]
+    kafka = _bootstrap(9092) + "security.protocol=PLAINTEXT\n"
+    confluent_trust = (
+        "schema.registry.ssl.truststore.type=PEM\n"
+        f"schema.registry.ssl.truststore.location={ca}\n"
+    )
+    apicurio = (
+        "apicurio.registry.url=https://localhost:8084/apis/registry/v3\n"
+        f"apicurio.registry.tls.certificates={ca}\n"
+    )
+    return {
+        "schema-registry-basic": (
+            kafka
+            + "schema.registry.url=https://localhost:8083\n"
+            + confluent_trust
+            + "basic.auth.credentials.source=USER_INFO\n"
+            + "basic.auth.user.info="
+            + f"{values['KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME']}:"
+            + f"{values['KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD']}\n"
+        ),
+        "schema-registry-oauth": (
+            kafka
+            + "schema.registry.url=https://localhost:8085\n"
+            + confluent_trust
+            + "schema.registry.bearer.auth.credentials.source=OAUTHBEARER\n"
+            + f"schema.registry.bearer.auth.issuer.endpoint.url={OAUTH_TOKEN_URL}\n"
+            + "schema.registry.bearer.auth.client.id="
+            + f"{values['KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID']}\n"
+            + "schema.registry.bearer.auth.client.secret="
+            + f"{values['KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET']}\n"
+            + "schema.registry.bearer.auth.scope=openid\n"
+            + "schema.registry.bearer.auth.logical.cluster=lsrc-sandbox\n"
+        ),
+        "schema-registry-mtls": (
+            kafka
+            + "schema.registry.url=https://localhost:8086\n"
+            + confluent_trust
+            + "schema.registry.ssl.keystore.type=PEM\n"
+            + _java_pem(
+                "schema.registry.ssl.keystore.certificate.chain",
+                values["KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE"],
+            )
+            + _java_pem(
+                "schema.registry.ssl.keystore.key", values["KANTRIP_SANDBOX_REGISTRY_MTLS_KEY"]
+            )
+        ),
+        "apicurio-basic": (
+            kafka
+            + apicurio
+            + f"apicurio.registry.auth.username={values['KANTRIP_SANDBOX_APICURIO_CLIENT_ID']}\n"
+            + f"apicurio.registry.auth.password={values['KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET']}\n"
+        ),
+        "apicurio-oauth": (
+            kafka
+            + apicurio
+            + f"apicurio.registry.auth.service.token.endpoint={OAUTH_TOKEN_URL}\n"
+            + f"apicurio.registry.auth.client.id={values['KANTRIP_SANDBOX_APICURIO_CLIENT_ID']}\n"
+            + "apicurio.registry.auth.client.secret="
+            + f"{values['KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET']}\n"
+            + "apicurio.registry.auth.client.scope=openid\n"
+        ),
+    }
 
 
 def _bootstrap(port: int) -> str:

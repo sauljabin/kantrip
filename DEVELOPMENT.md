@@ -84,7 +84,8 @@ Secrets (inputs for `add --from-strimzi`) are in `sandbox/.state` (private and
 ignored). So are client properties for every listener, inputs for
 `add --from-properties`: Java in `kafka-*.properties`, with PEM mTLS in
 `kafka-mtls-pem.properties` next to the PKCS12 `kafka-mtls.properties`, and
-librdkafka in `librdkafka-*.properties`. Open `sandbox/.state/credentials.env` in an editor when you need a
+librdkafka in `librdkafka-*.properties`, plus Java files for each authenticated
+Registry in `registry-*.properties`. Open `sandbox/.state/credentials.env` in an editor when you need a
 value; don't print it. To rotate the credentials, run `sandbox down` and delete
 that directory. See [Verification](ARCHITECTURE.md#verification) for how the
 laboratory is built.

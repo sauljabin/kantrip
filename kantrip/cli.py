@@ -19,6 +19,7 @@ from kantrip.cli_imports import (
     import_notices,
     imported_connection,
     imported_kafka_authentication,
+    imported_registry_authentication,
     merge_imported_options,
 )
 from kantrip.cli_inputs import (
@@ -208,7 +209,9 @@ def add_configured_profile(profile_name: str, **values: Any) -> None:
         raise _InvalidProfileClickException(violation)
     try:
         auth, registry_auth = add_authentication(
-            options, imported_kafka_authentication(imported) if imported else None
+            options,
+            imported_kafka_authentication(imported) if imported else None,
+            imported_registry_authentication(options, imported) if imported else None,
         )
         profiles = add_profile(
             profile_name,
