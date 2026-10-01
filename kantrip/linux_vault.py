@@ -4,9 +4,12 @@ The desktop's Secret Service provider owns the vault password: GNOME Keyring
 and KDE Wallet ask for it in their own desktop windows, and Kantrip never
 reads, stores, or passes it. Lookups and lock-state reads never prompt. Kantrip
 starts a create or unlock window only with a controlling terminal to explain
-it, bounds each window with its own timeout, and closes it with
-``Prompt.Dismiss()`` when that expires, because an unanswered window otherwise
-blocks forever and stays on screen.
+it and bounds each window with its own timeout, because an unanswered window
+otherwise blocks forever and stays on screen. When that expires, Kantrip calls
+``Prompt.Dismiss()``, which closes GNOME's window; KDE only reports the prompt
+as dismissed and leaves its window open. A GPG-encrypted KDE wallet asks through
+gpg-agent's pinentry instead, which Kantrip can neither bound nor close, so
+the vault must be a Classic wallet.
 """
 
 from __future__ import annotations
@@ -46,6 +49,15 @@ _NO_WINDOW_SECONDS = 1.0
 # An encrypted GNOME keyring file starts with this; an empty password leaves
 # the file in plain text.
 _GNOME_ENCRYPTED_HEADER = b"GnomeKeyring\n\r\0\n"
+# A KDE wallet file starts with this magic and four version bytes: major,
+# minor, cipher, and hash. Cipher 2 is GPG; Classic wallets use Blowfish.
+_KDE_WALLET_MAGIC = b"KWALLET\n\r\0\r\n"
+_KDE_GPG_CIPHER = 2
+_KDE_CLASSIC_REMEDY = (
+    f"delete the wallet '{VAULT_LABEL}' in KDE Wallet Manager, log out and back in, and "
+    "store the credentials again with 'kantrip edit PROFILE --replace-secret FIELD', "
+    "choosing Classic in the KDE wallet wizard"
+)
 _BUS_NAME = "org.freedesktop.secrets"
 _SERVICE_PATH = "/org/freedesktop/secrets"
 _INTERFACE = "org.freedesktop.Secret."
@@ -385,6 +397,11 @@ class LinuxVault:
                 f"store their secrets in it; make another {provider.noun} the default in "
                 f"{_default_setting(provider)}"
             )
+        if self._uses_gpg(location):
+            warnings.append(
+                "Credential vault is encrypted with GPG, which Kantrip does not support; "
+                + _KDE_CLASSIC_REMEDY
+            )
         if self._has_plain_gnome_file(location):
             warnings.append(
                 "Credential vault has an empty password, so its file is not encrypted and "
@@ -405,6 +422,13 @@ class LinuxVault:
         if self._refusal is not None:
             raise self._refusal
         location = self._locate()
+        if self._uses_gpg(location):
+            # gpg-agent's pinentry would block the provider beyond any timeout.
+            self._refusal = VaultError(
+                f"Kantrip vault {self._display(location)} is encrypted with GPG, which "
+                f"Kantrip does not support; {_KDE_CLASSIC_REMEDY}"
+            )
+            raise self._refusal
         if location.state == "unlocked" and location.collection is not None:
             return location.collection
         if location.state == "missing" and not create:
@@ -462,7 +486,7 @@ class LinuxVault:
     def _locate_kde(self, provider: Provider) -> _Location:
         # Deleted wallets leave same-label ghosts until ksecretd restarts, so
         # only the alias identifies the vault, and only its file proves it exists.
-        wallet = self._data_home / "kwalletd" / f"{VAULT_LABEL}.kwl"
+        wallet = self._kde_wallet()
         collection = self._system.read_alias(VAULT_ALIAS)
         if collection == NO_OBJECT:
             return _Location(provider, None, "missing", wallet)
@@ -506,11 +530,13 @@ class LinuxVault:
             f"{self._timeout:g} seconds. Kantrip never sees or stores this password.\n"
         )
         if provider.kde:
-            notice += "In the KDE wallet wizard, choose Classic unless you have a GPG key.\n"
+            notice += "In the KDE wallet wizard, choose Classic; Kantrip does not support GPG.\n"
         return notice
 
     def _check_created(self, provider: Provider, collection: str) -> None:
         if provider.kde:
+            if _is_gpg_wallet(self._kde_wallet()):
+                self._remove_gpg_wallet(collection)
             return
         if collection != GNOME_VAULT_PATH:
             raise VaultError(
@@ -529,6 +555,18 @@ class LinuxVault:
                 "Kantrip vault password must not be empty; the new vault was removed. "
                 "Run the command again and choose a password"
             )
+
+    def _remove_gpg_wallet(self, collection: str) -> None:
+        if self._system.delete_collection(collection) != NO_OBJECT:
+            raise VaultError(
+                "Kantrip vault must be a Classic wallet, not GPG; delete the new wallet "
+                f"'{VAULT_LABEL}' in KDE Wallet Manager, log out and back in, and run the "
+                "command again, choosing Classic"
+            )
+        raise VaultError(
+            "Kantrip vault must be a Classic wallet, not GPG; the new wallet was removed. "
+            "Run the command again and choose Classic in the KDE wallet wizard"
+        )
 
     def _unlock(self, location: _Location, collection: str) -> None:
         provider = location.provider
@@ -579,8 +617,8 @@ class LinuxVault:
         except TimeoutError as error:
             self._system.dismiss(prompt)
             raise VaultError(
-                f"Kantrip vault {action} got no answer within {self._timeout:g} seconds, so "
-                "Kantrip closed the window; run the command again"
+                f"Kantrip vault {action} got no answer within {self._timeout:g} seconds; "
+                "close the window if it is still open, and run the command again"
             ) from error
         except KeyboardInterrupt as error:
             self._system.dismiss(prompt)
@@ -637,8 +675,14 @@ class LinuxVault:
             return False
         return header != _GNOME_ENCRYPTED_HEADER
 
+    def _uses_gpg(self, location: _Location) -> bool:
+        return location.wallet is not None and _is_gpg_wallet(location.wallet)
+
     def _gnome_file(self) -> Path:
         return self._data_home / "keyrings" / f"{VAULT_LABEL}.keyring"
+
+    def _kde_wallet(self) -> Path:
+        return self._data_home / "kwalletd" / f"{VAULT_LABEL}.kwl"
 
     def _display(self, location: _Location) -> str:
         if location.wallet is not None:
@@ -650,6 +694,20 @@ class LinuxVault:
         if location.provider.kde and location.collection is not None:
             label += f", collection {location.collection}"
         return label
+
+
+def _is_gpg_wallet(wallet: Path) -> bool:
+    """Read only the wallet's header, which holds no secret and needs no window."""
+    try:
+        with wallet.open("rb") as handle:
+            header = handle.read(len(_KDE_WALLET_MAGIC) + 4)
+    except OSError:
+        return False
+    return (
+        header.startswith(_KDE_WALLET_MAGIC)
+        and len(header) > len(_KDE_WALLET_MAGIC) + 2
+        and header[len(_KDE_WALLET_MAGIC) + 2] == _KDE_GPG_CIPHER
+    )
 
 
 def _attributes(reference: str) -> dict[str, str]:

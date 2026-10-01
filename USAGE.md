@@ -1116,17 +1116,25 @@ Service providers, such as KeePassXC. Manage the vault in Passwords and Keys
 (Seahorse) on GNOME or in KDE Wallet Manager on KDE.
 
 Password windows are desktop windows, never terminal prompts. Kantrip prints
-what the window is for and waits up to 60 seconds; after that it closes the
-window and fails. When Kantrip creates the vault:
+what the window is for and waits up to 60 seconds; after that it fails. GNOME
+closes the window then; KDE leaves it open, so cancel it. When Kantrip creates
+the vault:
 
 ```text
 Kantrip keeps credentials in its own keyring, 'kantrip'.
 Choose a password for it in the window on your desktop; Kantrip waits up to 60 seconds. Kantrip never sees or stores this password.
 ```
 
-On GNOME, an empty password is refused and the new keyring is removed. KDE's wallet wizard
-preselects GPG encryption, which fails unless you have a GPG key: choose
-Classic.
+On GNOME, an empty password is refused and the new keyring is removed. On KDE,
+choose **Classic** in the wallet wizard, which preselects GPG encryption.
+Kantrip refuses a GPG-encrypted vault: a new one is removed after the wizard,
+and an existing one is never opened. GPG wallets ask for your key's passphrase
+in GnuPG's own window, which Kantrip can neither time out nor close, which
+blocks every application that uses KDE Wallet while it waits, and whose
+passphrase cache reopens the vault for up to two hours without asking. If your
+vault is a GPG wallet, `doctor` warns about it: delete the `kantrip` wallet in
+KDE Wallet Manager, log out and back in, and store your credentials again with
+`kantrip edit PROFILE --replace-secret FIELD`, choosing Classic.
 
 When the vault is locked, commands print
 `Kantrip vault PATH is locked. Enter its password in the window on your desktop`
