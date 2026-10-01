@@ -31,8 +31,10 @@ PLAIN_JAAS = (
 SCRAM_JAAS = PLAIN_JAAS.replace("plain.PlainLoginModule", "scram.ScramLoginModule")
 OAUTH_HANDLER = "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler"
 OAUTH_MODULE = "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule"
-# Shaped like `confluent kafka client-config create java` output, with synthetic values.
-CONFLUENT_JAVA = f"""\
+# `confluent kafka client-config create java` and `create python` fill the
+# `java-sr` and `librdkafka-sr` templates from confluentinc/examples. Without a
+# Schema Registry key they comment out the Registry lines, as below.
+CONFLUENT_JAVA_KAFKA = f"""\
 # Required connection configs for Kafka producer, consumer, and admin
 bootstrap.servers=pkc-00000.synthetic.confluent.invalid:9092
 security.protocol=SASL_SSL
@@ -48,12 +50,31 @@ session.timeout.ms=45000
 # Best practice for Kafka producer to prevent data loss
 acks=all
 """
+CONFLUENT_LIBRDKAFKA_KAFKA = f"""\
+# Required connection configs for Kafka producer, consumer, and admin
+bootstrap.servers=pkc-00000.synthetic.confluent.invalid:9092
+security.protocol=SASL_SSL
+sasl.mechanisms=PLAIN
+sasl.username=SYNTHETICAPIKEY
+sasl.password={PASSWORD}
+
+# Best practice for higher availability in librdkafka clients prior to 1.7
+session.timeout.ms=45000
+"""
+CONFLUENT_REGISTRY_COMMENTED = """
+# Required connection configs for Confluent Cloud Schema Registry
+#schema.registry.url=https://psrc-00000.synthetic.confluent.invalid
+#basic.auth.credentials.source=USER_INFO
+#basic.auth.user.info={{ SR_API_KEY }}:{{ SR_API_SECRET }}
+"""
 CONFLUENT_REGISTRY = """
 # Required connection configs for Confluent Cloud Schema Registry
 schema.registry.url=https://psrc-00000.synthetic.confluent.invalid
 basic.auth.credentials.source=USER_INFO
-basic.auth.user.info={{ SR_API_KEY }}:{{ SR_API_SECRET }}
+basic.auth.user.info=SYNTHETICSRKEY:synthetic-value
 """
+CONFLUENT_JAVA = CONFLUENT_JAVA_KAFKA + CONFLUENT_REGISTRY_COMMENTED
+CONFLUENT_LIBRDKAFKA = CONFLUENT_LIBRDKAFKA_KAFKA + CONFLUENT_REGISTRY_COMMENTED
 
 
 def _java_pem(pem: str) -> str:
@@ -292,15 +313,23 @@ class TestKafkaMechanisms(unittest.TestCase):
                     self.assertEqual(PASSWORD, _revealed(imported.password))
                     self.assertTrue(imported.has_secrets)
 
-    def test_confluent_generated_java_file(self) -> None:
-        imported = _parse(CONFLUENT_JAVA)
+    def test_confluent_generated_files_without_a_registry_key(self) -> None:
+        cases = {
+            "java": (CONFLUENT_JAVA, ("client.dns.lookup", "session.timeout.ms", "acks")),
+            "python": (CONFLUENT_LIBRDKAFKA, ("session.timeout.ms",)),
+        }
+        for name, (text, ignored) in cases.items():
+            with self.subTest(name):
+                imported = _parse(text)
 
-        self.assertEqual(
-            ("pkc-00000.synthetic.confluent.invalid:9092",), imported.bootstrap_servers
-        )
-        self.assertEqual(("plain", "SYNTHETICAPIKEY"), (imported.auth_type, imported.username))
-        self.assertEqual(PASSWORD, _revealed(imported.password))
-        self.assertEqual(("client.dns.lookup", "session.timeout.ms", "acks"), imported.ignored_keys)
+                self.assertEqual(
+                    ("pkc-00000.synthetic.confluent.invalid:9092",), imported.bootstrap_servers
+                )
+                self.assertEqual(
+                    ("plain", "SYNTHETICAPIKEY"), (imported.auth_type, imported.username)
+                )
+                self.assertEqual(PASSWORD, _revealed(imported.password))
+                self.assertEqual(ignored, imported.ignored_keys)
 
     def test_pem_mtls_with_a_key_password_in_both_dialects(self) -> None:
         java = _properties(
@@ -511,7 +540,12 @@ class TestRejectedProperties(unittest.TestCase):
                 _properties(*java_ssl, "ssl.protocol=TLSv1.3"),
                 "ssl.protocol",
             ),
-            "Registry key": (CONFLUENT_JAVA + CONFLUENT_REGISTRY, "kantrip edit PROFILE"),
+            "Registry key": (CONFLUENT_JAVA_KAFKA + CONFLUENT_REGISTRY, "kantrip edit PROFILE"),
+            "librdkafka Registry key": (
+                CONFLUENT_LIBRDKAFKA_KAFKA + CONFLUENT_REGISTRY,
+                "kantrip edit PROFILE",
+            ),
+            # The CLI fills these; they remain only in a template copied by hand.
             "placeholder": (
                 CONFLUENT_JAVA.replace("SYNTHETICAPIKEY", "{{ CLUSTER_API_KEY }}"),
                 "sasl.jaas.config has an unfilled {{ … }} placeholder",

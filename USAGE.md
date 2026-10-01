@@ -372,8 +372,10 @@ values:
 - unfilled `{{ … }}` placeholders
 - a repeated key, or a file larger than 1 MiB
 
-A file from `confluent kafka client-config create java` imports once its
-placeholders are filled and its Schema Registry lines are removed.
+Files from `confluent kafka client-config create`, such as `create java` or
+`create python`, import as they are when created without a Schema Registry key,
+because the Confluent CLI then comments out the Registry lines. With
+`--schema-registry-api-key`, remove those lines before importing.
 
 If Strimzi manages the Kafka user, import the Secret its user operator
 generated for a SCRAM-SHA-512 or TLS `KafkaUser` instead of copying credentials
