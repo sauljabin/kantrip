@@ -244,8 +244,10 @@ RESET = "\x1b[0m"
 CAPTURE_STEPS: list[dict[str, Any]] = [
     {
         "prompt": PROMPT,
-        "command": "kantrip add prod -b kafka.example.com:9093 --transport tls "
-        "--ca-file ./ca.pem --auth scram-sha-512 --username app",
+        "command": (
+            "kantrip add prod -b kafka.example.com:9093 --transport tls "
+            "--ca-file ./ca.pem --auth scram-sha-512 --username app"
+        ),
         "output": [],
     },
     {"prompt": PROMPT, "command": "kantrip ping prod", "spinner": "Checking", "output": []},
