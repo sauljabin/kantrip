@@ -47,6 +47,7 @@ methods, and file formats.
   - [Registry variables](#registry-variables)
   - [Kantrip session metadata](#kantrip-session-metadata)
 - [Output and color](#output-and-color)
+- [Agent skill and cheatsheet](#agent-skill-and-cheatsheet)
 
 ## Short command names
 
@@ -1279,3 +1280,18 @@ otherwise.
 Sensitive values are masked before any styling is applied. Styling never
 changes the exit status, and color never carries information you'd miss
 without it.
+
+## Agent skill and cheatsheet
+
+The [agentskills](https://github.com/sauljabin/agentskills) repository has a
+`kantrip` skill that teaches coding agents such as Claude Code, Codex, or Cursor
+to use Kantrip. Install it with the [skills](https://www.skills.sh/) CLI:
+
+```bash
+skills add sauljabin/agentskills --skill kantrip
+```
+
+The [cheatsheets](https://github.com/sauljabin/cheatsheets) repository has a
+`kantrip` sheet with common commands for the [cheat](https://github.com/cheat/cheat)
+CLI. After installing the cheatsheets as their README describes, run
+`cheat kantrip`.
