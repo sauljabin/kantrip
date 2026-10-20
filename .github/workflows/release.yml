@@ -81,7 +81,7 @@ jobs:
           args: --current --strip header --output release-notes.md
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Upload release bundle
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-bundle
           path: |
@@ -100,7 +100,7 @@ jobs:
       attestations: write
     steps:
       - name: Download release bundle
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           name: release-bundle
       - name: Attest distributions
@@ -127,7 +127,7 @@ jobs:
       id-token: write
     steps:
       - name: Download release bundle
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           name: release-bundle
       - name: Publish distributions
@@ -149,7 +149,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Download release bundle
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           name: release-bundle
       - name: Create GitHub release
