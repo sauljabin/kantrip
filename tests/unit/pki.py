@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-CONTROLLED_NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+CONTROLLED_NOW = datetime(2026, 1, 1, tzinfo=UTC)
 KEY_PASSWORD = "synthetic-key-password"
 
 
@@ -67,8 +67,8 @@ def synthetic_pki() -> SyntheticPki:
                 ca_key,
                 server_key,
                 "expired.invalid",
-                not_before=datetime(2019, 1, 1, tzinfo=timezone.utc),
-                not_after=datetime(2020, 1, 1, tzinfo=timezone.utc),
+                not_before=datetime(2019, 1, 1, tzinfo=UTC),
+                not_after=datetime(2020, 1, 1, tzinfo=UTC),
             )
         ),
         future_certificate=_certificate_pem(
@@ -77,8 +77,8 @@ def synthetic_pki() -> SyntheticPki:
                 ca_key,
                 server_key,
                 "future.invalid",
-                not_before=datetime(2040, 1, 1, tzinfo=timezone.utc),
-                not_after=datetime(2041, 1, 1, tzinfo=timezone.utc),
+                not_before=datetime(2040, 1, 1, tzinfo=UTC),
+                not_after=datetime(2041, 1, 1, tzinfo=UTC),
             )
         ),
     )
@@ -109,8 +109,8 @@ def _certificate_authority(common_name: str) -> tuple[rsa.RSAPrivateKey, x509.Ce
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime(2025, 1, 1, tzinfo=timezone.utc))
-        .not_valid_after(datetime(2036, 1, 1, tzinfo=timezone.utc))
+        .not_valid_before(datetime(2025, 1, 1, tzinfo=UTC))
+        .not_valid_after(datetime(2036, 1, 1, tzinfo=UTC))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(
             x509.KeyUsage(
@@ -143,8 +143,8 @@ def _leaf(
     *,
     dns_name: str | None = None,
     client: bool = False,
-    not_before: datetime = datetime(2025, 1, 1, tzinfo=timezone.utc),
-    not_after: datetime = datetime(2035, 1, 1, tzinfo=timezone.utc),
+    not_before: datetime = datetime(2025, 1, 1, tzinfo=UTC),
+    not_after: datetime = datetime(2035, 1, 1, tzinfo=UTC),
 ) -> x509.Certificate:
     builder = (
         x509.CertificateBuilder()
