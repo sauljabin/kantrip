@@ -37,7 +37,7 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Set up Kind
         uses: helm/kind-action@v1.15.1
         with:
@@ -57,13 +57,13 @@ jobs:
       - name: Install verified released E2E clients
         uses: ./.github/actions/released-e2e-tools
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           uv-version: ${{ env.UV_VERSION }}
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Pre-create the disposable Kantrip vault
         uses: ./.github/actions/linux-vault
       - name: Run sandbox E2E with the Kantrip vault
@@ -116,12 +116,12 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Pre-create the disposable Kantrip vault
         uses: ./.github/actions/linux-vault
       - name: Run the vault acceptance suite
@@ -147,12 +147,12 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
-          python-version: "3.13"
+          python-version: "3.14"
       - name: Create the disposable Kantrip vault
         run: |
           set -euo pipefail
