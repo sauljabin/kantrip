@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import random
 import tempfile
 import uuid
 from collections.abc import Iterator, Sequence
@@ -19,7 +20,7 @@ from kantrip.console import ARCANA_THEME
 from scripts import normalize_svg
 from scripts.banner import ARCANA_TERMINAL_THEME, IMAGES_DIRECTORY
 
-SCREENSHOT_WIDTH = 100
+SCREENSHOT_WIDTH = 120
 # Profiles without secrets never open the credential vault, so the commands run
 # against a temporary data directory and leave the developer's profiles alone.
 SCREENSHOTS: dict[str, tuple[tuple[str, ...], ...]] = {
@@ -40,13 +41,29 @@ SCREENSHOTS: dict[str, tuple[tuple[str, ...], ...]] = {
             "add",
             "staging",
             "-b",
-            "kafka.staging.example.com:9093",
+            "stg.kafka.acme.io:9093",
             "--transport",
             "tls",
+            "--registry-url",
+            "https://registry.acme.io",
             "--description",
             "Staging cluster",
             "--label",
             "env=staging",
+            "--label",
+            "team=payments",
+        ),
+        (
+            "add",
+            "production",
+            "-b",
+            "kafka.acme.io:9093",
+            "--transport",
+            "tls",
+            "--description",
+            "Production cluster",
+            "--label",
+            "env=prod",
             "--label",
             "team=payments",
         ),
@@ -58,9 +75,10 @@ SCREENSHOTS: dict[str, tuple[tuple[str, ...], ...]] = {
 
 
 def _profile_ids() -> Iterator[uuid.UUID]:
-    """Stable profile IDs, so regenerating unchanged screenshots changes nothing."""
-    for number in range(1, 100):
-        yield uuid.UUID(int=number * 0x1111_1111_1111_1111_1111_1111_1111_1111 % (1 << 128))
+    """Stable, random-looking version 4 profile IDs, so regenerating changes nothing."""
+    generator = random.Random(2026)
+    while True:
+        yield uuid.UUID(int=generator.getrandbits(128), version=4)
 
 
 @contextmanager

@@ -51,7 +51,7 @@ what another terminal connects to.
   </tr>
   <tr>
     <td width="50%">
-      <img alt="kantrip add creating two profiles" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-add.svg">
+      <img alt="kantrip add creating three profiles" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-add.svg">
     </td>
     <td width="50%">
       <img alt="kantrip list showing the profiles" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-list.svg">
