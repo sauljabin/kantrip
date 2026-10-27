@@ -37,6 +37,7 @@ methods, and file formats.
   - [Kaskade](#kaskade)
   - [kaf](#kaf)
   - [kcl](#kcl)
+  - [kafui](#kafui)
 - [Profile storage](#profile-storage)
 - [Credential vault](#credential-vault)
   - [macOS vault](#macos-vault)
@@ -974,6 +975,46 @@ kcl supports a Confluent-compatible Registry with no authentication, Basic, a
 fixed token, or mTLS, with system trust or the profile's custom CA. OAuth and
 Apicurio's native API make every kcl command fail before launch.
 
+### kafui
+
+[kafui](https://github.com/Benny93/kafui) is a terminal UI for Kafka. It reads
+kaf's configuration format, so Kantrip gives it the same private configuration
+as [kaf](#kaf), with one cluster, `kantrip`, and selects it with `--config`:
+
+```bash
+kantrip exec local -- kafui
+kantrip exec local -- kafui --read-only --resource consumer-groups
+kantrip exec local -- kafui health
+kantrip exec local -- kafui get brokers
+```
+
+The first command becomes:
+
+```bash
+kafui --config /tmp/kantrip-SESSION/kaf.yaml
+```
+
+kafui also reads its own settings from `~/.config/kafui/config.yaml`, which can
+define complete clusters with credentials, and preferences from
+`$XDG_CONFIG_HOME/kafui`. Kantrip runs it with `HOME` and `XDG_CONFIG_HOME`
+pointing to an empty private directory in the session, so your `~/.kaf/config`
+and kafui settings are never read or changed, and none of your clusters join
+the session. The theme, keybindings, permission profiles, and audit log from
+your kafui settings don't apply inside a session either, and kafui uses its
+defaults instead, including its startup check for a newer release, which asks
+the GitHub API. Anything kafui writes
+there, such as its log, is readable only by you and is deleted with the session.
+
+Kantrip rejects `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and
+`--schema-registry`. Kafka OAuth profiles fail before launch, as with kaf, and
+an encrypted mTLS key is decrypted into a private session file.
+
+With a Registry, kafui lists schemas and decodes Avro records. It reaches the
+Registry with the system CA store, so it supports a Confluent-compatible
+Registry with no authentication or Basic, over HTTP or HTTPS that the system
+trusts. Any other Registry profile makes every kafui command fail before launch:
+Apicurio's native API, a custom Registry CA, fixed token, mTLS, or OAuth.
+
 ## Profile storage
 
 Profiles live in a private local database. Change them with `add`, `edit`, and
@@ -1198,7 +1239,8 @@ variables and the session variables. A supported client run as a one-off
 command, such as `kantrip exec local -- kcat -L`, gets the session variables
 and just the file it reads, through its usual option or variable. Some clients
 also get variables of their own, described in their sections: [kcat](#kcat)
-gets `KCAT_CONFIG`, [kaf](#kaf) runs with `HOME=/dev/null`, [kcl](#kcl) gets
+gets `KCAT_CONFIG`, [kaf](#kaf) runs with `HOME=/dev/null`, [kafui](#kafui)
+runs with a private `HOME` and `XDG_CONFIG_HOME`, [kcl](#kcl) gets
 `KCL_CONFIG_PATH`, and [Kaskade](#kaskade) Registry OAuth gets `SSL_CERT_FILE`.
 With OAuth, only the Java tools get `KAFKA_OPTS` and `SCHEMA_REGISTRY_OPTS`.
 

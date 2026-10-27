@@ -215,7 +215,11 @@
   and shims. Reject options that override the profile's connection; keep
   resource and presentation options.
 - Per client: kcat reads `KCAT_CONFIG` (shims keep it and reject `-F`) and gets
-  the plain Registry URL through `-r` for Avro (explicit `-r` rejected). Java
+  the plain Registry URL through `-r` for Avro (explicit `-r` rejected). kafui
+  reads kaf's YAML through `--config` under an empty private session `HOME` and
+  `XDG_CONFIG_HOME` (never `/dev/null`, which it treats as fatal) and a `077`
+  umask, so session cleanup accepts what it writes; its gate reads the Go build
+  information, because release builds print `dev`. Java
   tools (Apache `.sh` and Confluent unsuffixed) get `--bootstrap-server` plus
   their config option, or `--command-config` for admin tools. Confluent Avro,
   JSON Schema, and Protobuf consoles get the matching config file for both the

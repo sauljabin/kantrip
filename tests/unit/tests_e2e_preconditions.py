@@ -1,13 +1,16 @@
+import tempfile
 import unittest
+from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import MagicMock, patch
 
-from kantrip.adapters import KASKADE_ADAPTER
+from kantrip.adapters import KAFUI_ADAPTER, KASKADE_ADAPTER
 from tests.e2e.preconditions import (
     E2ESetupError,
     _require_librdkafka_version,
     _require_pinned_version,
 )
+from tests.unit.client_versions import fake_go_executable
 
 
 class TestE2EPreconditions(unittest.TestCase):
@@ -49,3 +52,23 @@ class TestE2EPreconditions(unittest.TestCase):
 
                 with self.assertRaisesRegex(E2ESetupError, f"kaskade 5.0.1 or newer .*{found}"):
                     _require_pinned_version("kaskade", "kaskade", gate, "5.0.1")
+
+    @patch("tests.e2e.preconditions.subprocess.run")
+    def test_go_build_information_gates_are_read_without_running_the_client(
+        self, run: MagicMock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            client = Path(directory) / "kafui"
+            client.write_bytes(
+                fake_go_executable(
+                    "#!/bin/sh\nexit 1\n", "mod\tgithub.com/Benny93/kafui\tv0.1.38\t\n"
+                )
+            )
+            client.chmod(0o700)
+            with patch("tests.e2e.preconditions.shutil.which", return_value=str(client)):
+                _require_pinned_version("kafui", "kafui", KAFUI_ADAPTER.minimum_version, "0.1.38")
+                with self.assertRaisesRegex(E2ESetupError, "kafui 0.1.39 or newer .*found 0.1.38"):
+                    _require_pinned_version(
+                        "kafui", "kafui", KAFUI_ADAPTER.minimum_version, "0.1.39"
+                    )
+        run.assert_not_called()

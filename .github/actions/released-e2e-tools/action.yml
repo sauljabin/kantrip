@@ -75,6 +75,18 @@ runs:
           | (cd "$RUNNER_TEMP" && sha256sum --check -)
         gzip -dc "$RUNNER_TEMP/kcl_linux_amd64.gz" > "$tool_root/bin/kcl"
         chmod 0755 "$tool_root/bin/kcl"
+        curl --fail --location --retry 3 \
+          "https://github.com/Benny93/kafui/releases/download/v${KAFUI_VERSION}/kafui_${KAFUI_VERSION}_checksums.txt" \
+          -o "$RUNNER_TEMP/kafui_${KAFUI_VERSION}_checksums.txt"
+        curl --fail --location --retry 3 \
+          "https://github.com/Benny93/kafui/releases/download/v${KAFUI_VERSION}/kafui_linux_x86_64.tar.gz" \
+          -o "$RUNNER_TEMP/kafui_linux_x86_64.tar.gz"
+        # The release's checksums file must list the pinned digest, which the tarball matches.
+        (cd "$RUNNER_TEMP" \
+          && grep -Fx "${KAFUI_LINUX_SHA256}  kafui_linux_x86_64.tar.gz" \
+            "kafui_${KAFUI_VERSION}_checksums.txt" \
+          | sha256sum --check -)
+        tar -xzf "$RUNNER_TEMP/kafui_linux_x86_64.tar.gz" -C "$tool_root/bin" kafui
         UV_TOOL_DIR="$tool_root/uv" UV_TOOL_BIN_DIR="$tool_root/bin" \
           uv tool install --python "$E2E_PYTHON_VERSION" "kaskade==${KASKADE_VERSION}"
     - name: Activate and verify released clients
@@ -86,12 +98,16 @@ runs:
         test -x "$tool_root/bin/kaskade"
         test -x "$tool_root/bin/kaf"
         test -x "$tool_root/bin/kcl"
+        test -x "$tool_root/bin/kafui"
         test -x "$tool_root/confluent-${CONFLUENT_VERSION}/bin/kafka-avro-console-consumer"
         test -x "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin/kafka-console-consumer.sh"
         test -f "$tool_root/librdkafka/lib/librdkafka.so"
         "$tool_root/bin/kaskade" --version | grep -F "$KASKADE_VERSION"
         "$tool_root/bin/kaf" --version | grep -F "$KAF_VERSION"
         "$tool_root/bin/kcl" --version | grep -F "$KCL_VERSION"
+        # Release builds print `dev` from `kafui version`; the Go build information
+        # records the tagged module version.
+        grep -aqF $'mod\tgithub.com/Benny93/kafui\tv'"${KAFUI_VERSION}"$'\t' "$tool_root/bin/kafui"
         "$tool_root/confluent-${CONFLUENT_VERSION}/bin/kafka-topics" --version \
           | grep -F "$CONFLUENT_VERSION"
         "$tool_root/kafka_2.13-${APACHE_KAFKA_VERSION}/bin/kafka-topics.sh" --version \

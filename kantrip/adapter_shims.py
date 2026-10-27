@@ -12,12 +12,14 @@ from kantrip._files import write_exclusive_text
 from kantrip.adapter_policy import (
     JAVA_COMMANDS,
     KAF_HOME,
+    KAFUI_UMASK,
     KCAT_CONFIG_VARIABLE,
     KCAT_SCHEMA_REGISTRY_SIGNAL,
     KCL_CONFIG_PATH_VARIABLE,
     KCL_ENVIRONMENT_PREFIX,
     AdapterError,
     ClientConfiguration,
+    kafui_environment,
     require_kaskade_registry,
     require_kcat_registry,
     require_registry_console_registry,
@@ -140,6 +142,25 @@ HOME={KAF_HOME} exec {shlex.quote(executable)} --config {shlex.quote(str(kaf_con
 """
 
 
+def render_kafui_shim(name: str, executable: str, inputs: ShimInputs) -> str:
+    """Render a shim that runs kafui on the private kaf config under its private home."""
+    configuration = inputs.configuration
+    guard = ""
+    if inputs.capability_error is not None:
+        guard = _failure(inputs.capability_error)
+    elif configuration.kaf_config is None or configuration.kafui_home is None:
+        guard = _failure("kafui requires a private configuration file and home")
+    home = configuration.kafui_home or Path()
+    variables = " ".join(
+        f"{variable}={shlex.quote(value)}" for variable, value in kafui_environment(home).items()
+    )
+    return f"""#!/bin/sh
+{guard}{_adapter_guard_command(name)}
+umask {KAFUI_UMASK:03o}
+{variables} exec {shlex.quote(executable)} --config {shlex.quote(str(configuration.kaf_config))} "$@"
+"""
+
+
 def render_kcl_shim(name: str, executable: str, inputs: ShimInputs) -> str:
     """Render a shim that strips kcl's own variables and selects its private config."""
     kcl_config = inputs.configuration.kcl_config
@@ -215,6 +236,7 @@ __all__ = [
     "ShimInputs",
     "render_java_shim",
     "render_kaf_shim",
+    "render_kafui_shim",
     "render_kaskade_shim",
     "render_kcat_shim",
     "render_kcl_shim",

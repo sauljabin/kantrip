@@ -17,6 +17,12 @@ KAF_EXECUTABLES = frozenset({"kaf"})
 # kaf saves `$HOME/.kaf/config` whatever `--config` names; under this home the save
 # fails before any file exists, so profile credentials can never reach it.
 KAF_HOME = "/dev/null"
+KAFUI_EXECUTABLES = frozenset({"kafui"})
+# kafui reads `$HOME/.config/kafui/config.yaml`, which can define whole clusters,
+# and its preferences from `$XDG_CONFIG_HOME`; a missing file is fine, an
+# unreadable one is fatal. It runs under an empty private home instead, and
+# this mask keeps what it writes there private to the session.
+KAFUI_UMASK = 0o077
 KASKADE_EXECUTABLES = frozenset({"kaskade"})
 KCL_EXECUTABLES = frozenset({"kcl"})
 # kcl reads `KCL_<KEY>` overrides and config-file selectors from its environment;
@@ -75,6 +81,7 @@ class ClientConfiguration:
     registry_oauth_ssl_cert_file: Path | None = None
     kaf_config: Path | None = None
     kcl_config: Path | None = None
+    kafui_home: Path | None = None
     # JVM options Kafka's Java OAuth login needs; None without OAuth.
     java_oauth_options: str | None = None
 
@@ -164,12 +171,42 @@ _KASKADE_CONNECTION_OPTIONS = (
     "--registry",
     "-b",
 )
-# kaf v0.2.14 (cmd/kaf): profile-owned persistent options, and the short options that
-# are booleans; every other short option takes a value, which ends a combined group.
-_KAF_CONNECTION_OPTIONS = ("--config", "--brokers", "--cluster", "--schema-registry")
-_KAF_CONNECTION_SHORT_OPTIONS = {"b": "--brokers", "c": "--cluster"}
-_KAF_BOOLEAN_SHORT_OPTIONS = frozenset("fhv")
-_KAF_BOOLEAN_LONG_OPTIONS = frozenset({"--follow", "--help", "--verbose", "--version"})
+
+
+@dataclass(frozen=True)
+class _CobraOptions:
+    """One cobra client's profile-owned options and the options that take no value.
+
+    Every other short option takes a value, which ends a combined group.
+    """
+
+    client: str
+    connection: frozenset[str]
+    connection_short: Mapping[str, str]
+    boolean_short: frozenset[str]
+    boolean_long: frozenset[str]
+
+
+# kaf v0.2.14 (cmd/kaf) and kafui v0.1.38 (cmd/kafui) share the persistent options
+# that select a cluster or configuration.
+_KAF_FAMILY_CONNECTION_OPTIONS = frozenset(
+    {"--config", "--brokers", "--cluster", "--schema-registry"}
+)
+_KAF_FAMILY_CONNECTION_SHORT_OPTIONS = {"b": "--brokers", "c": "--cluster"}
+_KAF_OPTIONS = _CobraOptions(
+    "kaf",
+    _KAF_FAMILY_CONNECTION_OPTIONS,
+    _KAF_FAMILY_CONNECTION_SHORT_OPTIONS,
+    frozenset("fhv"),
+    frozenset({"--follow", "--help", "--verbose", "--version"}),
+)
+_KAFUI_OPTIONS = _CobraOptions(
+    "kafui",
+    _KAF_FAMILY_CONNECTION_OPTIONS,
+    _KAF_FAMILY_CONNECTION_SHORT_OPTIONS,
+    frozenset("hv"),
+    frozenset({"--help", "--mock", "--read-only", "--verbose"}),
+)
 # kcl v0.20.0 (client/client.go, main.go): persistent options that replace or bypass
 # the profile, the `-X` keys a session may still set, the root options that take a
 # value (so the command after them is found as cobra finds it), and every short
@@ -237,6 +274,13 @@ def check_kaf_arguments(executable: str, arguments: Sequence[str]) -> str | None
     """Reject kaf options and `config` commands that replace or persist the profile."""
     del executable
     _reject_kaf_overrides(arguments)
+    return None
+
+
+def check_kafui_arguments(executable: str, arguments: Sequence[str]) -> str | None:
+    """Reject kafui options that select another cluster, broker, or configuration."""
+    del executable
+    _reject_cobra_overrides(_KAFUI_OPTIONS, arguments)
     return None
 
 
@@ -333,6 +377,19 @@ def prepare_kaf_command(
     return [prepared[0], "--config", str(configuration.kaf_config), *prepared[1:]]
 
 
+def prepare_kafui_command(
+    prepared: list[str],
+    configuration: ClientConfiguration,
+    registry: RegistryConnection | None,
+) -> list[str]:
+    """Select the private kaf configuration, which kafui reads as its only cluster."""
+    del registry
+    _reject_cobra_overrides(_KAFUI_OPTIONS, prepared[1:])
+    if configuration.kaf_config is None or configuration.kafui_home is None:
+        raise AdapterError("kafui requires a private configuration file and home")
+    return [prepared[0], "--config", str(configuration.kaf_config), *prepared[1:]]
+
+
 def prepare_kcl_command(
     prepared: list[str],
     configuration: ClientConfiguration,
@@ -374,6 +431,20 @@ def prepare_kaf_environment(
     """Run kaf under a home where its `~/.kaf/config` save fails."""
     del configuration
     environment["HOME"] = KAF_HOME
+
+
+def kafui_environment(home: Path) -> dict[str, str]:
+    """Return the variables that point kafui's own settings at its private home."""
+    return {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}
+
+
+def prepare_kafui_environment(
+    environment: MutableMapping[str, str], configuration: ClientConfiguration
+) -> None:
+    """Run kafui under its empty private home, so the user's kafui settings stay out."""
+    if configuration.kafui_home is None:
+        raise AdapterError("kafui requires a private configuration file and home")
+    environment.update(kafui_environment(configuration.kafui_home))
 
 
 def prepare_kcl_environment(
@@ -421,12 +492,23 @@ def require_kcat_registry(name: str, registry: RegistryConnection | None) -> Reg
 
 def require_kaf_registry(registry: RegistryConnection) -> RegistryConnection:
     """Require a Registry that kaf's Go client reaches with system trust and Basic at most."""
-    connection = _require_confluent_registry("kaf", registry)
+    return _require_kaf_family_registry("kaf", registry)
+
+
+def require_kafui_registry(registry: RegistryConnection) -> RegistryConnection:
+    """Require a Registry that kafui's Go client reaches with system trust and Basic at most."""
+    return _require_kaf_family_registry("kafui", registry)
+
+
+def _require_kaf_family_registry(name: str, registry: RegistryConnection) -> RegistryConnection:
+    connection = _require_confluent_registry(name, registry)
     if connection.auth_type not in {"none", "basic"}:
-        raise AdapterError(f"kaf does not support Registry authentication '{connection.auth_type}'")
+        raise AdapterError(
+            f"{name} does not support Registry authentication '{connection.auth_type}'"
+        )
     if connection.ca_certificates is not None:
         raise AdapterError(
-            "kaf trusts only the system CA store for the Registry; "
+            f"{name} trusts only the system CA store for the Registry; "
             "profiles with a custom Registry CA are not supported"
         )
     return connection
@@ -487,6 +569,15 @@ def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
 
 
 def _reject_kaf_overrides(arguments: Sequence[str]) -> None:
+    if _reject_cobra_overrides(_KAF_OPTIONS, arguments) == "config":
+        raise AdapterError(
+            "kaf config commands cannot change or save the selected Kantrip profile; "
+            "Kantrip selects the cluster for this session"
+        )
+
+
+def _reject_cobra_overrides(options: _CobraOptions, arguments: Sequence[str]) -> str | None:
+    """Reject profile-owned options and return the first command, if any."""
     command: str | None = None
     takes_value = False
     for argument in arguments:
@@ -499,32 +590,29 @@ def _reject_kaf_overrides(arguments: Sequence[str]) -> None:
                 continue
         if argument.startswith("--"):
             name = argument.partition("=")[0]
-            if name in _KAF_CONNECTION_OPTIONS:
+            if name in options.connection:
                 raise AdapterError(
-                    f"kaf option '{name}' cannot override the selected Kantrip profile"
+                    f"{options.client} option '{name}' cannot override the selected Kantrip profile"
                 )
-            takes_value = "=" not in argument and name not in _KAF_BOOLEAN_LONG_OPTIONS
+            takes_value = "=" not in argument and name not in options.boolean_long
             continue
         if argument.startswith("-") and len(argument) > 1:
-            takes_value = _kaf_short_group_takes_value(argument[1:])
+            takes_value = _cobra_short_group_takes_value(options, argument[1:])
             continue
         if command is None:
             command = argument
-    if command == "config":
-        raise AdapterError(
-            "kaf config commands cannot change or save the selected Kantrip profile; "
-            "Kantrip selects the cluster for this session"
-        )
+    return command
 
 
-def _kaf_short_group_takes_value(group: str) -> bool:
+def _cobra_short_group_takes_value(options: _CobraOptions, group: str) -> bool:
     for index, option in enumerate(group):
-        if option in _KAF_CONNECTION_SHORT_OPTIONS:
-            name = _KAF_CONNECTION_SHORT_OPTIONS[option]
+        if option in options.connection_short:
+            name = options.connection_short[option]
             raise AdapterError(
-                f"kaf option '-{option}/{name}' cannot override the selected Kantrip profile"
+                f"{options.client} option '-{option}/{name}' cannot override "
+                "the selected Kantrip profile"
             )
-        if option not in _KAF_BOOLEAN_SHORT_OPTIONS:
+        if option not in options.boolean_short:
             # A value option consumes the rest of the group, or the next argument.
             return index == len(group) - 1
     return False
@@ -755,6 +843,8 @@ __all__ = [
     "KAFKA_CONSUMER_GROUPS_EXECUTABLES",
     "KAFKA_EXECUTABLES",
     "KAFKA_TOPICS_EXECUTABLES",
+    "KAFUI_EXECUTABLES",
+    "KAFUI_UMASK",
     "KASKADE_EXECUTABLES",
     "KCAT_CONFIG_VARIABLE",
     "KCAT_EXECUTABLES",
@@ -770,19 +860,24 @@ __all__ = [
     "JavaCommand",
     "RegistryConsoleOptions",
     "check_java_arguments",
+    "check_kafui_arguments",
     "check_kaskade_arguments",
     "check_kcat_arguments",
     "check_kcl_arguments",
     "java_option_variables",
+    "kafui_environment",
     "prepare_java_command",
     "prepare_java_environment",
     "prepare_kaf_environment",
+    "prepare_kafui_command",
+    "prepare_kafui_environment",
     "prepare_kaskade_command",
     "prepare_kcat_command",
     "prepare_kcat_environment",
     "prepare_kcl_command",
     "prepare_kcl_environment",
     "require_kaf_registry",
+    "require_kafui_registry",
     "require_kaskade_registry",
     "require_kcat_registry",
     "require_kcl_registry",

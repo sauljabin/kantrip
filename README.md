@@ -31,7 +31,7 @@ Keyring or KDE Wallet collection on Linux. They never go into the profile or
 onto the command line.
 
 Supported clients are kcat, the Apache Kafka and Confluent CLIs (including the
-Schema Registry console producers and consumers), Kaskade, kaf, and kcl. Other
+Schema Registry console producers and consumers), Kaskade, kaf, kcl, and kafui. Other
 programs you start with `kantrip exec` can read the connection from `KAFKA_*`
 variables and generated config files. Connections can be plaintext or verified
 TLS, with SASL/PLAIN, SCRAM, mTLS, or OAuth where the client supports it.

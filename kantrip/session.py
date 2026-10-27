@@ -73,6 +73,7 @@ from kantrip.supervisor import SupervisorError, run_supervised_process
 KAF_CLUSTER_NAME = "kantrip"
 KAF_CONFIG_FILENAME = "kaf.yaml"
 KCL_CONFIG_FILENAME = "kcl.toml"
+KAFUI_HOME_DIRECTORY = "kafui-home"
 # Go clients (kaf, kcl) cannot decrypt a PEM key; they read these unencrypted copies.
 UNENCRYPTED_CLIENT_KEY_FILENAME = "client-unencrypted.key"
 UNENCRYPTED_REGISTRY_CLIENT_KEY_FILENAME = "registry-client-unencrypted.key"
@@ -174,11 +175,12 @@ class _SessionFiles:
     client configuration also writes the keys and CA bundles it points at.
     Private keys and derived bundles render only when written, and a file
     planned only as a dependency is written only for a file that requires it.
+    A planned directory, such as a client's private home, is created empty.
     """
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
-        self._planned: dict[Path, tuple[Callable[[], str], tuple[Path, ...]]] = {}
+        self._planned: dict[Path, tuple[Callable[[], str] | None, tuple[Path, ...]]] = {}
         self._dependencies: set[Path] = set()
         self._written: set[Path] = set()
 
@@ -193,6 +195,11 @@ class _SessionFiles:
         self._planned[path] = (render, tuple(item for item in requires if item is not None))
         if dependency:
             self._dependencies.add(path)
+        return path
+
+    def plan_directory(self, name: str) -> Path:
+        path = self.directory / name
+        self._planned[path] = (None, ())
         return path
 
     def write_all(self) -> None:
@@ -210,7 +217,10 @@ class _SessionFiles:
                 continue
             render, requires = self._planned[path]
             self._write(requires)
-            _write_private(path, render())
+            if render is None:
+                path.mkdir(mode=0o700)
+            else:
+                _write_private(path, render())
             self._written.add(path)
 
 
@@ -301,11 +311,13 @@ def _run_in_runtime(
         # A supported client gets only the files its adapter passes to it.
         files.write_referenced([*arguments, *execution_environment.values()])
     runtime.mark_running()
+    adapter = client_adapter(Path(arguments[0]).name) if has_command else None
     result = _run_child(
         arguments,
         env=execution_environment,
         check=False,
         interactive=not has_command,
+        umask=adapter.umask if adapter is not None else None,
     )
     return result.returncode
 
@@ -485,6 +497,7 @@ def _plan_client_files(
             registry_material.ca,
         )
         variables["SCHEMA_REGISTRY_JAVA_CONFIG_FILE"] = schema_registry_java_config
+    kaf_config = _plan_kaf_config(files, kafka, kafka_material, registry)
     configuration = ClientConfiguration(
         bootstrap_servers=rdkafka_properties["bootstrap.servers"],
         java_config=java_config_path,
@@ -493,8 +506,10 @@ def _plan_client_files(
         kaskade_registry_config=kaskade_registry_config,
         schema_registry_java_config=schema_registry_java_config,
         registry_oauth_ssl_cert_file=registry_material.oauth_ca,
-        kaf_config=_plan_kaf_config(files, kafka, kafka_material, registry),
+        kaf_config=kaf_config,
         kcl_config=_plan_kcl_config(files, kafka, kafka_material, registry, registry_material),
+        # kafui reads the kaf config, so a profile kaf cannot map gets no kafui home.
+        kafui_home=(files.plan_directory(KAFUI_HOME_DIRECTORY) if kaf_config is not None else None),
         java_oauth_options=_java_oauth_options(kafka, registry),
     )
     return _ClientFiles(configuration, variables)
@@ -658,12 +673,14 @@ def _run_child(
     env: Mapping[str, str],
     check: bool,
     interactive: bool,
+    umask: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     del check
     return_code = run_supervised_process(
         arguments,
         environment=env,
         interactive=interactive,
+        umask=umask,
     )
     return subprocess.CompletedProcess(arguments, return_code)
 
@@ -727,6 +744,7 @@ def _prepare_subshell(
         kaskade_registry_config_path=configuration.kaskade_registry_config,
         kaf_config_path=configuration.kaf_config,
         kcl_config_path=configuration.kcl_config,
+        kafui_home_path=configuration.kafui_home,
         environment=environment,
         registry=registry,
         registry_oauth_ssl_cert_file=configuration.registry_oauth_ssl_cert_file,

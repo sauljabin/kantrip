@@ -28,6 +28,8 @@ from kantrip.adapter_policy import (
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
     KAFKA_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
+    KAFUI_EXECUTABLES,
+    KAFUI_UMASK,
     KASKADE_EXECUTABLES,
     KCAT_EXECUTABLES,
     KCL_EXECUTABLES,
@@ -38,6 +40,7 @@ from kantrip.adapter_policy import (
     ClientConfiguration,
     check_java_arguments,
     check_kaf_arguments,
+    check_kafui_arguments,
     check_kaskade_arguments,
     check_kcat_arguments,
     check_kcl_arguments,
@@ -46,23 +49,28 @@ from kantrip.adapter_policy import (
     prepare_java_environment,
     prepare_kaf_command,
     prepare_kaf_environment,
+    prepare_kafui_command,
+    prepare_kafui_environment,
     prepare_kaskade_command,
     prepare_kcat_command,
     prepare_kcat_environment,
     prepare_kcl_command,
     prepare_kcl_environment,
     require_kaf_registry,
+    require_kafui_registry,
     require_kcl_registry,
 )
 from kantrip.adapter_shims import (
     ShimInputs,
     render_java_shim,
     render_kaf_shim,
+    render_kafui_shim,
     render_kaskade_shim,
     render_kcat_shim,
     render_kcl_shim,
     write_executable,
 )
+from kantrip.go_build_info import go_build_info
 from kantrip.registry import APICURIO_PROVIDER, CONFLUENT_PROVIDER, RegistryConnection
 
 ArgumentCheck = Callable[[str, Sequence[str]], str | None]
@@ -97,8 +105,8 @@ class VersionGate(Protocol):
     """How to read an installed client's release and whether Kantrip supports it."""
 
     @property
-    def option(self) -> str:
-        """The option that prints the release."""
+    def option(self) -> str | None:
+        """The option that prints the release, or None to read the Go build information."""
         ...
 
     @property
@@ -125,12 +133,14 @@ class ReleaseGate:
 
     `pattern` reads the version output into major, minor, patch, and a suffix;
     a suffixed build, such as a development or pre-release one, never passes.
+    Without an `option`, the output is the executable's embedded Go build
+    information instead, read without running the client.
     """
 
     product: str
     pattern: re.Pattern[str]
     minimum: tuple[int, int, int]
-    option: str = "--version"
+    option: str | None = "--version"
     shared_by_directory: bool = False
 
     def read(self, output: str) -> ClientVersion | None:
@@ -252,7 +262,8 @@ class ClientAdapter:
     `feature_checks` apply the profile's needs to that same release. The
     remaining fields are the family's capability matrix; `registry_check` gates
     a family that reads the profile's Registry on every run, and
-    `prepare_environment` adjusts a direct child's environment.
+    `prepare_environment` adjusts a direct child's environment, and `umask` is
+    the file-creation mask a direct child runs under.
     """
 
     name: str
@@ -267,6 +278,7 @@ class ClientAdapter:
     feature_checks: tuple[FeatureCheck, ...] = ()
     registry_check: Callable[[RegistryConnection], object] | None = None
     prepare_environment: EnvironmentPreparation | None = None
+    umask: int | None = None
 
 
 def missing_command_message(name: str, hint: str | None = None) -> str:
@@ -299,6 +311,15 @@ def _missing_kaf(name: str) -> str:
         "kaf",
         "install it with 'brew install kaf' on macOS or "
         "from https://github.com/birdayz/kaf/releases on Linux",
+    )
+
+
+def _missing_kafui(name: str) -> str:
+    del name
+    return missing_command_message(
+        "kafui",
+        "install it with 'brew install benny93/kafui/kafui' or "
+        "from https://github.com/Benny93/kafui/releases",
     )
 
 
@@ -435,7 +456,37 @@ KCL_ADAPTER = ClientAdapter(
     registry_check=require_kcl_registry,
     prepare_environment=prepare_kcl_environment,
 )
-CLIENT_ADAPTERS = (KCAT_ADAPTER, KASKADE_ADAPTER, JAVA_CLI_ADAPTER, KAF_ADAPTER, KCL_ADAPTER)
+KAFUI_ADAPTER = ClientAdapter(
+    "kafui",
+    KAFUI_EXECUTABLES,
+    check_arguments=check_kafui_arguments,
+    prepare_command=prepare_kafui_command,
+    render_shim=render_kafui_shim,
+    missing_command=_missing_kafui,
+    # Release builds of v0.1.38 print `dev` from `kafui version`, and the command
+    # reads the user's kafui config, so the gate reads the module version the Go
+    # toolchain records. The argument policy and kaf config follow v0.1.38.
+    minimum_version=ReleaseGate(
+        "kafui",
+        re.compile(r"^mod\tgithub\.com/Benny93/kafui\tv(\d+)\.(\d+)\.(\d+)(\S*)", re.MULTILINE),
+        (0, 1, 38),
+        option=None,
+    ),
+    # kafui reads kaf's config, whose OAuth token client cannot take the
+    # profile's token-endpoint CA, so OAuth has no safe mapping.
+    kafka_authentication=_KAFKA_AUTHENTICATION - {"oauth"},
+    registry_check=require_kafui_registry,
+    prepare_environment=prepare_kafui_environment,
+    umask=KAFUI_UMASK,
+)
+CLIENT_ADAPTERS = (
+    KCAT_ADAPTER,
+    KASKADE_ADAPTER,
+    JAVA_CLI_ADAPTER,
+    KAF_ADAPTER,
+    KCL_ADAPTER,
+    KAFUI_ADAPTER,
+)
 _ADAPTERS_BY_EXECUTABLE = {
     executable: adapter for adapter in CLIENT_ADAPTERS for executable in adapter.executables
 }
@@ -526,6 +577,7 @@ def create_subshell_shims(
     registry_oauth_ssl_cert_file: Path | None = None,
     kaf_config_path: Path | None = None,
     kcl_config_path: Path | None = None,
+    kafui_home_path: Path | None = None,
 ) -> Path:
     """Create session-owned shims for installed adapter executables."""
     configuration = ClientConfiguration(
@@ -538,6 +590,7 @@ def create_subshell_shims(
         registry_oauth_ssl_cert_file=registry_oauth_ssl_cert_file,
         kaf_config=kaf_config_path,
         kcl_config=kcl_config_path,
+        kafui_home=kafui_home_path,
     )
     search_path = environment.get("PATH", os.defpath)
     installed = [*_installed_executables(search_path), *_linked_executables(search_path)]
@@ -702,7 +755,7 @@ class VersionProbe:
 
     def __init__(self, environment: Mapping[str, str]) -> None:
         self.environment = environment
-        self._outputs: dict[tuple[str, Path], str | None] = {}
+        self._outputs: dict[tuple[str | None, Path], str | None] = {}
 
     def output(self, gate: VersionGate, resolved: str) -> str | None:
         """Return the version output, or None when the client could not report it."""
@@ -713,7 +766,7 @@ class VersionProbe:
 
     def prefetch(self, clients: Iterable[tuple[VersionGate, str]]) -> None:
         """Probe several clients at once, so a shell waits for the slowest one only."""
-        pending: dict[tuple[str, Path], tuple[str, str]] = {}
+        pending: dict[tuple[str | None, Path], tuple[str, str | None]] = {}
         for gate, resolved in clients:
             key = _probe_key(gate, resolved)
             if key not in self._outputs:
@@ -728,12 +781,16 @@ class VersionProbe:
             self._outputs.update(zip(pending, outputs, strict=True))
 
 
-def _probe_key(gate: VersionGate, resolved: str) -> tuple[str, Path]:
+def _probe_key(gate: VersionGate, resolved: str) -> tuple[str | None, Path]:
     path = Path(resolved)
     return gate.option, path.parent if gate.shared_by_directory else path
 
 
-def _version_output(resolved: str, option: str, environment: Mapping[str, str]) -> str | None:
+def _version_output(
+    resolved: str, option: str | None, environment: Mapping[str, str]
+) -> str | None:
+    if option is None:
+        return go_build_info(resolved)
     try:
         result = subprocess.run(
             [resolved, option],
@@ -763,6 +820,8 @@ __all__ = [
     "KAFKA_CONSUMER_GROUPS_EXECUTABLES",
     "KAFKA_EXECUTABLES",
     "KAFKA_TOPICS_EXECUTABLES",
+    "KAFUI_ADAPTER",
+    "KAFUI_EXECUTABLES",
     "KAF_ADAPTER",
     "KAF_EXECUTABLES",
     "KASKADE_ADAPTER",

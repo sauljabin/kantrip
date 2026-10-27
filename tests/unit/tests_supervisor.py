@@ -140,6 +140,27 @@ class TestProcessSupervisor(unittest.TestCase):
 
         self.assertEqual(0, code)
 
+    def test_one_off_command_runs_under_the_requested_file_mask(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            created = Path(directory) / "created"
+            code = run_supervised_process(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import os, sys; os.mkdir(sys.argv[1], 0o750); "
+                        "open(os.path.join(sys.argv[1], 'log'), 'w').close()"
+                    ),
+                    str(created),
+                ],
+                environment=os.environ,
+                umask=0o077,
+            )
+
+            self.assertEqual(0, code)
+            self.assertEqual(0o700, created.stat().st_mode & 0o777)
+            self.assertEqual(0o600, (created / "log").stat().st_mode & 0o777)
+
     def test_start_failure_is_actionable(self) -> None:
         with self.assertRaisesRegex(SupervisorError, "command could not be started"):
             run_supervised_process(

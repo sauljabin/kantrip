@@ -7,11 +7,11 @@
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark light">
 <title>Kantrip: switch Kafka profiles like magic</title>
-<meta name="description" content="Save a Kafka connection once and use it with kcat, the Apache Kafka and Confluent CLIs, Kaskade, kaf, kcl, and your own programs. Secrets stay in a dedicated vault in your OS credential store.">
+<meta name="description" content="Save a Kafka connection once and use it with kcat, the Apache Kafka and Confluent CLIs, Kaskade, kaf, kcl, kafui, and your own programs. Secrets stay in a dedicated vault in your OS credential store.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kantrip">
 <meta property="og:title" content="Kantrip: switch Kafka profiles like magic">
-<meta property="og:description" content="Kafka connection profiles for kcat, the Kafka CLIs, Kaskade, kaf, and kcl, with secrets kept in a dedicated OS credential vault.">
+<meta property="og:description" content="Kafka connection profiles for kcat, the Kafka CLIs, Kaskade, kaf, kcl, and kafui, with secrets kept in a dedicated OS credential vault.">
 <meta property="og:url" content="https://sauljabin.github.io/kantrip/">
 <meta property="og:image" content="https://sauljabin.github.io/kantrip/social-preview.png">
 <meta property="og:image:width" content="1280">
@@ -62,7 +62,7 @@
  <svg class="wand-mark" viewBox="0 0 24 20" aria-hidden="true" focusable="false"><path class="wand-handle" d="M1.8 10H12"/><path class="wand-tip" d="M18 16V4M12.8 13L23.2 7M23.2 13L12.8 7"/></svg><span class="t-secondary"> switch kafka profiles like </span><span class="t-title">|_|</span><span class="t-secondary"> magic</span>  </span></pre>
     </div>
     <p class="lede">Describe a Kafka cluster once, then run kcat, the Apache Kafka and
-      Confluent CLIs, Kaskade, kaf, or kcl against it with <code>kantrip exec</code>. Each
+      Confluent CLIs, Kaskade, kaf, kcl, or kafui against it with <code>kantrip exec</code>. Each
       client gets its own config for that run, and the secrets stay in Kantrip's own vault in
       your operating system's credential store.</p>
     <div class="install">
@@ -127,7 +127,7 @@
       <li class="card">
         <h3>One profile, every client</h3>
         <p>kcat, the Apache Kafka and Confluent CLIs, Confluent's Schema Registry consoles,
-          Kaskade, kaf, and kcl each get their own config generated from the same profile.
+          Kaskade, kaf, kcl, and kafui each get their own config generated from the same profile.
           Arguments that would point them at another cluster are rejected.</p>
         <p class="card-command" aria-hidden="true">kantrip exec prod -- kcat -L</p>
       </li>
@@ -173,6 +173,11 @@
         <dd>Topics, groups, cluster administration, produce, and consume, plus
           Confluent-compatible Registry administration, decoding, and encoding. No Kafka
           OAuth.</dd>
+      </div>
+      <div>
+        <dt><code>kafui</code></dt>
+        <dd>A terminal UI for topics, consumer groups, brokers, ACLs, and
+          Confluent-compatible schemas. No Kafka OAuth.</dd>
       </div>
     </dl>
     <p>Kafka connections can be plaintext or verified TLS, with SASL/PLAIN, SCRAM-SHA-256,

@@ -9,6 +9,7 @@ from kantrip.adapters import (
     CLIENT_ADAPTERS,
     JAVA_CLI_ADAPTER,
     KAF_ADAPTER,
+    KAFUI_ADAPTER,
     KASKADE_ADAPTER,
     KCAT_ADAPTER,
     KCL_ADAPTER,
@@ -82,6 +83,22 @@ class TestClientFloors(unittest.TestCase):
             "kcl",
             ("kcl version v0.20.0\n",),
             (("kcl version v0.19.0\n", "install kcl 0.20.0 or newer"),),
+        ),
+        (
+            "kafui",
+            (
+                "go1.24.13\npath\tgithub.com/Benny93/kafui\nmod\tgithub.com/Benny93/kafui\tv0.1.38\t\n",
+                "mod\tgithub.com/Benny93/kafui\tv0.2.0\th1:abc=\n",
+            ),
+            (
+                (
+                    "mod\tgithub.com/Benny93/kafui\tv0.1.37\t\n",
+                    "kafui 0.1.37 is not supported; install kafui 0.1.38 or newer",
+                ),
+                ("mod\tgithub.com/Benny93/kafui\t(devel)\t\n", "could not verify"),
+                # A fork records its own module path, so its release says nothing.
+                ("mod\tgithub.com/someone/kafui\tv0.1.38\t\n", "could not verify"),
+            ),
         ),
         (
             "kafka-topics.sh",
@@ -258,6 +275,7 @@ class TestEndToEndPins(unittest.TestCase):
             (KASKADE_ADAPTER, "kaskade", versions["KASKADE_VERSION"]),
             (KAF_ADAPTER, "kaf", versions["KAF_VERSION"]),
             (KCL_ADAPTER, "kcl", versions["KCL_VERSION"]),
+            (KAFUI_ADAPTER, "kafui", versions["KAFUI_VERSION"]),
             (KCAT_ADAPTER, "kcat", versions["KCAT_VERSION"]),
             (KCAT_ADAPTER, "kcat", versions["KCAT_MACOS_VERSION"]),
             (KCAT_ADAPTER, "kcat", kcat_pin(versions)),

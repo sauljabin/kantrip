@@ -45,8 +45,9 @@ checks use the same version:
 | `kaskade` | Kaskade 5.0.1 | None |
 | `kaf` | kaf 0.2.14 | None |
 | `kcl` | kcl 0.20.0 | None |
+| `kafui` | kafui 0.1.38 | None |
 
-kcat, Kaskade, kaf, and kcl have no upper version limit. The Java CLIs do:
+kcat, Kaskade, kaf, kcl, and kafui have no upper version limit. The Java CLIs do:
 Kantrip tells Apache Kafka from Confluent Platform by the major version, and
 recognizes Apache Kafka 2 to 4 and Confluent Platform 5 to 8. A release with
 any other major version, such as Apache Kafka 5 or Confluent Platform 9, fails
@@ -54,7 +55,10 @@ the check.
 
 Java releases may carry Confluent's `-ccs` or `-ce` suffix. For the other
 clients, a version with a suffix, such as a development or pre-release build,
-fails the check. SCRAM against Kafka 4 brokers also needs librdkafka 2.6.1 or
+fails the check. Release builds of kafui print `dev` as their version, so
+Kantrip reads kafui's release from the module version Go records in the
+executable, without running it. A build from a source checkout records no
+release and fails the check. SCRAM against Kafka 4 brokers also needs librdkafka 2.6.1 or
 newer. Kantrip doesn't check that one, because it doesn't know the broker's
 version.
 
@@ -80,6 +84,7 @@ supervised.
 | `kcat` / `kafkacat` | kcat | kcat 1.7.0+ | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
 | `kaf` | kaf | kaf 0.2.14+ | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
 | `kcl` | kcl | kcl 0.20.0+ | Topics, groups, cluster administration, produce, consume, and Registry administration | Confluent-compatible | Uses a private TOML file through `KCL_CONFIG_PATH` and removes inherited `KCL_*` variables. `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` keys other than the three timeouts, and `kcl profile` commands are rejected. Registry OAuth and native Apicurio fail before launch. |
+| `kafui` | kafui | kafui 0.1.38+ | Terminal UI for topics, groups, brokers, ACLs, and schemas; `health` and `get brokers` | Confluent-compatible | Uses kaf's private one-cluster YAML through `--config`, with an empty private `HOME` and `XDG_CONFIG_HOME`, so the user's kaf and kafui settings never apply. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and `--schema-registry` are rejected. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
 | `kaskade` | Kaskade | Kaskade 5.0.1+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed; other Kafka, config-file, and registry connection overrides are rejected. |
 
 The Confluent console clients and kcat need a profile with
@@ -95,7 +100,7 @@ CA, which Kantrip copies into each session. The librdkafka clients (`kcat`,
 `kafkacat`, and Kaskade) read that PEM directly; the Java clients need the
 newer releases in the version table above, the first with
 [PEM trust stores](https://kafka.apache.org/27/security/encryption-and-authentication-using-ssl/).
-kaf and kcl can't read encrypted mTLS keys, so they get a decrypted copy in a
+kaf, kafui, and kcl can't read encrypted mTLS keys, so they get a decrypted copy in a
 private session file. A mode a client can't use fails before the operation
 starts.
 
@@ -107,7 +112,7 @@ starts.
 | SCRAM-SHA-256 over TLS | Supported | Supported | SASL exchange |
 | SCRAM-SHA-512 over TLS | Supported | Supported | SASL exchange |
 | mTLS | Supported | Supported | Configured client exchange |
-| OAuth / OAUTHBEARER | Supported | Supported, except kaf and kcl | TLS, token acquisition, and SASL exchange |
+| OAuth / OAUTHBEARER | Supported | Supported, except kaf, kafui, and kcl | TLS, token acquisition, and SASL exchange |
 | SASL without TLS / disabled TLS verification | Unsupported | Unsupported | Unsupported |
 
 ## Registry protocols and providers
@@ -120,12 +125,12 @@ settings passed on the command line.
 
 | Provider / mode | Current support |
 | --- | --- |
-| Confluent-compatible HTTP/HTTPS, no auth | Confluent consoles, kcat Avro, Kaskade, kaf Avro (system trust only), kcl, and ping |
+| Confluent-compatible HTTP/HTTPS, no auth | Confluent consoles, kcat Avro, Kaskade, kaf Avro and kafui (system trust only), kcl, and ping |
 | Native Apicurio HTTP/HTTPS, no auth | Kaskade Registry deserializers and ping |
-| Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. kaf maps Basic with system trust only. kcl maps Basic and mTLS with system or custom CA trust, but not OAuth. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
+| Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. kaf and kafui map Basic with system trust only. kcl maps Basic and mTLS with system or custom CA trust, but not OAuth. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
 | Native Apicurio Basic or mTLS | Private Kaskade INI and provider-aware ping. Kaskade supports private CA trust and unencrypted PEM mTLS keys; encrypted PEM keys are rejected. |
 | Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. Kaskade keeps Registry and token HTTP/TLS contexts separate so Registry client identity does not reach the IdP. |
-| Confluent fixed bearer | Profile and ping support. Confluent's Avro, JSON Schema, and Protobuf consoles receive it as `bearer.auth.credentials.source=STATIC_TOKEN` with `bearer.auth.token`, and kcl as its bearer token; `SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE` carries the same `bearer.auth.*` keys. Kaskade Registry decoding, kaf, and kcat Avro reject it before launch. |
+| Confluent fixed bearer | Profile and ping support. Confluent's Avro, JSON Schema, and Protobuf consoles receive it as `bearer.auth.credentials.source=STATIC_TOKEN` with `bearer.auth.token`, and kcl as its bearer token; `SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE` carries the same `bearer.auth.*` keys. Kaskade Registry decoding, kaf, kafui, and kcat Avro reject it before launch. |
 | Kafka credential inheritance / URL credentials | Rejected |
 
 [Kafka and registry connectivity](USAGE.md#kafka-and-registry-connectivity)
@@ -158,6 +163,7 @@ wallet.
 | Strimzi generated Secret JSON / YAML | One SCRAM-SHA-512 or TLS `KafkaUser` Secret through `add --from-strimzi FILE`, or `-` for stdin; see [First profile](USAGE.md#first-profile) | No Kubernetes resource output |
 | Kaskade INI | No profile import | Private `[kafka]` and optional provider-specific `[registry]` session config |
 | Registry properties | One Confluent (`schema.registry.*`, `basic.auth.*`, `bearer.auth.*`) or Apicurio (`apicurio.registry.*`) Registry, with Basic, fixed-token (Confluent), OAuth, or PEM mTLS authentication, through `add --from-properties` | Private HTTP endpoint configuration only |
+| kaf YAML | No file import | Private one-cluster kaf configuration, also read by kafui |
 | kcl TOML | No file import | Private kcl session configuration selected through `KCL_CONFIG_PATH` |
 | kafkactl YAML | Unsupported | No generated adapter config |
 | JKS / PKCS12 | Unsupported for Kantrip input | No automatic conversion |
@@ -174,6 +180,7 @@ directory on `PATH` before running `kantrip exec`.
 | `kcat`, `kafkacat` | `brew install kcat` | Debian/Ubuntu: `apt install kafkacat`; other distributions can use their package manager or follow the [kcat build instructions](https://github.com/edenhill/kcat#install). The installed legacy executable may be named `kafkacat`. Check the linked library with `kcat -V`: Ubuntu 24.04's `librdkafka` 2.3.0 is too old for SCRAM against Kafka 4 (see the version notes above). |
 | `kaf` | `brew install kaf` | Download the release archive from [kaf releases](https://github.com/birdayz/kaf/releases) and put `kaf` on `PATH`. |
 | `kcl` | Download `kcl_darwin_arm64.gz` or `kcl_darwin_amd64.gz` from [kcl releases](https://github.com/twmb/kcl/releases), decompress it as `kcl`, make it executable, and put it on `PATH`. | Download `kcl_linux_amd64.gz` or `kcl_linux_arm64.gz` from [kcl releases](https://github.com/twmb/kcl/releases), decompress it as `kcl`, make it executable, and put it on `PATH`. |
+| `kafui` | `brew install benny93/kafui/kafui`, or download `kafui_darwin_arm64.tar.gz` or `kafui_darwin_x86_64.tar.gz` from [kafui releases](https://github.com/Benny93/kafui/releases) and put `kafui` on `PATH`. | `brew install benny93/kafui/kafui`, or download `kafui_linux_x86_64.tar.gz` or `kafui_linux_arm64.tar.gz` from [kafui releases](https://github.com/Benny93/kafui/releases) and put `kafui` on `PATH`. |
 | `kaskade` | `brew install kaskade` or `pipx install kaskade` | `pipx install kaskade`; see the [Kaskade installation guide](https://github.com/sauljabin/kaskade#installation). |
 
 The Confluent archive has both the unsuffixed Kafka scripts and the Schema

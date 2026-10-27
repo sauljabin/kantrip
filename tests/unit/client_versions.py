@@ -15,12 +15,51 @@ SUPPORTED_VERSION_OUTPUTS = {
     "Kaskade": "kaskade, version 5.0.1\n",
     "kaf": "kaf version 0.2.14 (Homebrew)\n",
     "kcl": "kcl version v0.20.0\n",
+    # kafui's gate reads the module line of its embedded Go build information.
+    "kafui": "mod\tgithub.com/Benny93/kafui\tv0.1.38\t\n",
     # Last, because the Java gate reads the last release-like line.
     "Apache/Confluent Java CLI": "8.3.1-ccs\n",
 }
 # Tests often resolve every client to one fake path, so a probe answers with
 # every family's line and each gate reads its own.
 SUPPORTED_VERSION_OUTPUT = "".join(SUPPORTED_VERSION_OUTPUTS.values())
+
+
+# The sentinels `cmd/go` frames module information with.
+_MODULE_INFO_START = bytes.fromhex("3077af0c9274080241e1c107e6d618e6")
+_MODULE_INFO_END = bytes.fromhex("f932433186182072008242104116d8f2")
+
+
+def go_build_info_blob(module_info: str, go_version: str = "go1.24.13") -> bytes:
+    """Return Go build information as a Go 1.18+ toolchain embeds it in an executable."""
+    module = _MODULE_INFO_START + module_info.encode() + _MODULE_INFO_END
+    header = b"\xff Go buildinf:" + bytes((8, 0x2))
+    return (
+        header.ljust(32, b"\0")
+        + _uvarint(len(go_version))
+        + go_version.encode()
+        + _uvarint(len(module))
+        + module
+    )
+
+
+def fake_go_executable(script: str, module_info: str) -> bytes:
+    """Return a runnable script that also carries Go build information at an aligned offset.
+
+    The shell stops reading at the script's `exec` line, so the trailing
+    build information never runs.
+    """
+    contents = script.encode()
+    return contents.ljust(-(-len(contents) // 16) * 16, b"\n") + go_build_info_blob(module_info)
+
+
+def _uvarint(value: int) -> bytes:
+    encoded = bytearray()
+    while value >= 0x80:
+        encoded.append(value & 0x7F | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
 
 
 def supported_version_output(resolved: str, option: str, environment: Mapping[str, str]) -> str:

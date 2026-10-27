@@ -16,11 +16,13 @@ from kantrip.adapters import (
     ADAPTER_EXECUTABLES,
     JAVA_CLI_ADAPTER,
     KAF_ADAPTER,
+    KAFUI_ADAPTER,
     KASKADE_ADAPTER,
     KCAT_ADAPTER,
     KCL_ADAPTER,
     VersionGate,
 )
+from kantrip.go_build_info import go_build_info
 from kantrip.secret_store import load_secret_store, secret_reference
 from sandbox.__main__ import CA_FILE, STATE_FILE, STATE_ROOT
 
@@ -54,6 +56,9 @@ def check_preconditions(environment: Mapping[str, str]) -> None:
     )
     _require_pinned_version("kaf", "kaf", KAF_ADAPTER.minimum_version, versions["KAF_VERSION"])
     _require_pinned_version("kcl", "kcl", KCL_ADAPTER.minimum_version, versions["KCL_VERSION"])
+    _require_pinned_version(
+        "kafui", "kafui", KAFUI_ADAPTER.minimum_version, versions["KAFUI_VERSION"]
+    )
     _require_pinned_version("kcat", "kcat", KCAT_ADAPTER.minimum_version, kcat_pin(versions))
     _require_librdkafka_version(versions["LIBRDKAFKA_MIN_VERSION"])
     _require_sandbox_files()
@@ -90,13 +95,21 @@ def kcat_pin(versions: Mapping[str, str]) -> str:
 
 
 def _require_pinned_version(name: str, executable: str, gate: VersionGate, pin: str) -> None:
-    result = subprocess.run(
-        (executable, gate.option), capture_output=True, text=True, check=False, timeout=15
-    )
-    version = gate.read(f"{result.stdout}\n{result.stderr}") if result.returncode == 0 else None
+    output = _version_output(executable, gate)
+    version = gate.read(output) if output is not None else None
     if version is None or version.release < parse_pin(pin):
         found = "an unreadable version" if version is None else str(version)
         raise E2ESetupError(f"{name} {pin} or newer is required by {VERSIONS_FILE}; found {found}")
+
+
+def _version_output(executable: str, gate: VersionGate) -> str | None:
+    if gate.option is None:
+        located = shutil.which(executable)
+        return go_build_info(located) if located is not None else None
+    result = subprocess.run(
+        (executable, gate.option), capture_output=True, text=True, check=False, timeout=15
+    )
+    return f"{result.stdout}\n{result.stderr}" if result.returncode == 0 else None
 
 
 def parse_pin(pin: str) -> tuple[int, int, int]:

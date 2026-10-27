@@ -121,11 +121,14 @@ class TestKafSession(KafSessionTestCase):
         cluster = observed["config"]["clusters"][0]
         ca_path = str(observed["session"] / "kafka-ca.pem")
         self.assertEqual("SASL_SSL", cluster["security-protocol"])
+        # SASL version 1 wraps the exchange in SaslAuthenticate; brokers and proxies
+        # that dropped SaslHandshake v0 refuse sarama's default raw frames.
         self.assertEqual(
             {
                 "mechanism": "SCRAM-SHA-512",
                 "username": "synthetic-user",
                 "password": "synthetic-password",
+                "version": 1,
             },
             cluster["SASL"],
         )
