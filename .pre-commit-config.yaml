@@ -22,6 +22,12 @@ repos:
         pass_filenames: false
         files: ^(kantrip/console\.py|scripts/(banner|__init__)\.py|pyproject\.toml|uv\.lock)$
         entry: uv run --locked python -m scripts.banner
+      - id: screenshots
+        name: generating README screenshots
+        language: system
+        pass_filenames: false
+        files: ^(kantrip/.*\.py|scripts/(screenshots|banner|__init__)\.py|pyproject\.toml|uv\.lock)$
+        entry: uv run --locked python -m scripts.screenshots
       - id: site-demo
         name: capturing the site demo from the sandbox
         language: system

@@ -187,6 +187,7 @@ uv run --locked python -m scripts.website check    # validate the site and demo 
 uv run --locked python -m scripts.website render   # after editing site/demo.json
 uv run --locked python -m scripts.website capture  # rerecord the demo; needs the sandbox
 uv run --locked python -m scripts.banner           # regenerate images/banner.svg
+uv run --locked python -m scripts.screenshots      # regenerate the README screenshots
 ```
 
 Preview it under the same `/kantrip/` path GitHub Pages uses:

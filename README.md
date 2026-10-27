@@ -42,6 +42,35 @@ There is no global "current profile". You name the profile on every command,
 or open a subshell for it, so switching profiles in one terminal never changes
 what another terminal connects to.
 
+## Screenshots
+
+<table width="100%">
+  <tr>
+    <th width="50%">Add</th>
+    <th width="50%">List</th>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img alt="kantrip add creating two profiles" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-add.svg">
+    </td>
+    <td width="50%">
+      <img alt="kantrip list showing the profiles" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-list.svg">
+    </td>
+  </tr>
+  <tr>
+    <th width="50%">Describe</th>
+    <th width="50%">Commands</th>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img alt="kantrip describe showing a profile's Kafka and Registry settings" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-describe.svg">
+    </td>
+    <td width="50%">
+      <img alt="kantrip --help listing the commands" width="100%" src="https://raw.githubusercontent.com/sauljabin/kantrip/main/images/screenshot-help.svg">
+    </td>
+  </tr>
+</table>
+
 ## What it does
 
 - **Profiles.** `add`, `edit`, `remove`, `list`, and `describe`, with JSON and

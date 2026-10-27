@@ -23,9 +23,31 @@
   color-scheme: dark;
 }
 
-/* Same hues, darkened for WCAG AA contrast on light surfaces. */
+/* Same hues, darkened for WCAG AA contrast on light surfaces. theme.js sets
+   data-theme only when the visitor picks the scheme the system doesn't use. */
+:root[data-theme="light"] {
+  --bg: #eef3fb;
+  --surface: #ffffff;
+  --fg: #0b1b33;
+  --text: #33445c;
+  --muted: #4a5b72;
+  --link: #1d4ed8;
+  --glow: rgb(59 130 246 / 0.12);
+  --shadow: 0 1px 2px rgb(11 27 51 / 0.06), 0 8px 24px rgb(11 27 51 / 0.07);
+  --border: rgb(11 27 51 / 0.3);
+  --primary: #1d4ed8;
+  --secondary: #0e7490;
+  --accent: #2563eb;
+  --success: #047857;
+  --warning: #b45309;
+  --error: #be123c;
+  --wand: #92400e;
+  --focus: #b45309;
+  color-scheme: light;
+}
+
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --bg: #eef3fb;
     --surface: #ffffff;
     --fg: #0b1b33;
@@ -208,9 +230,66 @@ code {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 1.25rem;
+  align-items: center;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* The toggle shows the scheme a click switches to. */
+.theme-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.theme-toggle[hidden] {
+  display: none;
+}
+
+.theme-toggle:hover {
+  border-color: var(--link);
+}
+
+.icon {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-sun {
+  display: none;
+}
+
+:root[data-theme="dark"] .icon-sun,
+:root:not([data-theme]) .icon-sun {
+  display: block;
+}
+
+:root[data-theme="dark"] .icon-moon,
+:root:not([data-theme]) .icon-moon {
+  display: none;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .icon-sun {
+    display: none;
+  }
+
+  :root:not([data-theme]) .icon-moon {
+    display: block;
+  }
 }
 
 .site-footer {

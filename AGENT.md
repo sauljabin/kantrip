@@ -365,6 +365,10 @@ uv run --locked python -m scripts.verify_release dist
   `/kantrip/` path; JavaScript and CSS stay under 30 KB. The site's
   `*-badge.svg` files are byte-identical copies of the README badges in
   `images/` (a unit test enforces it); recopy them when a badge changes.
+- The site follows the system color scheme until a visitor picks one with the
+  header toggle. `site/theme.js` loads synchronously so the choice applies
+  before first paint, and it stores only an explicit choice that differs from
+  the system's in `localStorage`.
 - `site/demo.json` holds the demo, and `site/index.html` embeds the same
   transcript statically between the `demo-transcript` markers (`render`
   regenerates it). `scripts.website check` validates transcript, links, assets,
@@ -389,6 +393,10 @@ uv run --locked python -m scripts.verify_release dist
   the social preview, and the site as shapes, never glyphs: fallback fonts on
   Linux and Android break the monospace grid. `scripts.banner.wand_svg` holds
   the wand geometry.
+- `scripts.screenshots` renders the README's 2x2 screenshot grid from real
+  command output in a temporary data directory, with fixed profile IDs and one
+  shared height. Its profiles have no secrets, so it never opens the vault.
+  The `screenshots` pre-commit hook regenerates them when `kantrip/` changes.
 - After editing `images/social-preview.svg`, render `site/social-preview.png`
   (1280×640) with headless Chrome or Chromium
   (`--headless=new --hide-scrollbars --force-device-scale-factor=1
