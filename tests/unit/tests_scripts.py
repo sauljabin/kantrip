@@ -12,6 +12,7 @@ from scripts.banner import (
     generate_banner,
     render_banner_svg,
 )
+from scripts.screenshots import SCREENSHOTS, generate_screenshots
 
 
 class TestScripts(unittest.TestCase):
@@ -67,6 +68,27 @@ class TestScripts(unittest.TestCase):
 
             self.assertEqual(path, result)
             self.assertTrue(path.read_text(encoding="utf-8").startswith("<svg"))
+
+    def test_screenshots_are_deterministic_and_equal_height(self) -> None:
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            paths = generate_screenshots(Path(first))
+            again = generate_screenshots(Path(second))
+
+            self.assertEqual(
+                [f"screenshot-{name}.svg" for name in SCREENSHOTS], [p.name for p in paths]
+            )
+            heights = set()
+            for path, repeat in zip(paths, again, strict=True):
+                svg = path.read_text(encoding="utf-8")
+                self.assertEqual(svg, repeat.read_text(encoding="utf-8"))
+                root = ElementTree.fromstring(svg)
+                heights.add(root.attrib["height"])
+                self.assertIn(ARCANA_COLORS["secondary"].lower(), svg.lower())
+                self.assertFalse(set("─│┌┐└┘━┃") & set(svg))
+            self.assertEqual(1, len(heights))
+            rendered = " ".join("".join(ElementTree.parse(paths[1]).getroot().itertext()).split())
+            self.assertIn("kantrip list", rendered)
+            self.assertIn("staging", rendered)
 
 
 if __name__ == "__main__":
