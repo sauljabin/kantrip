@@ -53,7 +53,7 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.10"
+          python-version: "3.11"
       - name: Analyze
         run: uv run --locked python -m scripts.analyze
       - name: Run unit tests
@@ -70,7 +70,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          uv venv "$RUNNER_TEMP/release-venv" --python 3.10
+          uv venv "$RUNNER_TEMP/release-venv" --python 3.11
           uv pip install --python "$RUNNER_TEMP/release-venv/bin/python" dist/*.whl
           "$RUNNER_TEMP/release-venv/bin/kantrip" --version | grep -F "$RELEASE_VERSION"
       - name: Generate release notes

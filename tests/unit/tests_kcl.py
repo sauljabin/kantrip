@@ -1,11 +1,11 @@
 """The kcl adapter: private TOML config, Registry, argument policy, and shim (#54)."""
 
-import json
 import re
 import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from typing import Any
@@ -553,12 +553,7 @@ def _version(output: str) -> subprocess.CompletedProcess[str]:
 
 
 def _toml_basic_string(rendered: str) -> str:
-    if sys.version_info >= (3, 11):
-        import tomllib
-
-        return str(tomllib.loads(f"value = {rendered}")["value"])
-    # The renderer's escapes are the subset TOML basic strings share with JSON.
-    return str(json.loads(rendered))
+    return str(tomllib.loads(f"value = {rendered}")["value"])
 
 
 def _kcl_expand(value: str) -> str:

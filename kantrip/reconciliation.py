@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from kantrip.secret_store import SecretStore, SecretStoreError, validate_secret_reference
 
@@ -50,7 +50,7 @@ def queue_secret_cleanup(
     validate_secret_reference(secret_reference)
     selected_id = record_id or str(uuid.uuid4())
     _validate_record_id(selected_id)
-    selected_created_at = created_at or datetime.now(timezone.utc).isoformat()
+    selected_created_at = created_at or datetime.now(UTC).isoformat()
     _validate_created_at(selected_created_at)
     try:
         connection.execute(
@@ -192,7 +192,7 @@ def _validate_created_at(created_at: str) -> None:
         parsed = datetime.fromisoformat(created_at)
     except ValueError as error:
         raise ReconciliationError("credential reconciliation timestamp is invalid") from error
-    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+    if parsed.tzinfo is None or parsed.utcoffset() != UTC.utcoffset(parsed):
         raise ReconciliationError("credential reconciliation timestamp is invalid")
     if parsed.isoformat() != created_at:
         raise ReconciliationError("credential reconciliation timestamp is invalid")

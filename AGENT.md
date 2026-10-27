@@ -12,10 +12,10 @@
   `# noqa: C901`, extract a real responsibility instead.
 - Importing `kantrip` must have no filesystem, logging, console, or network side
   effects. Keep behavior independent from Rich.
-- Support Linux and macOS on Python 3.10 through 3.14 in product, development
+- Support Linux and macOS on Python 3.11 through 3.14 in product, development
   environment, documentation, and CI. Keep paths, permissions, signals,
   terminals, and shell instructions portable.
-- CI tests only the oldest and newest supported Python versions, 3.10 and 3.14,
+- CI tests only the oldest and newest supported Python versions, 3.11 and 3.14,
   to save time. Never add an intermediate version to a matrix; single-version
   jobs, including E2E, use one of the two.
 - Keep Kantrip scoped to profile storage, secret resolution, temporary client

@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from textwrap import dedent, indent
 from typing import ClassVar
 
@@ -304,7 +304,7 @@ def _record_migration(
             migration.sequence,
             migration.name,
             migration.checksum,
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
             applied_by,
         ),
     )

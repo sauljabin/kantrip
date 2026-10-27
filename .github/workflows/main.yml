@@ -45,7 +45,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.14"]
+        python-version: ["3.11", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -118,7 +118,7 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.10"
+          python-version: "3.11"
       - name: Verify lockfile
         run: uv lock --check
       - name: Build distributions
