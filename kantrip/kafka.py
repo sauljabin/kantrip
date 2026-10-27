@@ -370,6 +370,9 @@ def kaf_cluster(
 
     kaf ignores a client certificate on `SASL_SSL`, so mTLS keeps its TLS block
     without a security protocol, and verification stays on in every TLS case.
+    SASL version 1 makes sarama wrap the exchange in SaslAuthenticate (Kafka 1.0+);
+    its default, SaslHandshake v0 with raw SASL frames, is refused by brokers and
+    proxies that dropped it.
     """
     _validate_render_transport(connection)
     cluster: dict[str, Any] = {"brokers": list(connection.bootstrap_servers)}
@@ -389,6 +392,7 @@ def kaf_cluster(
             "mechanism": connection.auth_type.upper(),
             "username": connection.username,
             "password": connection.password.reveal(),
+            "version": 1,
         }
     elif connection.auth_type == "mtls":
         if client_certificate_location is None or private_key_location is None:

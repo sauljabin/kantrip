@@ -435,7 +435,10 @@ name branches, and both launch paths apply the same argument policy.
   credentials, and treats any read error other than a missing file as fatal.
   kafui creates its log directory as `0750` and files as `0640`, which session
   cleanup refuses to remove, so a direct kafui child runs under the adapter's
-  `umask` of `077` and the shim sets the same mask. kaf, kafui, and kcl can't
+  `umask` of `077` and the shim sets the same mask. The kaf YAML sets SASL
+  `version: 1`, so sarama, which kaf and kafui share, wraps the exchange in
+  SaslAuthenticate (Kafka 1.0+) instead of sending the raw SaslHandshake v0
+  frames that some brokers and Kafka proxies refuse. kaf, kafui, and kcl can't
   decrypt PEM keys, so an encrypted mTLS key gets a decrypted private session
   copy.
 

@@ -174,6 +174,7 @@ class TestKafuiSession(KafuiSessionTestCase):
                         "mechanism": mechanism,
                         "username": "synthetic-user",
                         "password": "synthetic-password",
+                        "version": 1,
                     },
                     cluster["SASL"],
                 )
