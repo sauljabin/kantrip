@@ -35,7 +35,7 @@ TRANSCRIPT_START = "<!-- demo-transcript:start -->"
 TRANSCRIPT_END = "<!-- demo-transcript:end -->"
 REPOSITORY_URL = "https://github.com/sauljabin/kantrip"
 SITE_URL = "https://sauljabin.github.io/kantrip/"
-LINK_HOSTS = frozenset({"github.com", "pypi.org"})
+LINK_HOSTS = frozenset({"github.com", "pypi.org", "sauljabin.dev"})
 OUTPUT_STYLES = frozenset(
     {"primary", "secondary", "accent", "success", "warning", "error", "muted"}
 )
