@@ -59,6 +59,7 @@ function setUpDemo() {
   const transcript = demo.querySelector(".transcript");
   const toggle = controls.querySelector("[data-demo-toggle]");
   const replay = controls.querySelector("[data-demo-replay]");
+  const progress = controls.querySelector("[data-demo-progress]");
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   const spinnerFrames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"];
 
@@ -76,6 +77,8 @@ function setUpDemo() {
   let due = 0;
   let remaining = 0;
   let state = "idle";
+  let total = 0;
+  let played = 0;
 
   function newLine(className, ...children) {
     cursor.remove();
@@ -138,8 +141,25 @@ function setUpDemo() {
     });
   }
 
+  // Milliseconds of the replay shown so far, for the progress bar.
+  function position() {
+    if (state === "done") return total;
+    if (state === "paused") return played + queue[index][0] - remaining;
+    if (state === "playing") return played + queue[index][0] - Math.max(0, due - performance.now());
+    return 0;
+  }
+
+  function drawProgress() {
+    const percent = total ? Math.min(100, (100 * position()) / total) : 0;
+    progress.firstElementChild.style.width = `${percent}%`;
+    progress.setAttribute("aria-valuenow", String(Math.round(percent)));
+    progress.dataset.state = state;
+    if (state === "playing") window.requestAnimationFrame(drawProgress);
+  }
+
   function tick() {
-    const [, action] = queue[index];
+    const [delay, action] = queue[index];
+    played += delay;
     index += 1;
     action();
     if (state !== "playing") return;
@@ -165,9 +185,12 @@ function setUpDemo() {
     controls.hidden = false;
     queue = buildQueue();
     index = 0;
+    played = 0;
+    total = queue.reduce((sum, [delay]) => sum + delay, 0);
     state = "playing";
     render();
     schedule(queue[0][0]);
+    drawProgress();
   }
 
   function finish() {
@@ -177,6 +200,7 @@ function setUpDemo() {
     demo.classList.remove("is-playing");
     if (document.activeElement === toggle) replay.focus();
     render();
+    drawProgress();
   }
 
   toggle.addEventListener("click", () => {
@@ -189,6 +213,7 @@ function setUpDemo() {
       schedule(remaining);
     }
     render();
+    drawProgress();
   });
   replay.addEventListener("click", play);
 
