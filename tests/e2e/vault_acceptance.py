@@ -18,7 +18,7 @@ import time
 import unittest
 import uuid
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cryptography import x509
@@ -347,7 +347,7 @@ def _mtls_files(directory: Path) -> tuple[Path, Path]:
     # A 4096-bit key is larger than one `security -i` line, so it is split.
     key = rsa.generate_private_key(public_exponent=65537, key_size=4096)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "kantrip-vault-e2e")])
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     certificate = (
         x509.CertificateBuilder()
         .subject_name(name)

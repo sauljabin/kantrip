@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -688,7 +688,7 @@ def _create_database_backup(connection: sqlite3.Connection, path: Path) -> None:
 
 
 def _backup_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S.%fZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S.%fZ")
 
 
 def _harden_sqlite_files(path: Path, *, strict: bool = False) -> None:

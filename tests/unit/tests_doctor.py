@@ -654,7 +654,7 @@ class TestDoctorPythonRange(unittest.TestCase):
         self.assertEqual(
             DoctorCheck(
                 "error",
-                "Python version is not supported (3.9.18); use Python 3.10 through 3.14",
+                "Python version is not supported (3.9.18); use Python 3.11 through 3.14",
             ),
             check,
         )
