@@ -17,7 +17,8 @@
   terminals, and shell instructions portable.
 - CI tests only the oldest and newest supported Python versions, 3.10 and 3.14,
   to save time. Never add an intermediate version to a matrix; single-version
-  jobs, including E2E, use one of the two.
+  jobs use one of the two. E2E runs once, on 3.14: unit tests already cover
+  3.10, and the newest Python is where compiled dependencies break first.
 - Keep Kantrip scoped to profile storage, secret resolution, temporary client
   configuration, and supervising the active execution. It is not a process
   manager, global context selector, or Kafka client replacement.
