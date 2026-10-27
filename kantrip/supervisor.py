@@ -126,21 +126,29 @@ def run_supervised_process(
     environment: Mapping[str, str],
     interactive: bool = False,
     grace_seconds: float = SHUTDOWN_GRACE_SECONDS,
+    umask: int | None = None,
 ) -> int:
-    """Run a child inside the appropriate bounded POSIX process boundary."""
+    """Run a child inside the appropriate bounded POSIX process boundary.
+
+    `umask` sets a one-off child's file-creation mask; shells keep their own.
+    """
     if interactive:
         return _run_interactive(arguments, environment, grace_seconds)
-    return _run_one_off(arguments, environment, grace_seconds)
+    return _run_one_off(arguments, environment, grace_seconds, umask)
 
 
 def _run_one_off(
-    arguments: Sequence[str], environment: Mapping[str, str], grace_seconds: float
+    arguments: Sequence[str],
+    environment: Mapping[str, str],
+    grace_seconds: float,
+    umask: int | None,
 ) -> int:
     try:
         process = subprocess.Popen(
             list(arguments),
             env=dict(environment),
             start_new_session=True,
+            umask=-1 if umask is None else umask,
         )
     except OSError as error:
         raise SupervisorError(f"command could not be started: {arguments[0]}") from error

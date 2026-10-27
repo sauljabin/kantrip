@@ -28,6 +28,8 @@ from kantrip.adapters import (
     KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
     KAFKA_CONSUMER_GROUPS_EXECUTABLES,
     KAFKA_TOPICS_EXECUTABLES,
+    KAFUI_ADAPTER,
+    KAFUI_EXECUTABLES,
     KASKADE_ADAPTER,
     KASKADE_EXECUTABLES,
     KCAT_ADAPTER,
@@ -819,6 +821,9 @@ def _check_commands(environment: Mapping[str, str], versions: VersionProbe) -> l
         _check_command_group("kcl", (KCL_EXECUTABLES,), search_path),
         *_check_command_paths("kcl", (("executable", KCL_EXECUTABLES),), search_path),
         *release(KCL_ADAPTER, "kcl"),
+        _check_command_group("kafui", (KAFUI_EXECUTABLES,), search_path),
+        *_check_command_paths("kafui", (("executable", KAFUI_EXECUTABLES),), search_path),
+        *release(KAFUI_ADAPTER, "kafui"),
     ]
 
 

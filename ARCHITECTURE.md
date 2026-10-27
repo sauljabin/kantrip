@@ -375,7 +375,9 @@ stays in the private session directory, written with mode `0600`.
   interactive shells get every configuration and variable, because they can't
   be inspected. Keys and derived bundles render only when written, and a
   decrypted key copy is only a dependency of the kaf and kcl configurations, so
-  an encrypted key reaches disk decrypted only when one of them is written. On
+  an encrypted key reaches disk decrypted only when one of them is written.
+  kafui's private home is a planned directory, created empty only when kafui's
+  environment or a shell names it. On
   macOS, `$TMPDIR` is on disk, so a one-off command leaves one or two
   secret-bearing files there instead of every client's.
 
@@ -411,9 +413,13 @@ dispatch through the descriptor, so a new client adds a descriptor instead of
 name branches, and both launch paths apply the same argument policy.
 
 - **Version floors.** Each descriptor has a `minimum_version` gate. `ReleaseGate`
-  serves kcat, Kaskade, kaf, and kcl and rejects development builds;
+  serves kcat, Kaskade, kaf, kcl, and kafui and rejects development builds;
   `JavaReleaseGate` tells Apache Kafka (majors 2–4) from Confluent Platform
-  (5–8). `feature_checks` add the profile's needs: Java PEM trust, Java OAuth
+  (5–8). kafui's release builds print `dev`, and `kafui version` reads the
+  user's kafui config, so its gate has no option: it reads the module line of
+  the Go build information embedded in the executable (`kantrip.go_build_info`)
+  without running kafui. The module path must be `github.com/Benny93/kafui`, so
+  a fork's release says nothing. `feature_checks` add the profile's needs: Java PEM trust, Java OAuth
   (Kafka 4.1 / Confluent 8.1), and kcat's librdkafka for an OAuth CA (2.11.0).
   A `VersionProbe` runs each client's version option once, in parallel for shims
   and doctor.
@@ -422,9 +428,16 @@ name branches, and both launch paths apply the same argument policy.
   `KCAT_CONFIG` and gets `-r` only for Avro; Kaskade gets `--config-file`; kaf gets
   `--config` with `HOME=/dev/null`, because it saves its configuration to
   `~/.kaf/config`; kcl reads a private TOML file through `KCL_CONFIG_PATH` with
-  inherited `KCL_*` variables removed, and its `${` is escaped as `$${`. kaf and
-  kcl can't decrypt PEM keys, so an encrypted mTLS key gets a decrypted private
-  session copy.
+  inherited `KCL_*` variables removed, and its `${` is escaped as `$${`. kafui
+  gets kaf's configuration through `--config`, but with an empty private session
+  `HOME` and `XDG_CONFIG_HOME` instead of `/dev/null`: it reads
+  `~/.config/kafui/config.yaml`, which can define whole clusters with
+  credentials, and treats any read error other than a missing file as fatal.
+  kafui creates its log directory as `0750` and files as `0640`, which session
+  cleanup refuses to remove, so a direct kafui child runs under the adapter's
+  `umask` of `077` and the shim sets the same mask. kaf, kafui, and kcl can't
+  decrypt PEM keys, so an encrypted mTLS key gets a decrypted private session
+  copy.
 
 | Client family | Rejected (the profile owns them) | Kept (runtime choices) |
 | --- | --- | --- |
@@ -433,6 +446,7 @@ name branches, and both launch paths apply the same argument policy.
 | `kcat`/`kafkacat` | `-b`, `-F`, `-r`, arbitrary `-X` | `-X group.id`, `-X broker.address.family` |
 | Kaskade | Bootstrap, Registry, config-file options, arbitrary `--kafka` | `--kafka group.id`, `--kafka broker.address.family` |
 | kaf | `--config`, `-b`, `-c`, `--schema-registry`, `kaf config` | Resource, format, and output options |
+| kafui | `--config`, `-b`, `-c`, `--schema-registry` | `--read-only`, `--topic`, `--resource`, `--metrics-listen`, `health`, `get` |
 | kcl | `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` keys, `KCL_*`, `kcl profile` | `-X` timeouts, `help`, `list`; resource, format, and output options |
 
 These are per-client grammars, not a passthrough policy: a new option is

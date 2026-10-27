@@ -39,6 +39,10 @@ from tests.e2e.terminal import TerminalProcess, TerminalProcessError
 
 DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
 DEFAULT_REGISTRY_URL = "http://localhost:8081"
+# The user's own client configurations, which sessions never read or change.
+USER_CLIENT_CONFIGS = (Path(".kaf") / "config", Path(".config") / "kafui" / "config.yaml")
+# A cluster the kafui E2E home defines in both files; it must never join a session.
+DECOY_CLUSTER = "decoy-from-user-settings"
 KAFKA_COMMANDS = {
     "topics": KAFKA_TOPICS_EXECUTABLES,
     "producer": KAFKA_CONSOLE_PRODUCER_EXECUTABLES,
@@ -222,7 +226,7 @@ def _discover_clients(
         _require_command(f"Kafka {adapter} CLI", bool(executables))
     kcat_executables = _installed_commands(KCAT_EXECUTABLES, environment)
     _require_command("kcat", "kcat" in kcat_executables)
-    for client in ("kaskade", "kaf", "kcl"):
+    for client in ("kaskade", "kaf", "kcl", "kafui"):
         _require_command(client, shutil.which(client, path=environment.get("PATH")) is not None)
     return installed, kcat_executables
 
@@ -250,6 +254,7 @@ def _exercise_clients(
     _check_kaskade_operations(console, profile, topic, environment)
     _check_kaf_operations(console, profile, topic, environment)
     _check_kcl_operations(console, profile, topic, environment)
+    _check_kafui_operations(console, profile, topic, environment)
     _check_shells(
         console,
         profile=profile,
@@ -426,7 +431,7 @@ def _check_kaf_operations(
     topic: str,
     environment: Mapping[str, str],
 ) -> None:
-    user_config = kaf_user_config_state(environment)
+    user_config = user_config_state(environment)
     output = _check(console, "kaf: list topics", _kantrip(profile, "kaf", "topics"), environment)
     _require_topic(topic, output, "kaf")
     marker = "kantrip smoke record from kaf"
@@ -444,8 +449,8 @@ def _check_kaf_operations(
         environment,
     )
     _require_topic(marker, output, "kaf")
-    if kaf_user_config_state(environment) != user_config:
-        raise SmokeFailure("kaf changed the user's ~/.kaf/config")
+    if user_config_state(environment) != user_config:
+        raise SmokeFailure("kaf changed the user's kaf or kafui config")
 
 
 def _check_kcl_operations(
@@ -481,16 +486,94 @@ def _check_kcl_operations(
     _require_topic(marker, output, "kcl")
 
 
-def kaf_user_config_state(environment: Mapping[str, str]) -> tuple[int, int] | None:
-    """Return the user's kaf config identity and change time, which sessions never touch."""
+def _check_kafui_operations(
+    console: Console,
+    profile: str,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    """Probe and open kafui under a home whose kaf and kafui configs define a decoy cluster."""
+    with tempfile.TemporaryDirectory(prefix="kantrip-kafui-home-") as directory:
+        home = Path(directory)
+        for relative in USER_CLIENT_CONFIGS:
+            (home / relative).parent.mkdir(parents=True, exist_ok=True)
+        (home / USER_CLIENT_CONFIGS[0]).write_text(
+            f"current-cluster: {DECOY_CLUSTER}\n"
+            f"clusters:\n- name: {DECOY_CLUSTER}\n  brokers: [127.0.0.1:9]\n",
+            encoding="utf-8",
+        )
+        (home / USER_CLIENT_CONFIGS[1]).write_text(
+            f"clusters:\n  {DECOY_CLUSTER}:\n    brokers: [127.0.0.1:9]\n", encoding="utf-8"
+        )
+        kafui_environment = {
+            **environment,
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+        }
+        before = _home_state(home)
+        output = _check(
+            console,
+            "kafui: probe the broker and Registry",
+            _kantrip(profile, "kafui", "health"),
+            kafui_environment,
+        )
+        if "broker           OK" not in output or "schema-registry  OK" not in output:
+            raise SmokeFailure(f"kafui health did not pass: {output.strip()[-500:]}")
+        output = _check(
+            console,
+            "kafui: list brokers",
+            _kantrip(profile, "kafui", "get", "brokers"),
+            kafui_environment,
+        )
+        if "ID,Host,Port," not in output or DECOY_CLUSTER in output:
+            raise SmokeFailure(f"kafui did not list the profile's brokers: {output[-500:]}")
+        _check_kafui_terminal(console, profile, topic, kafui_environment)
+        if _home_state(home) != before:
+            raise SmokeFailure("kafui read from or wrote to the user's home")
+
+
+def _check_kafui_terminal(
+    console: Console,
+    profile: str,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    label = "kafui: render the profile's cluster and topic"
+    terminal = TerminalProcess(_kantrip(profile, "kafui", "--read-only"), environment)
+    try:
+        with show_progress(console, label):
+            rendered = terminal.wait_for((topic, "kantrip"), timeout=60)
+    except TerminalProcessError as error:
+        raise SmokeFailure(f"{label} failed: {error}") from error
+    finally:
+        terminal.close()
+    if DECOY_CLUSTER in rendered:
+        raise SmokeFailure(f"{label} failed: the user's decoy cluster joined the session")
+    console.print(create_status_text(console, "success", label))
+
+
+def _home_state(home: Path) -> dict[str, tuple[int, int]]:
+    """Return every entry below a home with its identity and change time."""
+    return {
+        str(path.relative_to(home)): (path.stat().st_ino, path.stat().st_mtime_ns)
+        for path in sorted(home.rglob("*"))
+    }
+
+
+def user_config_state(environment: Mapping[str, str]) -> tuple[tuple[int, int] | None, ...]:
+    """Return the identity and change time of the user's kaf and kafui configs."""
     home = environment.get("HOME")
     if not home:
-        return None
-    try:
-        metadata = (Path(home) / ".kaf" / "config").stat()
-    except FileNotFoundError:
-        return None
-    return metadata.st_ino, metadata.st_mtime_ns
+        return ()
+    states: list[tuple[int, int] | None] = []
+    for relative in USER_CLIENT_CONFIGS:
+        try:
+            metadata = (Path(home) / relative).stat()
+        except FileNotFoundError:
+            states.append(None)
+        else:
+            states.append((metadata.st_ino, metadata.st_mtime_ns))
+    return tuple(states)
 
 
 def _check_shells(
@@ -655,6 +738,7 @@ def _shell_commands(
     )
     commands.append("kaf topics")
     commands.append("kcl topic list")
+    commands.append("kafui health")
     return commands
 
 

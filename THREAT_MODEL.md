@@ -405,6 +405,12 @@ Controls:
   than constructed shell commands.
 - Reject bootstrap, config-path, TLS, authentication, Registry, and other
   connection overrides covered by each adapter contract.
+- Run clients that read their own configuration from the home directory away
+  from it: kaf with `HOME=/dev/null`, and kafui with an empty private session
+  `HOME` and `XDG_CONFIG_HOME`, so a cluster or credential from the user's kaf
+  or kafui settings never joins the session. kafui runs under `umask 077`, so
+  its log and anything it saves in that home stay private and are removed with
+  the session.
 - Version-gate Java custom PEM trust and client identities, and reject unsupported
   adapter/mechanism combinations before launch.
 - Load normal interactive-shell startup files, then remove supported-client
@@ -412,7 +418,9 @@ Controls:
 - Reject nested Kantrip sessions.
 
 Residual risk: a malicious executable already present at the resolved path or
-malicious startup code can exfiltrate connection material. Shim restoration
+malicious startup code can exfiltrate connection material. In its private home,
+kafui runs with its defaults, so its startup release check contacts the GitHub
+API even if the user turned it off in their own kafui settings. Shim restoration
 prevents accidental bypass; it cannot make hostile user-controlled shell code
 safe.
 

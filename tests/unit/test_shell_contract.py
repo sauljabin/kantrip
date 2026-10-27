@@ -13,7 +13,7 @@ from typing import Any
 from kantrip.adapters import ADAPTER_EXECUTABLES, KAFKA_EXECUTABLES, KCAT_EXECUTABLES
 from kantrip.profiles import add_profile
 from scripts import run_terminal
-from tests.unit.client_versions import SUPPORTED_VERSION_OUTPUT
+from tests.unit.client_versions import SUPPORTED_VERSION_OUTPUT, fake_go_executable
 
 _FAKE_CLIENT = r"""#!{python}
 import json
@@ -44,6 +44,9 @@ record = {{
     "config_mode": stat.S_IMODE(config.stat().st_mode) if config and config.is_file() else None,
     "config_in_session": bool(config and session_directory and config.is_relative_to(session_directory)),
     "home": os.environ.get("HOME"),
+    "home_entries": sorted(os.listdir(os.environ["HOME"])) if name == "kafui" else None,
+    "umask": os.umask(0o022),
+    "xdg_config_home": os.environ.get("XDG_CONFIG_HOME"),
     "kcl_variables": sorted(key for key in os.environ if key.startswith("KCL_")),
     "name": name,
     "profile": os.environ.get("KANTRIP_PROFILE"),
@@ -153,6 +156,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 "kcl -B other.invalid:9092 topic list >/dev/null 2>&1 || echo __KCL_OVERRIDE_OK__",
                 "kcl -jXsasl.user=other topic list >/dev/null 2>&1 || echo __KCL_CONFIG_BLOCKED__",
                 "kcl profile use other >/dev/null 2>&1 || echo __KCL_PROFILE_BLOCKED__",
+                "kafui -b other.invalid:9092 health >/dev/null 2>&1 || echo __KAFUI_OVERRIDE_OK__",
                 (
                     "kafka-avro-console-producer --property "
                     "schema.registry.url=http://other.invalid:8081 >/dev/null 2>&1 "
@@ -186,6 +190,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__KCL_OVERRIDE_OK__", output)
             self.assertIn("__KCL_CONFIG_BLOCKED__", output)
             self.assertIn("__KCL_PROFILE_BLOCKED__", output)
+            self.assertIn("__KAFUI_OVERRIDE_OK__", output)
             self.assertIn("contract\r\n", output)
             self.assertIn("a Kantrip session is already active", output)
             self.assertNotIn("__BYPASS__", output)
@@ -199,53 +204,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertEqual(["kaskade"], [record["name"] for record in linked])
             self.assertEqual(["consumer", "--config-file"], linked[0]["argv"][:2])
             for record in records:
-                self.assertEqual("contract", record["profile"])
-                self.assertTrue(record["config_exists"], record)
-                self.assertEqual(0o600, record["config_mode"])
-                self.assertTrue(record["config_in_session"], record)
-                self.assertFalse(Path(record["session_directory"]).exists())
-                if record["name"] in {
-                    "kafka-avro-console-consumer",
-                    "kafka-avro-console-producer",
-                    "kafka-json-schema-console-consumer",
-                    "kafka-json-schema-console-producer",
-                    "kafka-protobuf-console-consumer",
-                    "kafka-protobuf-console-producer",
-                }:
-                    self.assertTrue(record["registry_config_exists"], record)
-                    self.assertEqual(0o600, record["registry_config_mode"])
-                    # The shim passes the URL as an argument; the shell exports none.
-                    self.assertIsNone(record["registry_url"])
-                    self.assertIn(
-                        "schema.registry.url=http://registry.invalid:8081\n",
-                        record["config_contents"],
-                    )
-                if record["name"] in KCAT_EXECUTABLES and "-s" in record["argv"]:
-                    self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
-                if record["name"] in KCAT_EXECUTABLES and "-Csvalue=avro" in record["argv"]:
-                    self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
-                if record["name"] == "kaf":
-                    # kaf saves $HOME/.kaf/config whatever --config names.
-                    self.assertEqual("/dev/null", record["home"])
-                    self.assertIn("current-cluster: kantrip\n", record["config_contents"])
-                    self.assertIn(
-                        "schema-registry-url: http://registry.invalid:8081\n",
-                        record["config_contents"],
-                    )
-                    self.assertEqual("topics", record["argv"][-1])
-                if record["name"] == "kcl":
-                    # Only the session's selector survives; KCL_<KEY> overrides are stripped.
-                    self.assertEqual(["KCL_CONFIG_PATH"], record["kcl_variables"])
-                    self.assertEqual(["topic", "list"], record["argv"])
-                    self.assertIn(
-                        '[registry]\nurls = ["http://registry.invalid:8081"]\n',
-                        record["config_contents"],
-                    )
-                if record["name"] == "kaskade" and "registry" in record["argv"]:
-                    self.assertIn(
-                        "\n[registry]\nprovider=confluent\nurl=http://registry.invalid:8081\n",
-                        record["config_contents"],
-                    )
+                self._assert_record(record)
             producers = [
                 record for record in records if record["name"].endswith("console-producer")
             ]
@@ -254,6 +213,65 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn(
                 "CONTRACT_NEW",
                 _history_path(shell_name, home, environment).read_text(encoding="utf-8"),
+            )
+
+    def _assert_record(self, record: dict[str, Any]) -> None:
+        """Check what one fake client saw: its private config and client-specific inputs."""
+        self.assertEqual("contract", record["profile"])
+        self.assertTrue(record["config_exists"], record)
+        self.assertEqual(0o600, record["config_mode"])
+        self.assertTrue(record["config_in_session"], record)
+        self.assertFalse(Path(record["session_directory"]).exists())
+        if record["name"] in {
+            "kafka-avro-console-consumer",
+            "kafka-avro-console-producer",
+            "kafka-json-schema-console-consumer",
+            "kafka-json-schema-console-producer",
+            "kafka-protobuf-console-consumer",
+            "kafka-protobuf-console-producer",
+        }:
+            self.assertTrue(record["registry_config_exists"], record)
+            self.assertEqual(0o600, record["registry_config_mode"])
+            # The shim passes the URL as an argument; the shell exports none.
+            self.assertIsNone(record["registry_url"])
+            self.assertIn(
+                "schema.registry.url=http://registry.invalid:8081\n",
+                record["config_contents"],
+            )
+        if record["name"] in KCAT_EXECUTABLES and "-s" in record["argv"]:
+            self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
+        if record["name"] in KCAT_EXECUTABLES and "-Csvalue=avro" in record["argv"]:
+            self.assertEqual(["-r", "http://registry.invalid:8081"], record["argv"][:2])
+        if record["name"] == "kaf":
+            # kaf saves $HOME/.kaf/config whatever --config names.
+            self.assertEqual("/dev/null", record["home"])
+            self.assertIn("current-cluster: kantrip\n", record["config_contents"])
+            self.assertIn(
+                "schema-registry-url: http://registry.invalid:8081\n",
+                record["config_contents"],
+            )
+            self.assertEqual("topics", record["argv"][-1])
+        if record["name"] == "kafui":
+            # kafui's own settings live under an empty private session home.
+            session = Path(record["session_directory"])
+            self.assertEqual(str(session / "kafui-home"), record["home"])
+            self.assertEqual(str(session / "kafui-home" / ".config"), record["xdg_config_home"])
+            self.assertEqual([], record["home_entries"])
+            self.assertEqual(0o077, record["umask"])
+            self.assertIn("current-cluster: kantrip\n", record["config_contents"])
+            self.assertEqual(["get", "brokers"], record["argv"][-2:])
+        if record["name"] == "kcl":
+            # Only the session's selector survives; KCL_<KEY> overrides are stripped.
+            self.assertEqual(["KCL_CONFIG_PATH"], record["kcl_variables"])
+            self.assertEqual(["topic", "list"], record["argv"])
+            self.assertIn(
+                '[registry]\nurls = ["http://registry.invalid:8081"]\n',
+                record["config_contents"],
+            )
+        if record["name"] == "kaskade" and "registry" in record["argv"]:
+            self.assertIn(
+                "\n[registry]\nprovider=confluent\nurl=http://registry.invalid:8081\n",
+                record["config_contents"],
             )
 
 
@@ -267,10 +285,23 @@ def _write_fake_clients(directory: Path) -> None:
         kcat_executables=repr(set(KCAT_EXECUTABLES)),
         supported_version_output=SUPPORTED_VERSION_OUTPUT.rstrip("\n"),
     )
-    for executable in ADAPTER_EXECUTABLES:
+    for executable in ADAPTER_EXECUTABLES - {"kafui"}:
         path = directory / executable
         path.write_text(contents, encoding="utf-8")
         path.chmod(0o700)
+    # kafui's gate reads Go build information, so its stand-in carries some and
+    # hands over to the fake client, which records the name `kafui`.
+    implementation = directory.parent / "kafui-implementation" / "kafui"
+    implementation.parent.mkdir()
+    implementation.write_text(contents, encoding="utf-8")
+    implementation.chmod(0o700)
+    (directory / "kafui").write_bytes(
+        fake_go_executable(
+            f'#!/bin/sh\nexec {shlex.quote(str(implementation))} "$@"\n',
+            "mod\tgithub.com/Benny93/kafui\tv0.1.38\t\n",
+        )
+    )
+    (directory / "kafui").chmod(0o700)
     # A user's shorter name for a client, such as `ln -s kaskade kas`.
     (directory / "kas").symlink_to("kaskade")
 
@@ -404,6 +435,7 @@ def _adapter_commands() -> list[str]:
             "kaskade consumer -v registry",
             "kas consumer --topic linked-contract",
             "kaf topics",
+            "kafui get brokers",
             "env KCL_SEED_BROKERS=other.invalid:9092 KCL_NO_CONFIG_FILE=1 kcl topic list",
         )
     )

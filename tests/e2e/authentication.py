@@ -26,7 +26,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from sandbox.__main__ import CA_FILE, STATE_FILE, STATE_ROOT, load_credentials
 from scripts import TerminalTimeout, run_terminal
-from tests.e2e.adapters import kaf_user_config_state
+from tests.e2e.adapters import user_config_state
 from tests.e2e.registry_oauth import RegistryOAuthFailure, exercise_registry_oauth_renewal
 from tests.e2e.shell_environment import isolated_zsh_environment
 
@@ -63,7 +63,8 @@ class RegistryAuthCase:
     oauth_client_id_field: str | None = None
     certificate_field: str | None = None
     key_field: str | None = None
-    kaf_refusal: str = ""
+    # Why kaf and kafui, which share kaf's Registry client, refuse this Registry.
+    kaf_family_refusal: str = ""
     kcl_refusal: str = ""
 
 
@@ -164,7 +165,7 @@ REGISTRY_CASES = (
         "basic",
         "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_USERNAME",
         "KANTRIP_SANDBOX_SCHEMA_REGISTRY_BASIC_PASSWORD",
-        kaf_refusal="kaf trusts only the system CA store for the Registry",
+        kaf_family_refusal="trusts only the system CA store for the Registry",
     ),
     RegistryAuthCase(
         "schema-registry-oauth",
@@ -173,7 +174,7 @@ REGISTRY_CASES = (
         "oauth",
         secret_field="KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_SECRET",
         oauth_client_id_field="KANTRIP_SANDBOX_SCHEMA_REGISTRY_OAUTH_CLIENT_ID",
-        kaf_refusal="kaf does not support Registry authentication 'oauth'",
+        kaf_family_refusal="does not support Registry authentication 'oauth'",
         kcl_refusal="kcl does not support Registry authentication 'oauth'",
     ),
     RegistryAuthCase(
@@ -183,7 +184,7 @@ REGISTRY_CASES = (
         "mtls",
         certificate_field="KANTRIP_SANDBOX_REGISTRY_MTLS_CERTIFICATE",
         key_field="KANTRIP_SANDBOX_REGISTRY_MTLS_KEY",
-        kaf_refusal="kaf does not support Registry authentication 'mtls'",
+        kaf_family_refusal="does not support Registry authentication 'mtls'",
     ),
     RegistryAuthCase(
         "apicurio-basic",
@@ -192,7 +193,7 @@ REGISTRY_CASES = (
         "basic",
         "KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
         "KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
-        kaf_refusal="kaf supports only Confluent-compatible registry profiles",
+        kaf_family_refusal="supports only Confluent-compatible registry profiles",
         kcl_refusal="kcl supports only Confluent-compatible registry profiles",
     ),
     RegistryAuthCase(
@@ -202,7 +203,7 @@ REGISTRY_CASES = (
         "oauth",
         secret_field="KANTRIP_SANDBOX_APICURIO_CLIENT_SECRET",
         oauth_client_id_field="KANTRIP_SANDBOX_APICURIO_CLIENT_ID",
-        kaf_refusal="kaf supports only Confluent-compatible registry profiles",
+        kaf_family_refusal="supports only Confluent-compatible registry profiles",
         kcl_refusal="kcl supports only Confluent-compatible registry profiles",
     ),
 )
@@ -221,6 +222,7 @@ def main() -> None:
             "kafka-avro-console-consumer",
             "kafka-topics",
             "kaf",
+            "kafui",
             "kcat",
             "kcl",
             "kubectl",
@@ -251,7 +253,7 @@ def main() -> None:
                 _add_registry_profile(profile, registry_case, credentials, environment)
                 profiles.append(profile)
                 _run((*_cli(), "ping", profile, "--timeout", "10"), environment)
-                _exercise_kaf_registry_refusal(profile, registry_case, environment)
+                _exercise_kaf_family_registry_refusal(profile, registry_case, environment)
                 _exercise_kcl_registry(profile, registry_case, environment)
             _exercise_registry_properties_imports(credentials, environment, profiles)
             _exercise_invalid_credentials(credentials, environment, profiles)
@@ -614,6 +616,7 @@ def _exercise_profile(
             environment,
         )
         _exercise_kaf(profile, case, topic, environment)
+        _exercise_kafui(profile, case, environment)
         _exercise_kcl(profile, case, topic, environment)
         for shell_name in ("bash", "zsh", "fish"):
             _exercise_shell(profile, shell_name, environment, go_clients=case.auth_type != "oauth")
@@ -630,7 +633,7 @@ def _exercise_kaf(
     environment: Mapping[str, str],
 ) -> None:
     """List, produce, and consume with kaf; OAuth has no kaf mapping and fails first."""
-    user_config = kaf_user_config_state(environment)
+    user_config = user_config_state(environment)
     if case.auth_type == "oauth":
         output = _run((*_cli(), "exec", profile, "--", "kaf", "topics"), environment, accepted=(1,))
         if "kaf does not support Kafka authentication 'oauth'" not in output:
@@ -650,19 +653,44 @@ def _exercise_kaf(
     )
     if marker not in output:
         raise AuthSmokeFailure(f"{profile} kaf did not consume its smoke record")
-    if kaf_user_config_state(environment) != user_config:
-        raise AuthSmokeFailure(f"{profile} kaf changed the user's ~/.kaf/config")
+    if user_config_state(environment) != user_config:
+        raise AuthSmokeFailure(f"{profile} kaf changed the user's kaf or kafui config")
 
 
-def _exercise_kaf_registry_refusal(
+def _exercise_kafui(
+    profile: str,
+    case: AuthCase,
+    environment: Mapping[str, str],
+) -> None:
+    """Probe the broker and list brokers with kafui; OAuth has no kafui mapping and fails first."""
+    user_config = user_config_state(environment)
+    health = (*_cli(), "exec", profile, "--", "kafui", "health")
+    if case.auth_type == "oauth":
+        output = _run(health, environment, accepted=(1,))
+        if "kafui does not support Kafka authentication 'oauth'" not in output:
+            raise AuthSmokeFailure(f"{profile} kafui did not fail before launch for OAuth")
+        return
+    if "broker           OK" not in _run(health, environment):
+        raise AuthSmokeFailure(f"{profile} kafui health did not reach the broker")
+    output = _run((*_cli(), "exec", profile, "--", "kafui", "get", "brokers"), environment)
+    if "ID,Host,Port," not in output:
+        raise AuthSmokeFailure(f"{profile} kafui did not list its brokers")
+    if user_config_state(environment) != user_config:
+        raise AuthSmokeFailure(f"{profile} kafui changed the user's kaf or kafui config")
+
+
+def _exercise_kaf_family_registry_refusal(
     profile: str,
     case: RegistryAuthCase,
     environment: Mapping[str, str],
 ) -> None:
-    """kaf has system trust and Basic at most, so these sandbox Registries refuse it first."""
-    output = _run((*_cli(), "exec", profile, "--", "kaf", "topics"), environment, accepted=(1,))
-    if case.kaf_refusal not in output:
-        raise AuthSmokeFailure(f"{profile} kaf did not fail before launch for its Registry")
+    """kaf and kafui have system trust and Basic at most, so these Registries refuse them first."""
+    for client, command in (("kaf", "topics"), ("kafui", "health")):
+        output = _run((*_cli(), "exec", profile, "--", client, command), environment, accepted=(1,))
+        if f"{client} {case.kaf_family_refusal}" not in output:
+            raise AuthSmokeFailure(
+                f"{profile} {client} did not fail before launch for its Registry"
+            )
 
 
 def _exercise_kcl(
@@ -722,7 +750,11 @@ def _exercise_shell(
     shell_environment = dict(environment)
     shell_environment["SHELL"] = shell
     kcat_command = "kcat -X broker.address.family=v4 -L >/dev/null && exit"
-    go_commands = "kaf topics >/dev/null && kcl topic list >/dev/null && " if go_clients else ""
+    go_commands = (
+        "kaf topics >/dev/null && kcl topic list >/dev/null && kafui health >/dev/null && "
+        if go_clients
+        else ""
+    )
     shell_command = f"kafka-topics --list && {go_commands}{kcat_command}"
     try:
         status, output = run_terminal(
