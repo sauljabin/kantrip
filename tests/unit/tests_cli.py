@@ -38,7 +38,7 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(0, result.exit_code)
         self.assertIn("Kantrip securely manages local Kafka profiles", result.output)
-        self.assertIn("--no-color", result.output)
+        self.assertIn("--color", result.output)
 
     def test_version_uses_package_metadata(self) -> None:
         result = self.runner.invoke(cli, ["--version"])
@@ -46,28 +46,30 @@ class TestCli(unittest.TestCase):
         self.assertEqual(0, result.exit_code)
         self.assertIn(APP_VERSION, result.output)
 
-    def test_no_color_configures_consoles_globally(self) -> None:
+    def test_color_configures_consoles_globally(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             environment = {"KANTRIP_DATABASE": str(Path(directory) / "missing.db")}
             with patch("kantrip.cli.create_console", wraps=create_console) as create:
-                result = self.runner.invoke(cli, ["--no-color", "list"], env=environment)
-
-        self.assertEqual(0, result.exit_code, result.output)
-        self.assertEqual([True, True], [call.kwargs["no_color"] for call in create.call_args_list])
-
-    def test_no_color_configures_consoles_after_the_subcommand(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            environment = {"KANTRIP_DATABASE": str(Path(directory) / "missing.db")}
-            with patch("kantrip.cli.create_console", wraps=create_console) as create:
-                result = self.runner.invoke(cli, ["list", "--no-color"], env=environment)
+                result = self.runner.invoke(cli, ["--color", "never", "list"], env=environment)
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertEqual(
-            [False, False, True, True],
-            [call.kwargs["no_color"] for call in create.call_args_list],
+            ["never", "never"], [call.kwargs["color"] for call in create.call_args_list]
         )
 
-    def test_command_help_documents_local_no_color(self) -> None:
+    def test_color_configures_consoles_after_the_subcommand(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {"KANTRIP_DATABASE": str(Path(directory) / "missing.db")}
+            with patch("kantrip.cli.create_console", wraps=create_console) as create:
+                result = self.runner.invoke(cli, ["list", "--color", "never"], env=environment)
+
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual(
+            ["auto", "auto", "never", "never"],
+            [call.kwargs["color"] for call in create.call_args_list],
+        )
+
+    def test_command_help_documents_local_color(self) -> None:
         for command in (
             "add",
             "edit",
@@ -83,7 +85,7 @@ class TestCli(unittest.TestCase):
                 result = self.runner.invoke(cli, [command, "--help"])
 
                 self.assertEqual(0, result.exit_code, result.output)
-                self.assertIn("--no-color", result.output)
+                self.assertIn("--color", result.output)
 
     def test_cleanup_command_is_not_exposed(self) -> None:
         result = self.runner.invoke(cli, ["cleanup"])
@@ -91,8 +93,8 @@ class TestCli(unittest.TestCase):
         self.assertEqual(2, result.exit_code, result.output)
         self.assertIn("No such command 'cleanup'", result.output)
 
-    def test_local_no_color_preserves_parser_errors(self) -> None:
-        result = self.runner.invoke(cli, ["describe", "--no-color"])
+    def test_local_color_preserves_parser_errors(self) -> None:
+        result = self.runner.invoke(cli, ["describe", "--color", "never"])
 
         self.assertEqual(2, result.exit_code, result.output)
         self.assertIn("Missing argument 'PROFILE'", result.output)
@@ -232,7 +234,8 @@ class TestCli(unittest.TestCase):
                     "environment=development",
                     "--registry-url",
                     "http://localhost:8081",
-                    "--no-color",
+                    "--color",
+                    "never",
                 ],
                 env=environment,
             )
@@ -345,7 +348,7 @@ class TestCli(unittest.TestCase):
         self.assertNotIn("\x1b[", as_json.output)
         self.assertNotIn("\x1b[", as_yaml.output)
 
-    def test_describe_structured_output_accepts_local_no_color(self) -> None:
+    def test_describe_structured_output_accepts_local_color(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "profiles.db"
             environment = {"KANTRIP_DATABASE": str(database_path)}
@@ -353,7 +356,7 @@ class TestCli(unittest.TestCase):
 
             result = self.runner.invoke(
                 cli,
-                ["describe", "local", "--output", "json", "--no-color"],
+                ["describe", "local", "--output", "json", "--color", "never"],
                 env=environment,
             )
 
@@ -630,7 +633,7 @@ class TestCli(unittest.TestCase):
                 )
                 result = self.runner.invoke(
                     cli,
-                    ["--no-color", "doctor"],
+                    ["--color", "never", "doctor"],
                     env={"KANTRIP_DATABASE": str(database_path)},
                 )
 
@@ -649,7 +652,7 @@ class TestCli(unittest.TestCase):
             run.return_value = DoctorReport(
                 (DoctorCheck("success", "resolved executable path", verbose_only=True),)
             )
-            result = self.runner.invoke(cli, ["--no-color", "doctor", "--verbose"])
+            result = self.runner.invoke(cli, ["--color", "never", "doctor", "--verbose"])
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertIn("└─ [passed] resolved executable path", result.output)
@@ -669,7 +672,7 @@ class TestCli(unittest.TestCase):
                 )
             )
             run.return_value = DoctorReport((DoctorCheck("success", "configuration is valid"),))
-            result = self.runner.invoke(cli, ["doctor", "--repair", "--no-color"])
+            result = self.runner.invoke(cli, ["doctor", "--repair", "--color", "never"])
 
         self.assertEqual(0, result.exit_code, result.output)
         self.assertLess(
@@ -689,7 +692,7 @@ class TestCli(unittest.TestCase):
 
             repair.return_value = RepairReport((RepairAction("error", "migration failed"),))
             run.return_value = DoctorReport((DoctorCheck("success", "configuration is valid"),))
-            result = self.runner.invoke(cli, ["doctor", "--repair", "--no-color"])
+            result = self.runner.invoke(cli, ["doctor", "--repair", "--color", "never"])
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] migration failed", result.output)
@@ -710,7 +713,7 @@ class TestCli(unittest.TestCase):
             from kantrip.doctor import DoctorCheck, DoctorReport
 
             run.return_value = DoctorReport((DoctorCheck("error", "configuration is invalid"),))
-            result = self.runner.invoke(cli, ["--no-color", "doctor"])
+            result = self.runner.invoke(cli, ["--color", "never", "doctor"])
 
         self.assertEqual(1, result.exit_code, result.output)
         self.assertIn("[failed] configuration is invalid", result.output)
@@ -727,7 +730,7 @@ class TestCli(unittest.TestCase):
             ) as ping:
                 result = self.runner.invoke(
                     cli,
-                    ["--no-color", "ping", "local", "--timeout", "1.5"],
+                    ["--color", "never", "ping", "local", "--timeout", "1.5"],
                     env=environment,
                 )
 
@@ -764,7 +767,7 @@ class TestCli(unittest.TestCase):
             ):
                 result = self.runner.invoke(
                     cli,
-                    ["--no-color", "ping", "local", "--timeout", "1.5"],
+                    ["--color", "never", "ping", "local", "--timeout", "1.5"],
                     env=environment,
                 )
 
@@ -797,7 +800,7 @@ class TestCli(unittest.TestCase):
             ):
                 result = self.runner.invoke(
                     cli,
-                    ["--no-color", "ping", "local"],
+                    ["--color", "never", "ping", "local"],
                     env=environment,
                 )
 
@@ -855,7 +858,7 @@ class TestCli(unittest.TestCase):
             ):
                 result = self.runner.invoke(
                     cli,
-                    ["--no-color", "ping", "local"],
+                    ["--color", "never", "ping", "local"],
                     env=environment,
                 )
 
@@ -991,7 +994,7 @@ class TestCli(unittest.TestCase):
                 (["local", "tool", "--no-color", "-x"], ("tool", "--no-color", "-x")),
                 (["local", "--", "tool", "--help"], ("tool", "--help")),
                 (["local", "tool", "--", "--help"], ("tool", "--", "--help")),
-                (["--no-color", "local", "tool"], ("tool",)),
+                (["--color", "never", "local", "tool"], ("tool",)),
             ):
                 with (
                     self.subTest(arguments),
@@ -1003,7 +1006,7 @@ class TestCli(unittest.TestCase):
                     self.assertEqual(command, run.call_args.args[2])
 
     def test_exec_rejects_an_option_where_the_command_belongs(self) -> None:
-        for arguments in (["local", "--help"], ["local", "--no-color", "tool"]):
+        for arguments in (["local", "--help"], ["local", "--color", "never", "tool"]):
             with (
                 self.subTest(arguments),
                 patch("kantrip.cli.run_profile_session") as run,
@@ -1067,7 +1070,7 @@ class TestCli(unittest.TestCase):
                     patch("kantrip.ping._open_request", side_effect=failure),
                 ):
                     result = self.runner.invoke(
-                        cli, ["--no-color", "ping", "local"], env=environment
+                        cli, ["--color", "never", "ping", "local"], env=environment
                     )
 
                 self.assertEqual(1, result.exit_code, result.output)
@@ -1085,7 +1088,9 @@ class TestCli(unittest.TestCase):
                 patch("kantrip.ping._probe_kafka", side_effect=PingError("broker unreachable")),
                 patch("kantrip.ping._open_request") as registry_request,
             ):
-                result = self.runner.invoke(cli, ["--no-color", "ping", "local"], env=environment)
+                result = self.runner.invoke(
+                    cli, ["--color", "never", "ping", "local"], env=environment
+                )
 
         self.assertEqual(1, result.exit_code, result.output)
         registry_request.assert_not_called()
@@ -1764,7 +1769,7 @@ class TestPingOutput(unittest.TestCase):
         )
         with patch("kantrip.cli.ping_profile", **settings):
             return self.runner.invoke(
-                cli, ["--no-color", "ping", "local", *arguments], env=self.environment
+                cli, ["--color", "never", "ping", "local", *arguments], env=self.environment
             )
 
     def test_json_reports_every_service(self) -> None:
@@ -1852,8 +1857,8 @@ class TestDoctorContract(unittest.TestCase):
             from kantrip.doctor import DoctorReport
 
             run.return_value = DoctorReport(())
-            scoped = runner.invoke(cli, ["doctor", "prod", "-v", "--no-color"])
-            unscoped = runner.invoke(cli, ["doctor", "--no-color"])
+            scoped = runner.invoke(cli, ["doctor", "prod", "-v", "--color", "never"])
+            unscoped = runner.invoke(cli, ["doctor", "--color", "never"])
 
         self.assertEqual(0, scoped.exit_code, scoped.output)
         self.assertEqual("Kantrip Doctor: profile 'prod'", scoped.output.splitlines()[0])

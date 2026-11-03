@@ -18,6 +18,9 @@ from rich.theme import Theme
 
 from kantrip.registry import display_registry
 
+ColorMode = Literal["auto", "always", "never"]
+COLOR_MODES: tuple[ColorMode, ...] = ("auto", "always", "never")
+
 # The list table shows the UUID's first block, which vault labels also start with.
 SHORT_ID_LENGTH = 8
 
@@ -66,12 +69,22 @@ LABEL_COLORS = (
 def colors_enabled(
     stream: IO[str],
     *,
-    no_color: bool = False,
+    color: ColorMode = "auto",
     environment: Mapping[str, str] | None = None,
 ) -> bool:
-    """Return whether styling is safe and requested for a stream."""
+    """Return whether to style a stream.
+
+    `always` and `never` win; `auto` checks a non-empty NO_COLOR, then a non-empty
+    FORCE_COLOR, then TERM=dumb, then whether the stream is a terminal.
+    """
+    if color != "auto":
+        return color == "always"
     env = os.environ if environment is None else environment
-    if no_color or "NO_COLOR" in env or env.get("TERM", "").lower() == "dumb":
+    if env.get("NO_COLOR"):
+        return False
+    if env.get("FORCE_COLOR"):
+        return True
+    if env.get("TERM", "").lower() == "dumb":
         return False
     isatty = getattr(stream, "isatty", None)
     return bool(isatty and isatty())
@@ -80,18 +93,18 @@ def colors_enabled(
 def create_console(
     *,
     stream: IO[str] | None = None,
-    no_color: bool = False,
+    color: ColorMode = "auto",
     environment: Mapping[str, str] | None = None,
 ) -> Console:
     """Create a Rich console without modifying global terminal state."""
     target = stream if stream is not None else sys.stdout
-    color = colors_enabled(target, no_color=no_color, environment=environment)
+    styled = colors_enabled(target, color=color, environment=environment)
     return Console(
         file=target,
         theme=ARCANA_THEME,
-        color_system="truecolor" if color else None,
-        force_terminal=color,
-        no_color=not color,
+        color_system="truecolor" if styled else None,
+        force_terminal=styled,
+        no_color=not styled,
         highlight=False,
     )
 
@@ -280,6 +293,8 @@ def show_progress(console: Console, message: str) -> Iterator[None]:
 __all__ = [
     "ARCANA_COLORS",
     "ARCANA_THEME",
+    "COLOR_MODES",
+    "ColorMode",
     "StatusKind",
     "colors_enabled",
     "create_console",

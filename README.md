@@ -100,9 +100,9 @@ what another terminal connects to.
 - **Failure handling.** Credential changes are journaled, so a failure halfway
   through leaves the previous profile working. Database migrations run
   automatically and back up the database first.
-- **Output.** Results go to stdout and messages to stderr. Color is optional
-  and turns off with `NO_COLOR`, `--no-color`, `TERM=dumb`, or when output
-  isn't a terminal.
+- **Output.** Results go to stdout and messages to stderr. Color follows
+  `--color auto|always|never`, `NO_COLOR`, `FORCE_COLOR`, and `TERM=dumb`, and
+  turns off when output isn't a terminal.
 
 ## Quick start
 
