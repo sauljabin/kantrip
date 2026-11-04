@@ -32,7 +32,13 @@ from kantrip.adapters import (
     KCAT_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
 )
-from kantrip.console import create_console, create_status_text, show_progress
+from kantrip.console import (
+    COLOR_MODES,
+    ColorMode,
+    create_console,
+    create_status_text,
+    show_progress,
+)
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
 from tests.e2e.terminal import TerminalProcess, TerminalProcessError
@@ -84,7 +90,13 @@ class SmokeFailure(RuntimeError):
     show_default=True,
     help="Sandbox registry URL.",
 )
-@cloup.option("--no-color", is_flag=True, help="Disable styled terminal output.")
+@cloup.option(
+    "--color",
+    type=cloup.Choice(COLOR_MODES),
+    default="auto",
+    show_default=True,
+    help="When to style terminal output; CI turns auto off.",
+)
 @cloup.option(
     "--shell",
     "shells",
@@ -99,18 +111,17 @@ def main(
     keep_topic: bool,
     registry_provider: str,
     registry_url: str,
-    no_color: bool,
+    color: ColorMode,
     shells: tuple[str, ...],
 ) -> None:
     """Create TOPIC and smoke-test installed adapters against the sandbox."""
     environment = dict(os.environ)
-    plain_output = (
-        no_color or bool(environment.get("CI")) or bool(environment.get("GITHUB_ACTIONS"))
-    )
-    console = create_console(no_color=plain_output, environment=environment)
+    if color == "auto" and (environment.get("CI") or environment.get("GITHUB_ACTIONS")):
+        color = "never"
+    console = create_console(color=color, environment=environment)
     error_console = create_console(
         stream=sys.stderr,
-        no_color=plain_output,
+        color=color,
         environment=environment,
     )
     smoke_topic = topic or f"kantrip-smoke-{secrets.token_hex(6)}"
@@ -813,7 +824,7 @@ def _add_profile(
 
 def _kantrip_cli(*arguments: str) -> list[str]:
     """Build a plain-output Kantrip command for capture by the sandbox runner."""
-    return [_kantrip_executable(), "--no-color", *arguments]
+    return [_kantrip_executable(), "--color", "never", *arguments]
 
 
 def _kantrip_executable() -> str:

@@ -1228,7 +1228,7 @@ def _cli() -> tuple[str, ...]:
     executable = configured or shutil.which("kantrip")
     if executable is None:
         raise AuthSmokeFailure("required command 'kantrip' was not found")
-    return executable, "--no-color"
+    return executable, "--color", "never"
 
 
 def _require_commands(commands: Sequence[str]) -> None:

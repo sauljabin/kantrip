@@ -579,7 +579,7 @@ kantrip exec local -- kcat -L
 `kantrip exec PROFILE COMMAND…` passes everything after COMMAND to it unchanged,
 so `kantrip exec local kafka-topics --help` shows the tool's own help. The `--`
 before COMMAND is optional; the examples keep it for clarity. Kantrip's own
-options, such as `--no-color`, go before PROFILE.
+options, such as `--color`, go before PROFILE.
 
 `describe` prints sections for people by default. Its JSON and YAML output is
 for reading, not a profile export you can import again. It shows every public
@@ -1301,19 +1301,24 @@ environment or the files' contents.
 
 ## Output and color
 
-Commands write results to stdout and messages to stderr. Styling is off
-when:
+Commands write results to stdout and messages to stderr. `--color` decides
+whether they are styled:
 
-- `--no-color` is supplied globally or after a subcommand.
-- `NO_COLOR` is present in the environment.
-- `TERM=dumb`.
-- The destination stream is not a terminal.
+- `--color always` always styles, even when output is redirected.
+- `--color never` never styles.
+- `--color auto`, the default, checks these in order and stops at the first
+  match:
+  1. `NO_COLOR` set to a non-empty value turns styling off.
+  2. `FORCE_COLOR` set to a non-empty value turns styling on.
+  3. `TERM=dumb` turns styling off.
+  4. Otherwise each stream is styled only when it is a terminal.
 
 The global and command-local forms are equivalent:
 
 ```bash
-kantrip --no-color list
-kantrip list --no-color
+kantrip --color never list
+kantrip list --color never
+kantrip --color always list | less -R
 ```
 
 JSON and YAML output is syntax-highlighted when styling is on, and plain

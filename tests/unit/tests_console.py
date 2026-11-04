@@ -29,15 +29,29 @@ class TestConsole(unittest.TestCase):
         self.assertIn("primary", ARCANA_THEME.styles)
         self.assertIn("error", ARCANA_THEME.styles)
 
-    def test_terminal_color_can_be_disabled_explicitly(self) -> None:
-        stream = TerminalBuffer()
+    def test_color_mode_wins_over_environment_and_stream(self) -> None:
+        for color, stream, environment, expected in (
+            ("always", io.StringIO(), {"NO_COLOR": "1", "TERM": "dumb"}, True),
+            ("never", TerminalBuffer(), {"FORCE_COLOR": "1"}, False),
+        ):
+            with self.subTest(color=color):
+                self.assertEqual(
+                    expected, colors_enabled(stream, color=color, environment=environment)
+                )
 
-        self.assertFalse(colors_enabled(stream, no_color=True, environment={}))
-
-    def test_no_color_environment_disables_terminal_color(self) -> None:
-        stream = TerminalBuffer()
-
-        self.assertFalse(colors_enabled(stream, environment={"NO_COLOR": ""}))
+    def test_auto_color_follows_environment_then_stream(self) -> None:
+        for stream, environment, expected in (
+            (TerminalBuffer(), {}, True),
+            (io.StringIO(), {}, False),
+            (TerminalBuffer(), {"NO_COLOR": "1"}, False),
+            (TerminalBuffer(), {"NO_COLOR": ""}, True),
+            (io.StringIO(), {"FORCE_COLOR": "1"}, True),
+            (io.StringIO(), {"FORCE_COLOR": ""}, False),
+            (TerminalBuffer(), {"NO_COLOR": "1", "FORCE_COLOR": "1"}, False),
+            (TerminalBuffer(), {"FORCE_COLOR": "1", "TERM": "dumb"}, True),
+        ):
+            with self.subTest(stream=type(stream).__name__, environment=environment):
+                self.assertEqual(expected, colors_enabled(stream, environment=environment))
 
     def test_dumb_terminal_disables_terminal_color(self) -> None:
         stream = TerminalBuffer()
@@ -184,7 +198,7 @@ class TestConsole(unittest.TestCase):
     def test_structured_output_is_plain_when_color_is_disabled(self) -> None:
         contents = '{"name": "local"}\n'
         stream = TerminalBuffer()
-        console = create_console(stream=stream, no_color=True, environment={})
+        console = create_console(stream=stream, color="never", environment={})
 
         console.print(create_structured_syntax(contents, "json"), end="")
 
