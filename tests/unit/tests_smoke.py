@@ -56,7 +56,7 @@ class TestSmoke(unittest.TestCase):
             command = _kantrip_cli("ping", "sandbox")
 
         self.assertEqual(
-            ["/opt/bin/kantrip", "--no-color", "ping", "sandbox"],
+            ["/opt/bin/kantrip", "--color", "never", "ping", "sandbox"],
             command,
         )
 
@@ -78,7 +78,7 @@ class TestSmoke(unittest.TestCase):
 
     @patch("tests.e2e.adapters.smoke", side_effect=SmokeFailure("connectivity failed"))
     def test_main_renders_failures_with_its_selected_presentation(self, _smoke: object) -> None:
-        result = CliRunner().invoke(main, ["--no-color"])
+        result = CliRunner().invoke(main, ["--color", "never"])
 
         self.assertEqual(1, result.exit_code)
         self.assertEqual("[failed] connectivity failed\n", result.output)

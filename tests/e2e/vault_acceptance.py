@@ -90,7 +90,7 @@ class _VaultCase(unittest.TestCase):
     def _kantrip(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         # A new session has no controlling terminal, like a script or CI job.
         return subprocess.run(
-            (self.kantrip, "--no-color", *arguments),
+            (self.kantrip, "--color", "never", *arguments),
             env=self.environment,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -226,7 +226,8 @@ class TestLinuxVault(_VaultCase):
         status, output = run_terminal(
             (
                 self.kantrip,
-                "--no-color",
+                "--color",
+                "never",
                 "add",
                 self.profile,
                 "--bootstrap-server",

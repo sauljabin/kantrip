@@ -34,6 +34,8 @@ from kantrip.cli_inputs import (
 )
 from kantrip.cli_options import add_profile_options, edit_profile_options, parse_labels
 from kantrip.console import (
+    COLOR_MODES,
+    ColorMode,
     StatusKind,
     create_console,
     create_profile_description,
@@ -110,33 +112,38 @@ def _connection_summary(profile: object) -> str:
     return f"{servers}, {kafka.get('transport')}, {authentication}"
 
 
-def _configure_consoles(context: click.Context, *, no_color: bool) -> None:
+COLOR_HELP = "When to style terminal output."
+
+
+def _configure_consoles(context: click.Context, *, color: ColorMode) -> None:
     """Configure result and diagnostic consoles on the root context."""
     root_context = context.find_root()
     obj: dict[str, Any] = root_context.ensure_object(dict)
-    obj["console"] = create_console(no_color=no_color)
+    obj["console"] = create_console(color=color)
     obj["error_console"] = create_console(
         stream=sys.stderr,
-        no_color=no_color,
+        color=color,
     )
 
 
-def _apply_local_no_color(context: click.Context, parameter: click.Parameter, value: bool) -> bool:
-    """Disable color before invoking a subcommand when requested locally."""
+def _apply_local_color(
+    context: click.Context, parameter: click.Parameter, value: ColorMode | None
+) -> ColorMode | None:
+    """Reconfigure the consoles before invoking a subcommand when requested locally."""
     del parameter
-    if value:
-        _configure_consoles(context, no_color=True)
+    if value is not None:
+        _configure_consoles(context, color=value)
     return value
 
 
-def local_no_color(function: CommandFunction) -> CommandFunction:
+def local_color(function: CommandFunction) -> CommandFunction:
     """Add the command-local form of Kantrip's global color option."""
     decorated = cloup.option(
-        "--no-color",
-        is_flag=True,
+        "--color",
+        type=cloup.Choice(COLOR_MODES),
         expose_value=False,
-        callback=_apply_local_no_color,
-        help="Disable styled terminal output.",
+        callback=_apply_local_color,
+        help=COLOR_HELP,
     )(function)
     return decorated
 
@@ -148,14 +155,16 @@ def local_no_color(function: CommandFunction) -> CommandFunction:
 )
 @cloup.version_option(APP_VERSION)
 @cloup.option(
-    "--no-color",
-    is_flag=True,
-    help="Disable styled terminal output.",
+    "--color",
+    type=cloup.Choice(COLOR_MODES),
+    default="auto",
+    show_default=True,
+    help=COLOR_HELP,
 )
 @cloup.pass_context
-def cli(context: cloup.Context, no_color: bool) -> None:
+def cli(context: cloup.Context, color: ColorMode) -> None:
     """Kantrip securely manages local Kafka profiles for command-line tools and compatible applications."""
-    _configure_consoles(context, no_color=no_color)
+    _configure_consoles(context, color=color)
 
 
 def console_from_context(context: cloup.Context) -> Console:
@@ -192,7 +201,7 @@ def _print_structured_observation(
 
 
 @cli.command("add")
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @add_profile_options
 def add_configured_profile(profile_name: str, **values: Any) -> None:
@@ -234,7 +243,7 @@ def add_configured_profile(profile_name: str, **values: Any) -> None:
 
 
 @cli.command("edit")
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @edit_profile_options
 def edit_configured_profile(profile_name: str, **values: Any) -> None:
@@ -279,7 +288,7 @@ def edit_configured_profile(profile_name: str, **values: Any) -> None:
 
 
 @cli.command("remove")
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option("-y", "--yes", is_flag=True, help="Remove without asking for confirmation.")
 def remove_configured_profile(profile_name: str, yes: bool) -> None:
@@ -312,7 +321,7 @@ def _stdout_is_terminal() -> bool:
 
 
 @cli.command("list")
-@local_no_color
+@local_color
 @cloup.option(
     "-l",
     "--label",
@@ -349,7 +358,7 @@ def list_profiles(context: cloup.Context, labels: dict[str, str], output_format:
 
 
 @cli.command("describe")
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
     "-o",
@@ -377,7 +386,7 @@ def describe_profile(context: cloup.Context, profile_name: str, output_format: s
 
 
 @cli.command("current")
-@local_no_color
+@local_color
 def current_profile() -> None:
     """Show the profile active in the current Kantrip session."""
     profile_name = os.environ.get("KANTRIP_PROFILE")
@@ -389,7 +398,7 @@ def current_profile() -> None:
 
 
 @cli.command("doctor")
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="[PROFILE]", required=False)
 @cloup.option(
     "--repair",
@@ -489,7 +498,7 @@ def _doctor_summary(label: str, errors: int, warnings: int) -> str:
 
 
 @cli.command("ping")
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.option(
     "--timeout",
@@ -618,7 +627,7 @@ def _print_ping_failure(error_console: Console, prefix: str, failure: Mapping[st
     "exec",
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
 )
-@local_no_color
+@local_color
 @cloup.argument("profile_name", metavar="PROFILE")
 @cloup.argument("command", nargs=-1, type=click.UNPROCESSED)
 def execute_profile(profile_name: str, command: tuple[str, ...]) -> None:

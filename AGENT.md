@@ -254,11 +254,14 @@
   `format()`, and pickling raise. Call `reveal()` only where the value leaves
   the process; `tests/unit/tests_secret_value.py` enforces the module
   allowlist.
-- Results go to stdout and diagnostics to stderr. Animate and syntax-highlight
-  only on colored TTYs; `NO_COLOR`, `TERM=dumb`, `--no-color` (accepted before or
-  after a subcommand), and non-TTY output use stable labels, contain no ANSI
-  escapes, and keep JSON and YAML valid. Styling carries no essential
-  information.
+- Results go to stdout and diagnostics to stderr. `--color auto|always|never`
+  (accepted before or after a subcommand) decides styling: `always` and `never`
+  win, and `auto` checks a non-empty `NO_COLOR`, then a non-empty
+  `FORCE_COLOR`, then `TERM=dumb`, then whether each stream is a TTY. Animate
+  and syntax-highlight only on colored streams; plain output uses stable
+  labels, contains no ANSI escapes, and keeps JSON and YAML valid. Styling
+  carries no essential information. Boolean options are one-way switches;
+  never add a `--no-` option.
 - A `ping` failure includes a bounded, sanitized cause, never a traceback, and
   reports every attempted service: a Registry failure keeps the Kafka result,
   and a Kafka failure reports the Registry as skipped. `ping --quiet` prints

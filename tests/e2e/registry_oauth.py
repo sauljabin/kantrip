@@ -658,7 +658,7 @@ def _cli() -> tuple[str, ...]:
     executable = configured or shutil.which("kantrip")
     if executable is None:
         raise RegistryOAuthFailure("installed kantrip executable is unavailable")
-    return executable, "--no-color"
+    return executable, "--color", "never"
 
 
 def _assert_redacted(output: str, credentials: Mapping[str, str]) -> None:
