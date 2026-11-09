@@ -39,7 +39,7 @@ jobs:
           uv-version: ${{ env.UV_VERSION }}
           python-version: "3.14"
       - name: Set up Kind
-        uses: helm/kind-action@v1.15.1
+        uses: helm/kind-action@v1.15.2
         with:
           install_only: true
           version: v0.31.0
