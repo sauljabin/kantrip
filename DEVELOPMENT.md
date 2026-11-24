@@ -212,4 +212,5 @@ current `main` with passing checks, push an annotated tag `vMAJOR.MINOR.PATCH`
 (or a pre-release `aN`, `bN`, `rcN`). The protected release workflow builds and
 verifies the wheel once, runs E2E against it, waits for approval, publishes to
 PyPI through trusted publishing, and creates the GitHub Release with generated
-notes.
+notes. A stable release's notes cover everything since the previous stable
+release, prereleases included.
