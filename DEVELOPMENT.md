@@ -128,6 +128,12 @@ minutes.
   manual workflow run. Remove and reapply the label to run it again.
 - **`main` and releases:** on every runtime change, and always against the exact
   release wheel.
+- **Compatibility:** releases also run the
+  [Compatibility](.github/workflows/compatibility.yml) matrix before publishing:
+  E2E at each Java floor in [Compatibility](COMPATIBILITY.md#client-commands)
+  and on Python 3.11. Below a floor, E2E requires Kantrip to refuse the client
+  before launch. Run the workflow by hand for evidence between releases, or run
+  E2E acceptance by hand with other Kafka, Confluent, or Python versions.
 
 ## Vault tests
 

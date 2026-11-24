@@ -8,7 +8,60 @@ on:
         required: false
         type: string
         default: ""
+      apache-kafka-version:
+        description: Apache Kafka release to test instead of the versions.env pin
+        required: false
+        type: string
+        default: ""
+      confluent-version:
+        description: Confluent Platform release to test instead of the versions.env pin
+        required: false
+        type: string
+        default: ""
+      python-version:
+        description: Python for Kantrip and Kaskade, 3.11 or 3.15
+        required: false
+        type: string
+        default: "3.15"
+      suite:
+        description: e2e for every client and mechanism, e2e-floors for the Java floors only
+        required: false
+        type: string
+        default: e2e
+      vault:
+        description: Also run the vault acceptance on Ubuntu and macOS
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
+    inputs:
+      apache-kafka-version:
+        description: Apache Kafka release to test instead of the versions.env pin
+        required: false
+        type: string
+        default: ""
+      confluent-version:
+        description: Confluent Platform release to test instead of the versions.env pin
+        required: false
+        type: string
+        default: ""
+      python-version:
+        description: Python for Kantrip and Kaskade
+        required: false
+        type: choice
+        options: ["3.15", "3.11"]
+        default: "3.15"
+      suite:
+        description: e2e for every client and mechanism, e2e-floors for the Java floors only
+        required: false
+        type: choice
+        options: [e2e, e2e-floors]
+        default: e2e
+      vault:
+        description: Also run the vault acceptance on Ubuntu and macOS
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -37,7 +90,7 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
       - name: Set up Kind
         uses: helm/kind-action@v1.15.2
         with:
@@ -54,25 +107,40 @@ jobs:
           version: v4.1.1
       - name: Validate E2E Zsh startup
         run: uv run --locked python -m tests.e2e.shell_environment
+      - name: Pin the requested Java releases
+        if: inputs.apache-kafka-version != '' || inputs.confluent-version != ''
+        env:
+          APACHE_KAFKA_VERSION: ${{ inputs.apache-kafka-version }}
+          CONFLUENT_VERSION: ${{ inputs.confluent-version }}
+        run: |
+          set -euo pipefail
+          for name in APACHE_KAFKA_VERSION CONFLUENT_VERSION; do
+            value="${!name}"
+            [ -n "$value" ] || continue
+            [[ "$value" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || { echo "invalid $name: $value" >&2; exit 1; }
+            sed -i "s/^$name=.*/$name=$value/" tests/e2e/versions.env
+          done
+          grep -E '^(APACHE_KAFKA|CONFLUENT)_VERSION=' tests/e2e/versions.env
       - name: Install verified released E2E clients
         uses: ./.github/actions/released-e2e-tools
         with:
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
           uv-version: ${{ env.UV_VERSION }}
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
       - name: Pre-create the disposable Kantrip vault
         uses: ./.github/actions/linux-vault
       - name: Run sandbox E2E with the Kantrip vault
         env:
           CI: "1"
+          E2E_SUITE: ${{ inputs.suite || 'e2e' }}
           E2E_SCRIPT: |
             eval "$(printf "%s" "kantrip-ci-keyring" | gnome-keyring-daemon --unlock --components=secrets)"
             uv run --locked python -m sandbox up
-            uv run --locked python -m scripts.tests --suite e2e
+            uv run --locked python -m scripts.tests --suite "$E2E_SUITE"
           KANTRIP_REQUIRED_SHELLS: bash,zsh,fish
           NO_COLOR: "1"
         run: dbus-run-session -- bash -euo pipefail -c "$E2E_SCRIPT"
@@ -90,7 +158,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: e2e-diagnostics
+          # Matrix rows share a run, so each names its artifact after its pins.
+          name: e2e-diagnostics-py${{ inputs.python-version || '3.15' }}-kafka-${{ inputs.apache-kafka-version || 'pinned' }}-confluent-${{ inputs.confluent-version || 'pinned' }}
           path: ${{ runner.temp }}/e2e-diagnostics
           if-no-files-found: error
           retention-days: 7
@@ -100,6 +169,7 @@ jobs:
 
   vault-linux:
     name: E2E / Ubuntu / Kantrip vault
+    if: inputs.vault != false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -116,12 +186,12 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
       - name: Pre-create the disposable Kantrip vault
         uses: ./.github/actions/linux-vault
       - name: Run the vault acceptance suite
@@ -135,6 +205,7 @@ jobs:
 
   vault-macos:
     name: E2E / macOS / Kantrip vault
+    if: inputs.vault != false
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -147,12 +218,12 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel
         with:
           candidate-artifact: ${{ inputs.candidate-artifact }}
-          python-version: "3.15"
+          python-version: ${{ inputs.python-version || '3.15' }}
       - name: Create the disposable Kantrip vault
         run: |
           set -euo pipefail

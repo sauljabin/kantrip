@@ -1,0 +1,62 @@
+name: Compatibility
+
+# Runs E2E at each Java floor Kantrip documents, and on the oldest Python.
+# Releases call it before publishing; run it by hand for evidence between releases.
+on:
+  workflow_call:
+    inputs:
+      candidate-artifact:
+        description: Existing distribution bundle from this workflow run
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Kafka 2.6 and Confluent 6.0
+            apache-kafka-version: 2.6.3
+            confluent-version: 6.0.15
+            python-version: "3.15"
+            suite: e2e-floors
+            vault: false
+          - name: Kafka 2.7 and Confluent 6.1 (PEM trust)
+            apache-kafka-version: 2.7.2
+            confluent-version: 6.1.15
+            python-version: "3.15"
+            suite: e2e-floors
+            vault: false
+          - name: Kafka 4.1 and Confluent 8.1 (OAuth)
+            apache-kafka-version: 4.1.2
+            confluent-version: 8.1.7
+            python-version: "3.15"
+            suite: e2e-floors
+            vault: false
+          - name: Confluent 8.2 (Schema Registry consoles)
+            apache-kafka-version: ""
+            confluent-version: 8.2.5
+            python-version: "3.15"
+            suite: e2e
+            vault: false
+          - name: Python 3.11
+            apache-kafka-version: ""
+            confluent-version: ""
+            python-version: "3.11"
+            suite: e2e
+            vault: true
+    uses: ./.github/workflows/e2e.yml
+    with:
+      candidate-artifact: ${{ inputs.candidate-artifact }}
+      apache-kafka-version: ${{ matrix.apache-kafka-version }}
+      confluent-version: ${{ matrix.confluent-version }}
+      python-version: ${{ matrix.python-version }}
+      suite: ${{ matrix.suite }}
+      vault: ${{ matrix.vault }}

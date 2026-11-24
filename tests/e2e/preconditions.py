@@ -36,7 +36,7 @@ class E2ESetupError(RuntimeError):
 
 def check_preconditions(environment: Mapping[str, str]) -> None:
     """Fail with setup diagnostics before any product assertion runs."""
-    versions = _versions()
+    versions = pinned_versions()
     _require_commands(("kantrip", "kubectl", "helm", "kind", *sorted(ADAPTER_EXECUTABLES)))
     # CI installs each pin exactly; a local run accepts the pin or newer.
     _require_pinned_version(
@@ -70,7 +70,8 @@ def check_preconditions(environment: Mapping[str, str]) -> None:
         raise E2ESetupError("KANTRIP_E2E_KANTRIP must name an installed candidate wheel executable")
 
 
-def _versions() -> dict[str, str]:
+def pinned_versions() -> dict[str, str]:
+    """Read the released client pins from `versions.env`."""
     values: dict[str, str] = {}
     for line in VERSIONS_FILE.read_text(encoding="utf-8").splitlines():
         name, separator, raw_value = line.partition("=")

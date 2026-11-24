@@ -115,9 +115,16 @@ jobs:
     with:
       candidate-artifact: release-bundle
 
+  compatibility:
+    name: Compatibility
+    needs: build
+    uses: ./.github/workflows/compatibility.yml
+    with:
+      candidate-artifact: release-bundle
+
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, attest-packages, e2e-tests]
+    needs: [build, attest-packages, e2e-tests, compatibility]
     runs-on: ubuntu-latest
     environment:
       name: release
