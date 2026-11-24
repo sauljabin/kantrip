@@ -41,7 +41,7 @@ checks use the same version:
 | --- | --- | --- |
 | Apache Kafka Java CLIs | Kafka 2.6 | 2.7 for a custom CA or mTLS; 4.1 for OAuth |
 | Confluent Platform Java CLIs | Confluent Platform 6.0 | 6.1 for a custom CA or mTLS; 8.1 for OAuth |
-| Schema Registry consoles | Confluent Platform 7.4 | 8.1 for OAuth |
+| Schema Registry consoles | Confluent Platform 8.2 | None |
 | `kcat` / `kafkacat` | kcat 1.7.0 | librdkafka 2.11.0 for OAuth with a custom token-endpoint CA |
 | `kaskade` | Kaskade 6.0.0 | None |
 | `kaf` | kaf 0.2.14 | None |
@@ -76,12 +76,12 @@ supervised.
 | `kafka-configs.sh` / `kafka-configs` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Inspect and alter supported dynamic configurations | No | Injects `--bootstrap-server` and `--command-config`; broker authorization still applies. |
 | `kafka-acls.sh` / `kafka-acls` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | List, add, and remove ACLs | No | Injects `--bootstrap-server` and `--command-config`; requires a configured authorizer and an authorized principal. |
 | `kafka-broker-api-versions.sh` / `kafka-broker-api-versions` | Apache / Confluent | Kafka 2.6–4.x; Confluent Platform 6.0–8.x | Inspect broker protocol versions | No | Injects `--bootstrap-server` and `--command-config`. |
-| `kafka-avro-console-consumer` | Confluent | Confluent Platform 7.4–8.x | Consume Avro records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-avro-console-producer` | Confluent | Confluent Platform 7.4–8.x | Produce Avro records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kafka-json-schema-console-consumer` | Confluent | Confluent Platform 7.4–8.x | Consume JSON Schema records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-json-schema-console-producer` | Confluent | Confluent Platform 7.4–8.x | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kafka-protobuf-console-consumer` | Confluent | Confluent Platform 7.4–8.x | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
-| `kafka-protobuf-console-producer` | Confluent | Confluent Platform 7.4–8.x | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-avro-console-consumer` | Confluent | Confluent Platform 8.2–8.x | Consume Avro records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-avro-console-producer` | Confluent | Confluent Platform 8.2–8.x | Produce Avro records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-json-schema-console-consumer` | Confluent | Confluent Platform 8.2–8.x | Consume JSON Schema records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-json-schema-console-producer` | Confluent | Confluent Platform 8.2–8.x | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
+| `kafka-protobuf-console-consumer` | Confluent | Confluent Platform 8.2–8.x | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
+| `kafka-protobuf-console-producer` | Confluent | Confluent Platform 8.2–8.x | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kcat` / `kafkacat` | kcat | kcat 1.7.0+ | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. |
 | `kaf` | kaf | kaf 0.2.14+ | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
 | `kcl` | kcl | kcl 0.20.0+ | Topics, groups, cluster administration, produce, consume, and Registry administration | Confluent-compatible | Uses a private TOML file through `KCL_CONFIG_PATH` and removes inherited `KCL_*` variables. Registry OAuth and native Apicurio fail before launch. |

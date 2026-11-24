@@ -29,7 +29,7 @@ _KCAT_OUTPUT = (
 )
 
 _JAVA_FLOOR = "install Apache Kafka 2.6 or Confluent Platform 6.0 or newer"
-_REGISTRY_FLOOR = "install Confluent Platform 7.4 or newer"
+_REGISTRY_FLOOR = "install Confluent Platform 8.2 or newer"
 
 
 def _kcat(version: str, librdkafka: str = "2.15.1") -> str:
@@ -123,11 +123,11 @@ class TestClientFloors(unittest.TestCase):
         ),
         (
             "kafka-avro-console-consumer",
-            ("7.4.0-ccs\n", "8.3.1-ccs\n"),
+            ("8.2.0-ccs\n", "8.3.1-ccs\n"),
             (
                 (
-                    "7.3.2-ccs\n",
-                    f"kafka-avro-console-consumer 7.3.2-ccs is not supported; {_REGISTRY_FLOOR}",
+                    "8.1.7-ccs\n",
+                    f"kafka-avro-console-consumer 8.1.7-ccs is not supported; {_REGISTRY_FLOOR}",
                 ),
                 ("3.9.0\n", _REGISTRY_FLOOR),
                 ("OpenJDK 64-Bit Server VM warning\n", "could not verify"),
