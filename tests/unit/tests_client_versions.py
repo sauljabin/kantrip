@@ -57,13 +57,13 @@ class TestClientFloors(unittest.TestCase):
         ),
         (
             "kaskade",
-            ("kaskade, version 5.0.1\n", "Kaskade, version 6.0.0\n"),
+            ("kaskade, version 6.0.0\n", "Kaskade, version 6.1.0\n"),
             (
                 (
-                    "kaskade, version 5.0.0\n",
-                    "kaskade 5.0.0 is not supported; install Kaskade 5.0.1 or newer",
+                    "kaskade, version 5.1.0\n",
+                    "kaskade 5.1.0 is not supported; install Kaskade 6.0.0 or newer",
                 ),
-                ("kaskade, version 5.0.2.dev5\n", "kaskade 5.0.2.dev5 is not supported"),
+                ("kaskade, version 6.0.1.dev5\n", "kaskade 6.0.1.dev5 is not supported"),
                 ("kaskade\n", "could not verify the installed kaskade version"),
             ),
         ),
@@ -294,4 +294,4 @@ class TestEndToEndPins(unittest.TestCase):
     def test_release_gates_render_their_floor(self) -> None:
         gate = KASKADE_ADAPTER.minimum_version
         assert isinstance(gate, ReleaseGate)
-        self.assertEqual("Kaskade 5.0.1 or newer", gate.requirement("kaskade"))
+        self.assertEqual("Kaskade 6.0.0 or newer", gate.requirement("kaskade"))

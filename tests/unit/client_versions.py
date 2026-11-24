@@ -12,7 +12,7 @@ SUPPORTED_VERSION_OUTPUTS = {
         "Version 1.7.0 (JSON, Avro, Transactions, IncrementalAssign, librdkafka 2.15.1 "
         "builtin.features=ssl,sasl,sasl_scram,sasl_oauthbearer,oidc)\n"
     ),
-    "Kaskade": "kaskade, version 5.0.1\n",
+    "Kaskade": "kaskade, version 6.0.0\n",
     "kaf": "kaf version 0.2.14 (Homebrew)\n",
     "kcl": "kcl version v0.20.0\n",
     # kafui's gate reads the module line of its embedded Go build information.

@@ -57,8 +57,7 @@ jobs:
       - name: Install verified released E2E clients
         uses: ./.github/actions/released-e2e-tools
         with:
-          # Released Kaskade 5 stops at Python 3.14.
-          python-version: "3.11"
+          python-version: "3.15"
           uv-version: ${{ env.UV_VERSION }}
       - name: Build or select and install candidate wheel
         uses: ./.github/actions/candidate-wheel

@@ -394,7 +394,7 @@ stays in the private session directory, written with mode `0600`.
   acquisition, not refresh, evidence.
 - **Shared trust contracts.** Apicurio's `apicurio.registry.tls.certificates` and
   Confluent Java's `ssl.*` each trust Registry and IdP with one bundle, so
-  profiles with distinct CAs are rejected for them. Kaskade 5.0.1, its minimum
+  profiles with distinct CAs are rejected for them. Kaskade 6.0.0, its minimum
   version, keeps separate HTTP/TLS contexts so Registry client identity never
   reaches the IdP.
 - **Confluent Python token trust.** Its token client ignores `ssl.ca.location`

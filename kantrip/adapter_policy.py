@@ -164,12 +164,26 @@ KCAT_SCHEMA_REGISTRY_SIGNAL = "schema-registry"
 _KCAT_CONNECTION_OPTIONS = frozenset({"-F", "-r", "-b"})
 _KCAT_FLAG_OPTIONS = frozenset("CPLQqvEVhlTZeJOuU")
 _KCAT_VALUE_OPTIONS = frozenset("GtpbDKcmFXdzkHofsr")
-_KASKADE_COMMANDS = frozenset({"admin", "consumer"})
-_KASKADE_CONNECTION_OPTIONS = (
-    "--bootstrap-servers",
-    "--config-file",
-    "--registry",
-    "-b",
+_KASKADE_COMMANDS = frozenset({"admin", "consumer", "producer"})
+# `-k registry` and `-v registry` read the `[registry]` section in these commands.
+_KASKADE_REGISTRY_COMMANDS = frozenset({"consumer", "producer"})
+# `--aws` replaces the profile's authentication with Amazon MSK IAM.
+_KASKADE_CONNECTION_OPTIONS = frozenset({"--aws", "--bootstrap-server", "--config-file"})
+# Producer `--registry` properties that choose or register a schema, globally or
+# scoped with `key.` or `value.`; none selects the Registry or its credentials.
+_KASKADE_PRODUCER_REGISTRY_PROPERTIES = frozenset(
+    {
+        "auto.register.schemas",
+        "normalize.schemas",
+        "use.latest.version",
+        "use.schema.id",
+        "protobuf.message",
+        "apicurio.registry.auto-register",
+        "apicurio.registry.find-latest",
+        "apicurio.registry.artifact.group-id",
+        "apicurio.registry.artifact.artifact-id",
+        "apicurio.registry.artifact.version",
+    }
 )
 
 
@@ -264,9 +278,10 @@ def check_kcat_arguments(executable: str, arguments: Sequence[str]) -> str | Non
 
 
 def check_kaskade_arguments(executable: str, arguments: Sequence[str]) -> str | None:
-    """Reject Kaskade overrides in the arguments that follow `admin` or `consumer`."""
+    """Reject Kaskade overrides in a command's arguments; the first argument names it."""
     del executable
-    _reject_kaskade_overrides(arguments)
+    if arguments:
+        _reject_kaskade_overrides(arguments[0], arguments[1:])
     return None
 
 
@@ -346,13 +361,13 @@ def prepare_kaskade_command(
     configuration: ClientConfiguration,
     registry: RegistryConnection | None,
 ) -> list[str]:
-    """Inject the private Kaskade INI file after the `admin` or `consumer` command."""
+    """Inject the private Kaskade INI file after the `admin`, `consumer`, or `producer` command."""
     if len(prepared) <= 1 or prepared[1] not in _KASKADE_COMMANDS:
         return prepared
     command = prepared[1]
-    _reject_kaskade_overrides(prepared[2:])
+    _reject_kaskade_overrides(command, prepared[2:])
     selected_config_path = configuration.kaskade_config
-    if command == "consumer" and _kaskade_uses_schema_registry(prepared[2:]):
+    if command in _KASKADE_REGISTRY_COMMANDS and _kaskade_uses_schema_registry(prepared[2:]):
         require_kaskade_registry(registry)
         selected_config_path = configuration.kaskade_registry_config
     return [
@@ -523,10 +538,12 @@ def require_kcl_registry(registry: RegistryConnection) -> RegistryConnection:
 
 
 def require_kaskade_registry(registry: RegistryConnection | None) -> RegistryConnection:
-    """Require a Registry whose authentication Kaskade's deserializers can map safely."""
+    """Require a Registry whose authentication Kaskade's Registry clients can map safely."""
     connection = _require_registry("kaskade", registry)
     if connection.auth_type == "token":
-        raise AdapterError("kaskade Registry decoding does not support fixed bearer tokens")
+        raise AdapterError(
+            "kaskade Registry serializers and deserializers do not support fixed bearer tokens"
+        )
     if connection.auth_type != "oauth" or connection.oauth is None:
         return connection
     if connection.provider == CONFLUENT_PROVIDER and connection.oauth_logical_cluster is None:
@@ -543,29 +560,37 @@ def require_kaskade_registry(registry: RegistryConnection | None) -> RegistryCon
     return connection
 
 
-def _reject_kaskade_overrides(arguments: Sequence[str]) -> None:
+def _reject_kaskade_overrides(command: str, arguments: Sequence[str]) -> None:
     for index, argument in enumerate(arguments):
-        if argument == "--kafka" or argument.startswith("--kafka="):
-            property_value = (
-                arguments[index + 1]
-                if argument == "--kafka" and index + 1 < len(arguments)
-                else argument.removeprefix("--kafka=")
-            )
-            if not _safe_runtime_kafka_property(property_value):
-                raise AdapterError(
-                    "kaskade option '--kafka' cannot override the selected Kantrip profile"
-                )
+        option, separator, inline_value = argument.partition("=")
+        if argument.startswith("-b"):
+            option = "-b"
+        elif option in {"--kafka", "--registry"}:
+            value = inline_value if separator else _next_argument(arguments, index)
+            if _safe_kaskade_property(command, option, value):
+                continue
+        elif option not in _KASKADE_CONNECTION_OPTIONS:
             continue
-        for option in _KASKADE_CONNECTION_OPTIONS:
-            if (
-                argument == option
-                or argument.startswith(f"{option}=")
-                or option == "-b"
-                and argument.startswith(option)
-            ):
-                raise AdapterError(
-                    f"kaskade option '{option}' cannot override the selected Kantrip profile"
-                )
+        raise AdapterError(
+            f"kaskade option '{option}' cannot override the selected Kantrip profile"
+        )
+
+
+def _next_argument(arguments: Sequence[str], index: int) -> str:
+    return arguments[index + 1] if index + 1 < len(arguments) else ""
+
+
+def _safe_kaskade_property(command: str, option: str, value: str) -> bool:
+    if option == "--kafka":
+        return _safe_runtime_kafka_property(value)
+    name, separator, setting = value.partition("=")
+    if name.startswith(("key.", "value.")):
+        name = name.partition(".")[2]
+    return (
+        command == "producer"
+        and bool(separator and setting)
+        and name in _KASKADE_PRODUCER_REGISTRY_PROPERTIES
+    )
 
 
 def _reject_kaf_overrides(arguments: Sequence[str]) -> None:

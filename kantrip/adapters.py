@@ -404,11 +404,12 @@ KASKADE_ADAPTER = ClientAdapter(
     prepare_command=prepare_kaskade_command,
     render_shim=render_kaskade_shim,
     missing_command=_missing_kaskade,
-    # 5.0.1 is the first release that maps native Apicurio OAuth scopes.
+    # Kaskade 6 renamed `--bootstrap-servers` to `-b/--bootstrap-server` and added
+    # the producer; the argument policy knows only the Kaskade 6 options.
     minimum_version=ReleaseGate(
         "Kaskade",
         re.compile(r"\bkaskade,\s+version\s+(\d+)\.(\d+)\.(\d+)(\S*)", re.IGNORECASE),
-        (5, 0, 1),
+        (6, 0, 0),
     ),
     registry_providers=frozenset({CONFLUENT_PROVIDER, APICURIO_PROVIDER}),
 )

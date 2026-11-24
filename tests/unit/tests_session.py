@@ -1279,10 +1279,11 @@ class TestProfileSession(unittest.TestCase):
         self.assertNotIn("APICURIO_REGISTRY_URL", observed)
         self.assertNotIn("APICURIO_REGISTRY_CONFIG_FILE", observed)
 
-    def test_adapts_kaskade_admin_and_consumer_with_a_private_ini_file(self) -> None:
+    def test_adapts_every_kaskade_mode_with_a_private_ini_file(self) -> None:
         for command, command_arguments in (
             ("admin", []),
             ("consumer", ["--topic", "orders"]),
+            ("producer", ["--topic", "orders", "--acks", "all"]),
         ):
             with self.subTest(command=command):
                 observed: dict[str, object] = {}
@@ -1349,41 +1350,49 @@ class TestProfileSession(unittest.TestCase):
         self.assertEqual([str(root_path / "kaskade"), "admin", "--config-file"], observed[:3])
         self.assertEqual("kaskade.ini", Path(observed[3]).name)
 
-    def test_kaskade_registry_deserializer_uses_profile_registry_config(self) -> None:
-        observed: dict[str, object] = {}
+    def test_kaskade_registry_serde_uses_profile_registry_config(self) -> None:
+        for command in ("consumer", "producer"):
+            with self.subTest(command=command):
+                observed: dict[str, object] = {}
 
-        def inspect_run(arguments: list[str], **options: object) -> subprocess.CompletedProcess:
-            config_path = Path(arguments[3])
-            observed["arguments"] = arguments
-            observed["contents"] = config_path.read_text(encoding="utf-8")
-            observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
-            return subprocess.CompletedProcess(arguments, 0)
+                def inspect_run(
+                    arguments: list[str],
+                    *,
+                    _observed: dict[str, object] = observed,
+                    **options: object,
+                ) -> subprocess.CompletedProcess:
+                    del options
+                    config_path = Path(arguments[3])
+                    _observed["arguments"] = arguments
+                    _observed["contents"] = config_path.read_text(encoding="utf-8")
+                    _observed["mode"] = stat.S_IMODE(config_path.stat().st_mode)
+                    return subprocess.CompletedProcess(arguments, 0)
 
-        with (
-            patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
-            patch("kantrip.session._run_child", side_effect=inspect_run),
-        ):
-            run_profile_session(
-                "local",
-                self.profile,
-                ["kaskade", "consumer", "--topic", "orders", "-v", "registry"],
-                environment={},
-            )
+                with (
+                    patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+                    patch("kantrip.session._run_child", side_effect=inspect_run),
+                ):
+                    run_profile_session(
+                        "local",
+                        self.profile,
+                        ["kaskade", command, "--topic", "orders", "-v", "registry"],
+                        environment={},
+                    )
 
-        arguments = observed["arguments"]
-        assert isinstance(arguments, list)
-        self.assertEqual("kaskade-registry.ini", Path(arguments[3]).name)
-        self.assertEqual(["--topic", "orders", "-v", "registry"], arguments[4:])
-        self.assertEqual(
-            "[kafka]\n"
-            "bootstrap.servers=localhost:9092,localhost:9093\n"
-            "security.protocol=PLAINTEXT\n"
-            "\n[registry]\n"
-            "provider=confluent\n"
-            "url=http://registry.invalid:8081\n",
-            observed["contents"],
-        )
-        self.assertEqual(0o600, observed["mode"])
+                arguments = observed["arguments"]
+                assert isinstance(arguments, list)
+                self.assertEqual("kaskade-registry.ini", Path(arguments[3]).name)
+                self.assertEqual(["--topic", "orders", "-v", "registry"], arguments[4:])
+                self.assertEqual(
+                    "[kafka]\n"
+                    "bootstrap.servers=localhost:9092,localhost:9093\n"
+                    "security.protocol=PLAINTEXT\n"
+                    "\n[registry]\n"
+                    "provider=confluent\n"
+                    "url=http://registry.invalid:8081\n",
+                    observed["contents"],
+                )
+                self.assertEqual(0o600, observed["mode"])
 
     def test_kaskade_uses_native_apicurio_registry_configuration(self) -> None:
         self.profile["registry"] = {
@@ -1467,24 +1476,64 @@ class TestProfileSession(unittest.TestCase):
                 }
 
     def test_kaskade_cannot_override_profile_connection_options(self) -> None:
+        options: tuple[tuple[str, ...], ...] = (
+            ("-b", "other:9092"),
+            ("-bother:9092",),
+            ("--bootstrap-server", "other:9092"),
+            ("--bootstrap-server=other:9092",),
+            ("--config-file=other.ini",),
+            ("--aws", "region=us-east-1"),
+            ("--aws=region=us-east-1",),
+            ("--kafka=bootstrap.servers=other:9092",),
+            ("--kafka=security.protocol=PLAINTEXT",),
+            ("--kafka=broker.address.family=invalid",),
+            ("--kafka=group.id=",),
+            ("--registry=url=http://other.invalid:8081",),
+            ("--registry", "provider=apicurio"),
+            ("--registry", "key.url=http://other.invalid:8081"),
+            ("--registry", "basic.auth.user.info=other:secret"),
+            ("--registry", "use.schema.id="),
+            ("--registry", "key.value.use.schema.id=3"),
+        )
+        for command in ("admin", "consumer", "producer"):
+            for option in options:
+                with (
+                    self.subTest(command=command, option=option),
+                    patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+                    self.assertRaisesRegex(SessionError, "cannot override"),
+                ):
+                    run_profile_session(
+                        "local", self.profile, ["kaskade", command, *option], environment={}
+                    )
+
+    def test_only_the_kaskade_producer_selects_registry_schemas(self) -> None:
         for option in (
-            "-bother:9092",
-            "--bootstrap-servers=other:9092",
-            "--config-file=other.ini",
-            "--kafka=bootstrap.servers=other:9092",
-            "--kafka=security.protocol=PLAINTEXT",
-            "--kafka=broker.address.family=invalid",
-            "--kafka=group.id=",
-            "--registry=url=http://other.invalid:8081",
+            ("--registry", "use.schema.id=3"),
+            ("--registry=value.auto.register.schemas=true",),
+            ("--registry", "key.apicurio.registry.artifact.artifact-id=orders-key"),
         ):
-            with (
-                self.subTest(option=option),
-                patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
-                self.assertRaisesRegex(SessionError, "cannot override"),
-            ):
-                run_profile_session(
-                    "local", self.profile, ["kaskade", "admin", option], environment={}
-                )
+            with self.subTest(option=option):
+                with (
+                    patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+                    patch(
+                        "kantrip.session._run_child",
+                        return_value=subprocess.CompletedProcess(["kaskade"], 0),
+                    ) as run,
+                ):
+                    run_profile_session(
+                        "local",
+                        self.profile,
+                        ["kaskade", "producer", "--topic", "orders", *option],
+                        environment={},
+                    )
+                self.assertEqual(["--topic", "orders", *option], run.call_args.args[0][4:])
+                with (
+                    patch("kantrip.session.shutil.which", return_value="/opt/bin/kaskade"),
+                    self.assertRaisesRegex(SessionError, "'--registry' cannot override"),
+                ):
+                    run_profile_session(
+                        "local", self.profile, ["kaskade", "consumer", *option], environment={}
+                    )
 
     def test_kaskade_accepts_explicit_group_and_ip_family(self) -> None:
         with (

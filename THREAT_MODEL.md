@@ -454,9 +454,8 @@ Controls:
 Residual risk: plaintext Kafka and HTTP Registry connections provide neither
 transport confidentiality nor server authentication. A trusted CA can still
 validate a malicious endpoint. Remote authorization and child handling of data
-remain outside Kantrip's control. The corrected native Apicurio mapping is
-available in Kaskade 5.0.1; Kantrip rejects older or development builds when a
-native Apicurio OAuth scope needs that mapping. Shared CA contracts broaden
+remain outside Kantrip's control. Kantrip rejects Kaskade releases older than
+6.0.0, its minimum, and development builds before launch. Shared CA contracts broaden
 trust to both destinations. `SSL_CERT_FILE` is process-wide, not
 hostname-specific, so other environment-aware HTTP clients inside the same
 Kaskade process also receive that bundle.

@@ -863,13 +863,14 @@ Apicurio one, they fail before starting.
 
 ### Kaskade
 
-Kantrip passes a private INI to Kaskade `admin` and `consumer` through
-`--config-file`:
+Kantrip passes a private INI to Kaskade `admin`, `consumer`, and `producer`
+through `--config-file`. Kaskade 6.0.0 is the minimum.
 
 ```bash
 kantrip exec local -- kaskade admin
 kantrip exec local -- kaskade consumer --topic orders
 kantrip exec local -- kaskade consumer --topic avro-orders --earliest -v registry
+kantrip exec local -- kaskade producer --topic avro-orders -v registry
 ```
 
 The first command becomes:
@@ -878,18 +879,22 @@ The first command becomes:
 kaskade admin --config-file /tmp/kantrip-SESSION/kaskade.ini
 ```
 
-The default INI holds the Kafka properties. Registry decoding (`-k registry` or
-`-v registry`) switches to a second INI with a `[registry]` section for the
-profile's provider. Kantrip rejects `-b`/`--bootstrap-servers`, `--kafka`,
-`--config-file`, and `--registry`, except the two `--kafka` settings listed in
-[Compatibility](COMPATIBILITY.md#client-commands).
+The default INI holds the Kafka properties. A Registry serializer or
+deserializer (`-k registry` or `-v registry`) switches to a second INI with a
+`[registry]` section for the profile's provider. Kantrip rejects `-b`,
+`--bootstrap-server`, `--config-file`, `--aws`, `--kafka`, and `--registry`, with
+two exceptions: the two `--kafka` settings listed in
+[Compatibility](COMPATIBILITY.md#client-commands), and the producer's `--registry`
+properties that choose or register a schema, such as `use.schema.id` or
+`auto.register.schemas`, globally or scoped with `key.` or `value.`.
 
-Through Kantrip, Kaskade decodes Avro, JSON Schema, and Protobuf with both
-Confluent Schema Registry and native Apicurio Registry. Native Apicurio uses its
-default `contentId` framing, because Kantrip only configures the Registry URL.
-A Registry with a fixed token makes Registry decoding fail before launch.
+Through Kantrip, Kaskade produces and decodes Avro, JSON Schema, and Protobuf
+with both Confluent Schema Registry and native Apicurio Registry. Native
+Apicurio uses its default `contentId` framing, because Kantrip only configures
+the Registry URL. A Registry with a fixed token makes Kaskade's Registry
+serializers fail before launch.
 
-When `kaskade consumer` decodes through a Registry that uses OAuth, Kantrip
+When `kaskade consumer` or `kaskade producer` uses a Registry with OAuth, Kantrip
 removes `SSL_CERT_FILE` and `SSL_CERT_DIR` for that process. For a Confluent
 Registry whose token endpoint has its own CA, it then sets `SSL_CERT_FILE` to a
 private bundle of the system CAs plus that CA, because the Confluent Python
