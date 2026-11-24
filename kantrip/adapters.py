@@ -186,7 +186,9 @@ class JavaFloor:
 
 
 _JAVA_CLI_FLOOR = JavaFloor(apache=(2, 6), confluent=(6, 0))
-_SCHEMA_REGISTRY_CONSOLE_FLOOR = JavaFloor(apache=None, confluent=(5, 5))
+# The consoles' `--formatter-config` and `--reader-config` arrived in Apache
+# Kafka 3.4, which Confluent Platform 7.4 ships.
+_SCHEMA_REGISTRY_CONSOLE_FLOOR = JavaFloor(apache=None, confluent=(7, 4))
 # Native PEM trust stores arrived in Apache Kafka 2.7, which Confluent Platform 6.1 ships.
 _JAVA_PEM_FLOOR = JavaFloor(apache=(2, 7), confluent=(6, 1))
 # The `sasl.oauthbearer.client.credentials.*` properties arrived in Apache
