@@ -114,6 +114,10 @@ class VersionGate(Protocol):
         """Whether every executable in one install directory reports one release."""
         ...
 
+    def probe_executable(self, resolved: str) -> str:
+        """Return the executable whose version option reports `resolved`'s release."""
+        ...
+
     def read(self, output: str) -> ClientVersion | None:
         """Return the release printed by the version option, if recognized."""
         ...
@@ -142,6 +146,9 @@ class ReleaseGate:
     minimum: tuple[int, int, int]
     option: str | None = "--version"
     shared_by_directory: bool = False
+
+    def probe_executable(self, resolved: str) -> str:
+        return resolved
 
     def read(self, output: str) -> ClientVersion | None:
         match = self.pattern.search(output)
@@ -211,6 +218,16 @@ class JavaReleaseGate:
 
     option: str = "--version"
     shared_by_directory: bool = True
+
+    def probe_executable(self, resolved: str) -> str:
+        """Read the release from `kafka-topics` in the same directory, when present.
+
+        Every release of it prints `--version`, while older releases of
+        `kafka-consumer-groups`, such as Apache Kafka 3.4, exit with an error.
+        """
+        path = Path(resolved)
+        sibling = path.with_name("kafka-topics.sh" if path.name.endswith(".sh") else "kafka-topics")
+        return str(sibling) if os.access(sibling, os.X_OK) else resolved
 
     def read(self, output: str) -> ClientVersion | None:
         recognized: ClientVersion | None = None
@@ -765,7 +782,9 @@ class VersionProbe:
         """Return the version output, or None when the client could not report it."""
         key = _probe_key(gate, resolved)
         if key not in self._outputs:
-            self._outputs[key] = _version_output(resolved, gate.option, self.environment)
+            self._outputs[key] = _version_output(
+                gate.probe_executable(resolved), gate.option, self.environment
+            )
         return self._outputs[key]
 
     def prefetch(self, clients: Iterable[tuple[VersionGate, str]]) -> None:
@@ -774,7 +793,7 @@ class VersionProbe:
         for gate, resolved in clients:
             key = _probe_key(gate, resolved)
             if key not in self._outputs:
-                pending.setdefault(key, (resolved, gate.option))
+                pending.setdefault(key, (gate.probe_executable(resolved), gate.option))
         if not pending:
             return
         with ThreadPoolExecutor(max_workers=min(len(pending), _VERSION_PROBE_WORKERS)) as pool:
