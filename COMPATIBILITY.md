@@ -42,7 +42,7 @@ checks use the same version:
 | Confluent Platform Java CLIs | Confluent Platform 6.0 | 6.1 for a custom CA or mTLS; 8.1 for OAuth |
 | Schema Registry consoles | Confluent Platform 5.5 | As for Confluent Platform |
 | `kcat` / `kafkacat` | kcat 1.7.0 | librdkafka 2.11.0 for OAuth with a custom token-endpoint CA |
-| `kaskade` | Kaskade 5.0.1 | None |
+| `kaskade` | Kaskade 6.0.0 | None |
 | `kaf` | kaf 0.2.14 | None |
 | `kcl` | kcl 0.20.0 | None |
 | `kafui` | kafui 0.1.38 | None |
@@ -85,12 +85,12 @@ supervised.
 | `kaf` | kaf | kaf 0.2.14+ | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
 | `kcl` | kcl | kcl 0.20.0+ | Topics, groups, cluster administration, produce, consume, and Registry administration | Confluent-compatible | Uses a private TOML file through `KCL_CONFIG_PATH` and removes inherited `KCL_*` variables. `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` keys other than the three timeouts, and `kcl profile` commands are rejected. Registry OAuth and native Apicurio fail before launch. |
 | `kafui` | kafui | kafui 0.1.38+ | Terminal UI for topics, groups, brokers, ACLs, and schemas; `health` and `get brokers` | Confluent-compatible | Uses kaf's private one-cluster YAML through `--config`, with an empty private `HOME` and `XDG_CONFIG_HOME`, so the user's kaf and kafui settings never apply. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and `--schema-registry` are rejected. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
-| `kaskade` | Kaskade | Kaskade 5.0.1+ | Administer and consume | Confluent and native Apicurio | Uses a private INI file for `admin` and `consumer`; Avro, JSON Schema, and Protobuf registry deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed; other Kafka, config-file, and registry connection overrides are rejected. |
+| `kaskade` | Kaskade | Kaskade 6.0.0+ | Administer, consume, and produce | Confluent and native Apicurio | Uses a private INI file for `admin`, `consumer`, and `producer`; Avro, JSON Schema, and Protobuf registry serializers and deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed, and the producer's schema selection and registration `--registry` properties; `-b/--bootstrap-server`, `--config-file`, `--aws`, and other Kafka and registry overrides are rejected. |
 
 The Confluent console clients and kcat need a profile with
 `--registry-provider confluent`. That includes Apicurio's `/apis/ccompat/v7`
 endpoint, which uses Confluent's framing. Native Apicurio profiles
-(`/apis/registry/v3`) work only with Kaskade's Registry deserializers, using
+(`/apis/registry/v3`) work only with Kaskade's Registry serializers and deserializers, using
 Apicurio's default `contentId` framing.
 
 ## Kafka transport and authentication
@@ -126,11 +126,11 @@ settings passed on the command line.
 | Provider / mode | Current support |
 | --- | --- |
 | Confluent-compatible HTTP/HTTPS, no auth | Confluent consoles, kcat Avro, Kaskade, kaf Avro and kafui (system trust only), kcl, and ping |
-| Native Apicurio HTTP/HTTPS, no auth | Kaskade Registry deserializers and ping |
+| Native Apicurio HTTP/HTTPS, no auth | Kaskade Registry serializers and deserializers, and ping |
 | Confluent Basic, OAuth, or mTLS | Private prefixed config and provider-aware ping. kaf and kafui map Basic with system trust only. kcl maps Basic and mTLS with system or custom CA trust, but not OAuth. Java OAuth uses one `ssl.*` CA bundle for Registry and IdP. Kaskade's Confluent Python OAuth receives a process-private default-roots-plus-IdP-CA bundle through `SSL_CERT_FILE`; Registry CA remains `ssl.ca.location`. Both OAuth clients require a logical cluster identifier. |
 | Native Apicurio Basic or mTLS | Private Kaskade INI and provider-aware ping. Kaskade supports private CA trust and unencrypted PEM mTLS keys; encrypted PEM keys are rejected. |
 | Native Apicurio OAuth | The official `apicurio.registry.tls.certificates` bundle is shared by Registry and IdP. Distinct CA fields are accepted only when identical. Kaskade keeps Registry and token HTTP/TLS contexts separate so Registry client identity does not reach the IdP. |
-| Confluent fixed bearer | Profile and ping support. Confluent's Avro, JSON Schema, and Protobuf consoles receive it as `bearer.auth.credentials.source=STATIC_TOKEN` with `bearer.auth.token`, and kcl as its bearer token; `SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE` carries the same `bearer.auth.*` keys. Kaskade Registry decoding, kaf, kafui, and kcat Avro reject it before launch. |
+| Confluent fixed bearer | Profile and ping support. Confluent's Avro, JSON Schema, and Protobuf consoles receive it as `bearer.auth.credentials.source=STATIC_TOKEN` with `bearer.auth.token`, and kcl as its bearer token; `SCHEMA_REGISTRY_LIBRDKAFKA_CONFIG_FILE` carries the same `bearer.auth.*` keys. Kaskade's Registry serializers, kaf, kafui, and kcat Avro reject it before launch. |
 | Kafka credential inheritance / URL credentials | Rejected |
 
 [Kafka and registry connectivity](USAGE.md#kafka-and-registry-connectivity)

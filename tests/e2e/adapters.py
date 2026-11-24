@@ -802,6 +802,46 @@ def _check_kaskade_operations(
         finally:
             terminal.close()
         console.print(create_status_text(console, "success", label))
+    _check_kaskade_producer(console, profile, topic, environment)
+
+
+def _check_kaskade_producer(
+    console: Console,
+    profile: str,
+    topic: str,
+    environment: Mapping[str, str],
+) -> None:
+    """Produce one record through the profile and wait for the broker's acknowledgement."""
+    label = "kaskade producer: deliver a record"
+    with tempfile.TemporaryDirectory(prefix="kantrip-kaskade-") as directory:
+        draft = Path(directory) / "record.json"
+        draft.write_text(
+            json.dumps({"value": {"content": "kantrip kaskade producer record"}}),
+            encoding="utf-8",
+        )
+        command = _kantrip(
+            profile,
+            "kaskade",
+            "producer",
+            "--topic",
+            topic,
+            "--source",
+            str(draft),
+            "--kafka",
+            "broker.address.family=v4",
+        )
+        terminal = TerminalProcess(command, environment)
+        try:
+            with show_progress(console, label):
+                terminal.wait_for(("Compose Record", topic), timeout=60)
+                # F2 produces; Ctrl+S can be taken by terminal flow control.
+                terminal.write("\x1bOQ")
+                terminal.wait_for(("Record Delivered",), timeout=60)
+        except TerminalProcessError as error:
+            raise SmokeFailure(f"{label} failed: {error}") from error
+        finally:
+            terminal.close()
+    console.print(create_status_text(console, "success", label))
 
 
 def _add_profile(

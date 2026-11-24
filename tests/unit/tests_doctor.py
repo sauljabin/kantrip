@@ -96,7 +96,7 @@ class TestDoctor(unittest.TestCase):
             )
         )
         self.assertIn("kcat version: 1.7.0", verbose_messages)
-        self.assertIn("Kaskade version: 5.0.1", verbose_messages)
+        self.assertIn("Kaskade version: 6.0.0", verbose_messages)
         clients = dict(report.sections(verbose=True))["Clients"]
         headers = [index for index, check in enumerate(clients) if not check.verbose_only]
         groups = {
@@ -107,7 +107,7 @@ class TestDoctor(unittest.TestCase):
         self.assertTrue(
             any(message.startswith("Kafka CLI version: ") for message in groups["Apache Kafka CLI"])
         )
-        self.assertIn("Kaskade version: 5.0.1", groups["Kaskade"])
+        self.assertIn("Kaskade version: 6.0.0", groups["Kaskade"])
 
     def test_reports_a_client_below_its_floor_and_probes_each_client_once(self) -> None:
         self.supported_versions.stop()
@@ -117,7 +117,7 @@ class TestDoctor(unittest.TestCase):
             del option, environment
             probes.append(resolved)
             if resolved.endswith("/kaskade"):
-                return "kaskade, version 5.0.0\n"
+                return "kaskade, version 5.1.0\n"
             return SUPPORTED_VERSION_OUTPUT
 
         with tempfile.TemporaryDirectory() as directory:
@@ -137,7 +137,7 @@ class TestDoctor(unittest.TestCase):
                 report = run_doctor(environment)
 
         warnings = [check.message for check in report.checks if check.status == "warning"]
-        floor = "kaskade 5.0.0 is not supported; install Kaskade 5.0.1 or newer"
+        floor = "kaskade 5.1.0 is not supported; install Kaskade 6.0.0 or newer"
         self.assertIn(floor, warnings)
         self.assertIn(f"Profile 'local' client rejected: Kaskade: {floor}", warnings)
         # The version report and the profile check share one run per client.

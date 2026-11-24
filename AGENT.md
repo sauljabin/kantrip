@@ -207,7 +207,7 @@
   single `ssl.*` trust for Registry and OAuth. Confluent Python has no token-CA
   property: only for a Kaskade Registry OAuth child, provide a private
   `SSL_CERT_FILE` with the platform roots plus the IdP CA. Never change the
-  parent's or the system's trust. Kaskade's minimum version is 5.0.1.
+  parent's or the system's trust. Kaskade's minimum version is 6.0.0.
 - Describe each client family with one `ClientAdapter` in `adapters.py` and
   dispatch through it, without client-name branches. Keep native argument
   grammars in `adapter_policy.py` and shell quoting in `adapter_shims.py` as
@@ -226,11 +226,12 @@
   Kafka command and the formatter or reader, plus `schema.registry.url` as a
   formatter or reader property to suppress Confluent's localhost default, and
   reject Apicurio profiles; their Registry OAuth sessions set the JVM URL
-  allowlist and Java PEM trust for Registry and token endpoint. Kaskade `admin`
-  and `consumer` get a private INI through `--config-file` plus a Registry file
-  with a provider `[registry]` section, and allow only `group.id` and
-  `broker.address.family` through `--kafka`. Kaskade alone decodes native
-  Apicurio Avro, JSON Schema, and Protobuf. Don't assume a Kaskade environment
+  allowlist and Java PEM trust for Registry and token endpoint. Kaskade `admin`,
+  `consumer`, and `producer` get a private INI through `--config-file` plus a
+  Registry file with a provider `[registry]` section, and allow only `group.id`
+  and `broker.address.family` through `--kafka` and, for the producer only,
+  schema selection and registration properties through `--registry`. Kaskade
+  alone produces and decodes native Apicurio Avro, JSON Schema, and Protobuf. Don't assume a Kaskade environment
   variable until Kaskade implements one.
 - Bash, Zsh, and Fish sessions keep startup files and history, neutralize
   adapter shadows, scrub reserved Kafka, Registry, sandbox, and JVM injection

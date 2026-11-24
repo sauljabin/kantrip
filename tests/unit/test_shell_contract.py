@@ -151,6 +151,18 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                     "kaskade admin --config-file other.ini >/dev/null 2>&1 "
                     "|| echo __KASKADE_OVERRIDE_OK__"
                 ),
+                (
+                    "kaskade admin --bootstrap-server other.invalid:9092 >/dev/null 2>&1 "
+                    "|| echo __KASKADE_BOOTSTRAP_BLOCKED__"
+                ),
+                (
+                    "kaskade admin --aws region=us-east-1 >/dev/null 2>&1 "
+                    "|| echo __KASKADE_AWS_BLOCKED__"
+                ),
+                (
+                    "kaskade producer --topic contract --registry url=http://other.invalid:8081 "
+                    ">/dev/null 2>&1 || echo __KASKADE_PRODUCER_REGISTRY_BLOCKED__"
+                ),
                 "kaf -b other.invalid:9092 topics >/dev/null 2>&1 || echo __KAF_OVERRIDE_OK__",
                 "kaf config use-cluster other >/dev/null 2>&1 || echo __KAF_CONFIG_BLOCKED__",
                 "kcl -B other.invalid:9092 topic list >/dev/null 2>&1 || echo __KCL_OVERRIDE_OK__",
@@ -184,6 +196,9 @@ class VerifyInteractiveShellContract(unittest.TestCase):
             self.assertIn("__JAVA_PROPERTY_BLOCKED__", output)
             self.assertIn("__JAVA_CONFIG_BLOCKED__", output)
             self.assertIn("__KASKADE_OVERRIDE_OK__", output)
+            self.assertIn("__KASKADE_BOOTSTRAP_BLOCKED__", output)
+            self.assertIn("__KASKADE_AWS_BLOCKED__", output)
+            self.assertIn("__KASKADE_PRODUCER_REGISTRY_BLOCKED__", output)
             self.assertIn("__SCHEMA_OVERRIDE_OK__", output)
             self.assertIn("__KAF_OVERRIDE_OK__", output)
             self.assertIn("__KAF_CONFIG_BLOCKED__", output)
@@ -199,7 +214,7 @@ class VerifyInteractiveShellContract(unittest.TestCase):
                 json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()
             ]
             self.assertEqual(ADAPTER_EXECUTABLES, {record["name"] for record in records})
-            self.assertEqual(len(ADAPTER_EXECUTABLES) + 5 + len(KCAT_EXECUTABLES), len(records))
+            self.assertEqual(len(ADAPTER_EXECUTABLES) + 6 + len(KCAT_EXECUTABLES), len(records))
             linked = [record for record in records if "linked-contract" in record["argv"]]
             self.assertEqual(["kaskade"], [record["name"] for record in linked])
             self.assertEqual(["consumer", "--config-file"], linked[0]["argv"][:2])
@@ -433,6 +448,7 @@ def _adapter_commands() -> list[str]:
             "kaskade admin",
             "kaskade consumer --kafka group.id=kantrip-smoke-contract --kafka broker.address.family=v4",
             "kaskade consumer -v registry",
+            "kaskade producer --topic contract -v registry --registry use.schema.id=1",
             "kas consumer --topic linked-contract",
             "kaf topics",
             "kafui get brokers",

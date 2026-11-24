@@ -81,7 +81,11 @@ exec {shlex.quote(executable)} {command.bootstrap_option} {shlex.quote(configura
 
 
 def render_kaskade_shim(name: str, executable: str, inputs: ShimInputs) -> str:
-    """Render a shim that selects Kaskade's private Kafka or Registry INI file."""
+    """Render a shim that selects Kaskade's private Kafka or Registry INI file.
+
+    The guard runs before `shift` so it sees the command, which decides whether
+    producer-only `--registry` schema properties are allowed.
+    """
     configuration = inputs.configuration
     registry = inputs.registry
     registry_guard = _registry_guard(lambda: require_kaskade_registry(registry))
@@ -96,27 +100,27 @@ def render_kaskade_shim(name: str, executable: str, inputs: ShimInputs) -> str:
     return f"""#!/bin/sh
 unset KAFKA_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS
 case "${{1-}}" in
-  admin|consumer)
+  admin|consumer|producer)
+    {_adapter_guard_command(name)}
     command="$1"
     shift
-    {_adapter_guard_command(name)}
-    registry_deserializer=
+    registry_serde=
     previous_argument=
     for argument in "$@"; do
       case "$previous_argument:$argument" in
         -k:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--key:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|-v:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--value:[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy])
-          registry_deserializer=1
+          registry_serde=1
           ;;
       esac
       case "$argument" in
         -k[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|-v[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--key=[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy]|--value=[Rr][Ee][Gg][Ii][Ss][Tt][Rr][Yy])
-          registry_deserializer=1
+          registry_serde=1
           ;;
       esac
       previous_argument="$argument"
     done
     selected_config={shlex.quote(str(configuration.kaskade_config))}
-    if [ "$command" = consumer ] && [ -n "$registry_deserializer" ]; then
+    if [ "$command" != admin ] && [ -n "$registry_serde" ]; then
       {registry_guard}      {oauth_tls_environment}      selected_config={shlex.quote(str(configuration.kaskade_registry_config))}
     fi
     exec {shlex.quote(executable)} "$command" --config-file "$selected_config" "$@"
