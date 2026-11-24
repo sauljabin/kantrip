@@ -11,7 +11,7 @@ from typing import TextIO
 from rich.console import Console
 
 from sandbox.__main__ import STATE_ROOT
-from tests.e2e import adapters, authentication
+from tests.e2e import adapters, authentication, java_floors
 from tests.e2e.preconditions import check_preconditions
 from tests.e2e.shell_environment import isolated_zsh_environment
 
@@ -58,6 +58,9 @@ class TestSandboxEndToEnd(unittest.TestCase):
 
     def test_30_registry_oauth_lifetime(self) -> None:
         authentication.exercise_registry_oauth()
+
+    def test_40_java_version_floors(self) -> None:
+        java_floors.main()
 
 
 if __name__ == "__main__":

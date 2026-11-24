@@ -54,10 +54,10 @@ runs:
           | (cd "$RUNNER_TEMP" && sha512sum --check -)
         tar -xzf "$RUNNER_TEMP/kafka_2.13-${APACHE_KAFKA_VERSION}.tgz" -C "$tool_root"
         curl --fail --location --retry 3 \
-          "https://packages.confluent.io/archive/8.3/confluent-${CONFLUENT_VERSION}.tar.gz" \
+          "https://packages.confluent.io/archive/${CONFLUENT_VERSION%.*}/confluent-${CONFLUENT_VERSION}.tar.gz" \
           -o "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz"
         curl --fail --location --retry 3 \
-          "https://packages.confluent.io/archive/8.3/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt" \
+          "https://packages.confluent.io/archive/${CONFLUENT_VERSION%.*}/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt" \
           -o "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt"
         (cd "$RUNNER_TEMP" && sha256sum --check "confluent-${CONFLUENT_VERSION}.tar.gz.sha256.txt")
         tar -xzf "$RUNNER_TEMP/confluent-${CONFLUENT_VERSION}.tar.gz" -C "$tool_root"

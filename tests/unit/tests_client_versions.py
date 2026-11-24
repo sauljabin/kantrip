@@ -22,7 +22,7 @@ from kantrip.adapters import (
     require_adapter_capability,
     require_minimum_version,
 )
-from tests.e2e.preconditions import _versions, kcat_pin, parse_pin
+from tests.e2e.preconditions import kcat_pin, parse_pin, pinned_versions
 
 _KCAT_OUTPUT = (
     "kcat - Apache Kafka producer and consumer tool\n"
@@ -298,7 +298,7 @@ class TestEndToEndPins(unittest.TestCase):
     """The E2E suite never pins a client below the product floor."""
 
     def test_every_pin_meets_its_floor(self) -> None:
-        versions = _versions()
+        versions = pinned_versions()
         for adapter, name, pin in (
             (KASKADE_ADAPTER, "kaskade", versions["KASKADE_VERSION"]),
             (KAF_ADAPTER, "kaf", versions["KAF_VERSION"]),
@@ -317,7 +317,7 @@ class TestEndToEndPins(unittest.TestCase):
                 )
 
     def test_librdkafka_pin_can_trust_an_oauth_token_endpoint_ca(self) -> None:
-        self.assertGreaterEqual(parse_pin(_versions()["LIBRDKAFKA_MIN_VERSION"]), (2, 11, 0))
+        self.assertGreaterEqual(parse_pin(pinned_versions()["LIBRDKAFKA_MIN_VERSION"]), (2, 11, 0))
 
     def test_release_gates_render_their_floor(self) -> None:
         gate = KASKADE_ADAPTER.minimum_version

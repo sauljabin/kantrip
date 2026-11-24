@@ -31,6 +31,7 @@ from kantrip.adapters import (
     KAFKA_TOPICS_EXECUTABLES,
     KCAT_EXECUTABLES,
     SCHEMA_REGISTRY_EXECUTABLES,
+    KafkaNeeds,
 )
 from kantrip.console import (
     COLOR_MODES,
@@ -41,6 +42,7 @@ from kantrip.console import (
 )
 from kantrip.shells import SUPPORTED_SHELLS, quote_shell_argument
 from scripts import TerminalTimeout, run_terminal
+from tests.e2e.java_versions import java_refusal, refused
 from tests.e2e.terminal import TerminalProcess, TerminalProcessError
 
 DEFAULT_BOOTSTRAP_SERVERS = "localhost:9092"
@@ -257,7 +259,13 @@ def _exercise_clients(
     creator = installed["topics"][0]
     if registry_provider == "confluent":
         _show_section(console, "Confluent registry clients")
-        _check_schema_registry_clients(console, profile, topic, creator, registry_url, environment)
+        refusal = java_refusal(min(SCHEMA_REGISTRY_EXECUTABLES), KafkaNeeds("none"))
+        if refusal is None:
+            _check_schema_registry_clients(
+                console, profile, topic, creator, registry_url, environment
+            )
+        else:
+            _check_refused(console, profile, SCHEMA_REGISTRY_EXECUTABLES, refusal, environment)
     _show_section(console, "Kafka CLI")
     _check_java_operations(console, profile, topic, installed, environment)
     _show_section(console, "Additional clients")
@@ -1089,6 +1097,30 @@ def _latest_schema_id(registry_url: str, subject: str) -> int:
     if not isinstance(schema_id, int):
         raise SmokeFailure(f"Registry returned no schema ID for {subject}")
     return schema_id
+
+
+def _check_refused(
+    console: Console,
+    profile: str,
+    executables: Iterable[str],
+    refusal: str,
+    environment: Mapping[str, str],
+) -> None:
+    """Require Kantrip to refuse each executable's pinned release before launch."""
+    for executable in sorted(executables):
+        label = f"{executable}: refused below its version floor"
+        with show_progress(console, label):
+            result = subprocess.run(
+                _kantrip(profile, executable, "--version"),
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        output = f"{result.stdout}{result.stderr}"
+        if not result.returncode or not refused(output, refusal):
+            raise SmokeFailure(f"{label} failed:\n{_failure_details(result)}")
+        console.print(create_status_text(console, "success", label))
 
 
 def _check(

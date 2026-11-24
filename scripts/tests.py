@@ -119,6 +119,12 @@ def _run(*command: str, cwd: Path, environment: dict[str, str] | None = None) ->
 _SUITE_COMMANDS = {
     "unit": "python -m unittest discover -v -s tests/unit -t .",
     "e2e": "python -m unittest discover -v -s tests/e2e -t .",
+    # Rows below a Java floor: the plaintext clients plus the Java floor checks.
+    "e2e-floors": (
+        "python -m unittest -v"
+        " tests.e2e.test_end_to_end.TestSandboxEndToEnd.test_10_plaintext_adapter_operations"
+        " tests.e2e.test_end_to_end.TestSandboxEndToEnd.test_40_java_version_floors"
+    ),
     "vault": "python -m unittest -v tests.e2e.vault_acceptance",
 }
 

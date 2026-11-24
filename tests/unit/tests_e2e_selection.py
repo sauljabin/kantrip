@@ -8,6 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import yaml
+
+from kantrip import adapters
 from scripts.analyze import validate_local_actions
 from scripts.tests import (
     _run_staged_wheel,
@@ -186,6 +189,30 @@ class TestE2ESelection(unittest.TestCase):
         self.assertIn('test "${#wheels[@]}" -eq 1', candidate)
         self.assertIn("candidate-artifact: release-bundle", release)
         self.assertIn("if: always()", e2e)
+        self.assertIn("compatibility]", release)
+
+    def test_compatibility_matrix_covers_every_java_floor(self) -> None:
+        workflow = yaml.safe_load(
+            Path(".github/workflows/compatibility.yml").read_text(encoding="utf-8")
+        )
+        rows = workflow["jobs"]["compatibility"]["strategy"]["matrix"]["include"]
+        apache = {_release(row["apache-kafka-version"]) for row in rows}
+        confluent = {_release(row["confluent-version"]) for row in rows}
+        for floor in (
+            adapters._JAVA_CLI_FLOOR,
+            adapters._JAVA_PEM_FLOOR,
+            adapters._JAVA_OAUTH_FLOOR,
+            adapters._SCHEMA_REGISTRY_CONSOLE_FLOOR,
+        ):
+            with self.subTest(floor=floor):
+                self.assertIn(floor.confluent, confluent)
+                if floor.apache is not None:
+                    self.assertIn(floor.apache, apache)
+        self.assertIn("3.11", {row["python-version"] for row in rows})
+
+
+def _release(version: str) -> tuple[int, ...] | None:
+    return tuple(int(part) for part in version.split(".")[:2]) if version else None
 
 
 if __name__ == "__main__":

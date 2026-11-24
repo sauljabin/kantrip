@@ -48,6 +48,10 @@ checks use the same version:
 | `kcl` | kcl 0.20.0 | None |
 | `kafui` | kafui 0.1.38 | None |
 
+Every release runs the end-to-end tests at each of these Java minimums and on
+Python 3.11 and 3.15. Below a minimum, the tests require Kantrip to refuse the
+client before it starts.
+
 kcat, Kaskade, kaf, kcl, and kafui have no upper version limit. The Java CLIs do:
 Kantrip tells Apache Kafka from Confluent Platform by the major version, and
 recognizes Apache Kafka 2 to 4 and Confluent Platform 5 to 8. A release with

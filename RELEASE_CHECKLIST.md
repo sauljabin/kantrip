@@ -22,8 +22,10 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
   macOS and on each Linux desktop its platform table lists. Record actual
   results; automated unit and E2E tests do not replace the human checks.
 - [ ] Confirm every required CLI/protocol/authentication/input-format cell in
-  [Compatibility](COMPATIBILITY.md) has versioned integration evidence. Record
-  conditional and unsupported cells explicitly, including ping proof limits.
+  [Compatibility](COMPATIBILITY.md) has versioned integration evidence: link
+  the release's [Compatibility](.github/workflows/compatibility.yml) run, and
+  record conditional and unsupported cells explicitly, including ping proof
+  limits.
 - [ ] Confirm every v0.1 milestone issue is closed with evidence, technical
   decisions are recorded in `ARCHITECTURE.md`, and `THREAT_MODEL.md` matches
   the implemented controls.
