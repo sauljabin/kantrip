@@ -167,6 +167,14 @@ so its paths must be absolute. After importing secrets from a file, from either
 option, `add` notes on stderr that the file still holds them. Kantrip never
 deletes or changes it, since other clients may still read it.
 
+Residual risk: deleting an imported file doesn't erase its secrets.
+Copy-on-write file systems, snapshots, SSD block remapping, backups, synced
+folders, editor history, and search indexes can keep copies Kantrip can't
+reach. `USAGE.md` recommends piping from the generator with `-` so nothing is
+written. Piping from `pbpaste` or `wl-paste` avoids the file but not a
+clipboard manager's history. Once a file holding secrets has existed,
+rotating those credentials is the only remedy.
+
 ### Credential vault boundary
 
 On macOS, credentials cross into the dedicated Kantrip keychain through

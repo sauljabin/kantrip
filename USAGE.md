@@ -440,6 +440,24 @@ as the `KafkaUser` resource itself, a list, several documents, or a Secret with
 both SCRAM and TLS credentials, fails with exit status 2 and a message that
 never repeats a value from the file.
 
+Deleting an imported file doesn't erase its secrets. Copy-on-write file
+systems, snapshots, SSD block remapping, backups, synced folders, editor
+history, and search indexes can all keep a copy. Where you can, pipe the file
+from whatever produces it and pass `-`, so it's never written:
+
+```bash
+op read 'op://Kafka/production/client.properties' |
+  kantrip add production-client --from-properties -
+kubectl get secret application -n kafka -o yaml |
+  kantrip add production-strimzi --from-strimzi - \
+    --bootstrap-server kafka.example.com:9093
+```
+
+Any command that prints the file works, including `pbpaste` on macOS or
+`wl-paste` on Linux. A clipboard manager may keep the secret in its history, so
+clear the clipboard afterwards. Once a file holding secrets has existed, the
+only sure remedy is to rotate those credentials.
+
 To give several brokers, repeat `-b/--bootstrap-server` or separate the
 addresses with commas. Either way the order is kept and duplicates are
 rejected:
@@ -811,8 +829,9 @@ kantrip exec local -- kcat -C -t avro-orders -s value=avro
 With `-s avro`, `-s key=avro`, or `-s value=avro`, Kantrip passes the
 profile's Confluent-compatible Registry URL with `-r`. kcat doesn't work with
 native Apicurio profiles or with Registry authentication (Basic, a fixed
-token, mTLS, or OAuth). Kantrip rejects `-F`, `-r`, and
-`-X schema.registry.url=...`. Other modes don't need a Registry.
+token, mTLS, or OAuth). Other modes don't need a Registry. Kantrip rejects `-b`,
+`-F`, `-r`, and every `-X` property except `group.id` and
+`broker.address.family`.
 
 ### Apache Kafka and Confluent Kafka commands
 
@@ -832,7 +851,10 @@ kantrip exec local -- kafka-broker-api-versions
 Kantrip adds `--bootstrap-server` and a private Java client properties file:
 `--consumer.config` for console consumers, `--producer.config` for console
 producers, and `--command-config` for the admin commands. You can't override
-these, or pass older connection options instead. Use the `.sh` names with
+these, or pass older connection options instead. Console consumers accept
+`group.id` through `--consumer-property`; the other client property options and
+connection properties are rejected, as
+[Runtime options](COMPATIBILITY.md#runtime-options) lists. Use the `.sh` names with
 Apache Kafka archives and the unsuffixed names with Confluent Platform.
 
 
@@ -884,7 +906,7 @@ deserializer (`-k registry` or `-v registry`) switches to a second INI with a
 `[registry]` section for the profile's provider. Kantrip rejects `-b`,
 `--bootstrap-server`, `--config-file`, `--aws`, `--kafka`, and `--registry`, with
 two exceptions: the two `--kafka` settings listed in
-[Compatibility](COMPATIBILITY.md#client-commands), and the producer's `--registry`
+[Runtime options](COMPATIBILITY.md#runtime-options), and the producer's `--registry`
 properties that choose or register a schema, such as `use.schema.id` or
 `auto.register.schemas`, globally or scoped with `key.` or `value.`.
 
@@ -961,7 +983,7 @@ because kcl can't read encrypted keys.
 
 Kantrip rejects `-B`/`--bootstrap-servers`, `-R`/`--registry`,
 `-C`/`--profile`, `--config-path`, `--no-config-file`, `--config-env-prefix`,
-and every `kcl profile` command. `-X`/`--config-opt` accepts only
+and every `kcl profile` and `kcl myconfig` command. `-X`/`--config-opt` accepts only
 `broker_timeout`, `dial_timeout`, `retry_timeout`, `help`, and `list`; every
 other key would change the connection. kcl also reads `KCL_*` variables, such
 as `KCL_SEED_BROKERS` or `KCL_PROFILE`, so Kantrip removes them before kcl

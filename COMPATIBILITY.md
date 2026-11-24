@@ -7,6 +7,7 @@ examples.
 ## Contents
 
 - [Client commands](#client-commands)
+- [Runtime options](#runtime-options)
 - [Kafka transport and authentication](#kafka-transport-and-authentication)
 - [Registry protocols and providers](#registry-protocols-and-providers)
 - [Credential storage](#credential-storage)
@@ -81,17 +82,33 @@ supervised.
 | `kafka-json-schema-console-producer` | Confluent | Confluent Platform 5.5–8.x | Produce JSON Schema records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-consumer` | Confluent | Confluent Platform 5.5–8.x | Consume Protobuf records | Confluent-compatible | Injects the Kafka consumer connection and `schema.registry.url` from the profile. |
 | `kafka-protobuf-console-producer` | Confluent | Confluent Platform 5.5–8.x | Produce Protobuf records | Confluent-compatible | Injects the Kafka producer connection and `schema.registry.url` from the profile. |
-| `kcat` / `kafkacat` | kcat | kcat 1.7.0+ | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. Explicit `-F`, `-r`, and `-X schema.registry.url=...` overrides are rejected. |
-| `kaf` | kaf | kaf 0.2.14+ | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands are rejected. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
-| `kcl` | kcl | kcl 0.20.0+ | Topics, groups, cluster administration, produce, consume, and Registry administration | Confluent-compatible | Uses a private TOML file through `KCL_CONFIG_PATH` and removes inherited `KCL_*` variables. `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, `-X` keys other than the three timeouts, and `kcl profile` commands are rejected. Registry OAuth and native Apicurio fail before launch. |
-| `kafui` | kafui | kafui 0.1.38+ | Terminal UI for topics, groups, brokers, ACLs, and schemas; `health` and `get brokers` | Confluent-compatible | Uses kaf's private one-cluster YAML through `--config`, with an empty private `HOME` and `XDG_CONFIG_HOME`, so the user's kaf and kafui settings never apply. `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and `--schema-registry` are rejected. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
-| `kaskade` | Kaskade | Kaskade 6.0.0+ | Administer, consume, and produce | Confluent and native Apicurio | Uses a private INI file for `admin`, `consumer`, and `producer`; Avro, JSON Schema, and Protobuf registry serializers and deserializers select a provider-specific `[registry]` section. `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any` are allowed, and the producer's schema selection and registration `--registry` properties; `-b/--bootstrap-server`, `--config-file`, `--aws`, and other Kafka and registry overrides are rejected. |
+| `kcat` / `kafkacat` | kcat | kcat 1.7.0+ | Metadata, produce, and consume | Confluent-compatible Avro | Uses a private `KCAT_CONFIG`; when `-s avro`, `-s key=avro`, or `-s value=avro` is selected, injects `-r` from the profile. |
+| `kaf` | kaf | kaf 0.2.14+ | Topics, groups, produce, and consume | Confluent-compatible Avro | Uses a private one-cluster YAML through `--config`, with `HOME=/dev/null`. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
+| `kcl` | kcl | kcl 0.20.0+ | Topics, groups, cluster administration, produce, consume, and Registry administration | Confluent-compatible | Uses a private TOML file through `KCL_CONFIG_PATH` and removes inherited `KCL_*` variables. Registry OAuth and native Apicurio fail before launch. |
+| `kafui` | kafui | kafui 0.1.38+ | Terminal UI for topics, groups, brokers, ACLs, and schemas; `health` and `get brokers` | Confluent-compatible | Uses kaf's private one-cluster YAML through `--config`, with an empty private `HOME` and `XDG_CONFIG_HOME`, so the user's kaf and kafui settings never apply. The Registry must use no auth or Basic with system trust; any other Registry profile fails before launch. |
+| `kaskade` | Kaskade | Kaskade 6.0.0+ | Administer, consume, and produce | Confluent and native Apicurio | Uses a private INI file for `admin`, `consumer`, and `producer`; Avro, JSON Schema, and Protobuf registry serializers and deserializers select a provider-specific `[registry]` section. |
 
 The Confluent console clients and kcat need a profile with
 `--registry-provider confluent`. That includes Apicurio's `/apis/ccompat/v7`
 endpoint, which uses Confluent's framing. Native Apicurio profiles
 (`/apis/registry/v3`) work only with Kaskade's Registry serializers and deserializers, using
 Apicurio's default `contentId` framing.
+
+## Runtime options
+
+The profile owns the connection: brokers, transport, authentication, and the
+Registry. Each client accepts only the runtime settings that can't change them,
+and Kantrip rejects the rest before launch, for direct commands and in
+subshells alike.
+
+| Client | Allowed | Rejected |
+| --- | --- | --- |
+| Apache and Confluent Kafka commands, including the Schema Registry consoles | `--property`, `--formatter-property`, and `--reader-property` with any name the connection doesn't own. Console consumers also take `group.id` through `--consumer-property` or `--command-property`. | The connection and config-file options, including alternatives such as `--broker-list`; other `--consumer-property`, `--producer-property`, and `--command-property` values; and connection properties: `bootstrap.servers`, `security.protocol`, `broker.list`, `metadata.broker.list`, and names starting with `sasl.`, `ssl.`, `https.`, `schema.registry.`, `basic.auth.`, `bearer.auth.`, or `apicurio.registry.`. |
+| `kcat` / `kafkacat` | `-X group.id=...` and `-X broker.address.family=v4\|v6\|any` | `-b`, `-F`, `-r`, and every other `-X` property |
+| `kaf` | No connection settings | `--config`, `-b`/`--brokers`, `-c`/`--cluster`, `--schema-registry`, and `kaf config` commands |
+| `kcl` | `-X`/`--config-opt` with `broker_timeout`, `dial_timeout`, or `retry_timeout`, plus `-X help` and `-X list` | `-B`, `-R`, `-C`, `--config-path`, `--no-config-file`, `--config-env-prefix`, other `-X` keys, and `kcl profile` and `kcl myconfig` commands |
+| `kafui` | No connection settings | `--config`, `-b`/`--brokers`, `-c`/`--cluster`, and `--schema-registry` |
+| `kaskade` | `--kafka group.id=...` and `--kafka broker.address.family=v4\|v6\|any`; for `producer` only, `--registry` schema selection and registration properties (`auto.register.schemas`, `normalize.schemas`, `use.latest.version`, `use.schema.id`, `protobuf.message`, and `apicurio.registry.` `auto-register`, `find-latest`, `artifact.group-id`, `artifact.artifact-id`, and `artifact.version`), globally or scoped with `key.` or `value.` | `-b`/`--bootstrap-server`, `--config-file`, `--aws`, and other `--kafka` and `--registry` properties |
 
 ## Kafka transport and authentication
 
