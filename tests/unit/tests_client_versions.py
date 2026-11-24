@@ -1,8 +1,10 @@
 """Every supported client's minimum version and feature checks (#93)."""
 
 import subprocess
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from kantrip.adapters import (
@@ -253,6 +255,32 @@ class TestVersionProbe(unittest.TestCase):
             ],
             sorted(calls),
         )
+
+    def test_java_commands_report_the_release_of_kafka_topics_beside_them(self) -> None:
+        # Kafka 3.4's kafka-consumer-groups exits with an error on --version.
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            for name, script in (
+                ("kafka-topics.sh", "echo '3.4.1 (Commit:2e1947d240607d53)'"),
+                ("kafka-consumer-groups.sh", "exit 1"),
+                ("kafka-configs.sh", "exit 1"),
+            ):
+                path = directory / name
+                path.write_text(f"#!/bin/sh\n{script}\n", encoding="utf-8")
+                path.chmod(0o755)
+            version = require_minimum_version(
+                "kafka-consumer-groups.sh",
+                JAVA_CLI_ADAPTER.minimum_version,
+                environment={"PATH": root},
+            )
+            self.assertEqual((3, 4, 1), version.release)
+            (directory / "kafka-topics.sh").unlink()
+            with self.assertRaisesRegex(AdapterError, "could not verify"):
+                require_minimum_version(
+                    "kafka-configs.sh",
+                    JAVA_CLI_ADAPTER.minimum_version,
+                    environment={"PATH": root},
+                )
 
     def test_output_is_none_when_the_client_cannot_run(self) -> None:
         versions = VersionProbe({})
