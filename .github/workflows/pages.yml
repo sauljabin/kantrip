@@ -31,7 +31,7 @@ jobs:
         uses: ./.github/actions/python-uv
         with:
           uv-version: ${{ env.UV_VERSION }}
-          python-version: "3.14"
+          python-version: "3.15"
       # Also catches CLI changes outside site/ that break the demo commands.
       - name: Check links, assets, transcript, and demo commands
         run: uv run --locked python -m scripts.website check

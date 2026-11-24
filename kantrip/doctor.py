@@ -82,7 +82,7 @@ CheckStatus = Literal["success", "warning", "error"]
 # The supported range must match requires-python and the Python classifiers in
 # pyproject.toml; a unit test enforces it.
 PYTHON_MINIMUM = (3, 11)
-PYTHON_EXCLUSIVE_MAXIMUM = (3, 15)
+PYTHON_EXCLUSIVE_MAXIMUM = (3, 16)
 
 
 @dataclass(frozen=True)

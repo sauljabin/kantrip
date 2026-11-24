@@ -7,7 +7,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import click
 
@@ -802,14 +802,10 @@ def _mtls_auth_input(
             "Kafka private-key password replacement requires replacing the private key"
         )
     if replacing_key and key_path is None:
-        key_path = cast(
-            Path,
-            click.prompt("Kafka private-key file", type=click.Path(path_type=Path)),
-        )
+        key_path = click.prompt("Kafka private-key file", type=click.Path(path_type=Path))
     if replacing_key and certificate_path is None:
-        certificate_path = cast(
-            Path,
-            click.prompt("Kafka client-certificate file", type=click.Path(path_type=Path)),
+        certificate_path = click.prompt(
+            "Kafka client-certificate file", type=click.Path(path_type=Path)
         )
     if (certificate_path is None) != (key_path is None):
         raise click.UsageError("mTLS certificate and key files must be supplied together")
