@@ -1,16 +1,18 @@
 # AI Agent Release Checklist
 
 Use this checklist for every release. Complete the shared preparation checks,
-the section for the selected release type, then publishing and verification.
+the section for the selected release type, then publishing, verification, and
+announcements.
 
 Keep this file reusable and unchecked. Record release-specific results in the
 agent's task report: candidate version and commit, command results, failures,
-justified exceptions, and unavailable checks. Mark a check complete only when
+justified exceptions, unavailable checks, and announcement drafts. Mark a check complete only when
 verified; record non-applicable items with a reason. Resolve blockers before
 publishing and do not report readiness while required checks remain unverified.
 
 This checklist does not authorize tagging or publication. Use existing explicit
-release authorization, requesting it only if absent.
+release authorization, requesting it only if absent. Announcement submission
+requires explicit approval of the prepared draft.
 
 ## First Stable Release — Additional Gate
 
@@ -154,3 +156,22 @@ pre-release sections below; their exact-wheel release E2E remains mandatory.
   intended release.
 - [ ] If publication fails, record partial publication accurately. Do not move or
   reuse release tags or replace immutable published artifacts.
+
+## Announcement
+
+- [ ] Determine whether an announcement is required: always for the first
+  stable release and majors; for minors with meaningful features, workflow
+  changes, or significant fixes; and for patches with significant fixes or
+  security updates. Record the reason when no announcement is needed.
+- [ ] When required, prepare the complete title and body in the agent's task
+  report. Include relevant features, fixes, breaking changes, known
+  limitations, and release links, supported by the release diff and notes.
+- [ ] After release verification, check the
+  [Announcements category](https://github.com/sauljabin/kantrip/discussions/categories/announcements)
+  for an existing announcement to avoid duplicate submissions.
+- [ ] Present the exact draft and obtain explicit approval before submitting it
+  to Announcements. Release authorization does not replace announcement approval;
+  leave the draft pending until approved.
+- [ ] Submit the approved announcement, verify the resulting post, and record
+  its link in the task report. If posting is unavailable, retain the approved
+  draft and report the blocker rather than claiming submission.
