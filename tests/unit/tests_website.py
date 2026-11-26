@@ -208,8 +208,8 @@ class TestPages(unittest.TestCase):
         png = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + (1280).to_bytes(4, "big")
         png += (640).to_bytes(4, "big")
         head = (
-            '<meta property="og:url" content="https://sauljabin.github.io/kantrip/">'
-            '<meta property="og:image" content="https://sauljabin.github.io/kantrip/card.png">'
+            '<meta property="og:url" content="https://sauljabin.dev/kantrip/">'
+            '<meta property="og:image" content="https://sauljabin.dev/kantrip/card.png">'
             '<meta property="og:image:width" content="1280">'
         )
         with tempfile.TemporaryDirectory() as directory:
